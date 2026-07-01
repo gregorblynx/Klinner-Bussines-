@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditoría SEO v3 — klinnercleaning.com</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --green: #10b981; --yellow: #f59e0b; --red: #ef4444;
+    --navy: #1e3a5f; --teal: #0891b2; --gray-50: #f8fafc;
+    --gray-100: #f1f5f9; --gray-200: #e2e8f0; --gray-600: #475569;
+    --gray-800: #1e293b; --white: #ffffff;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--gray-50); color: var(--gray-800); }
+
+  .top-nav { background: var(--navy); color: white; padding: 14px 32px; display: flex; align-items: center; justify-content: space-between; }
+  .top-nav-title { font-weight: 700; font-size: 1rem; }
+  .top-nav-meta { font-size: .8rem; opacity: .7; }
+
+  .header { background: linear-gradient(135deg, #064e3b 0%, #065f46 60%, #0891b2 100%); color: white; padding: 56px 32px 80px; text-align: center; position: relative; overflow: hidden; }
+  .header::before { content:''; position:absolute; inset:0; background: radial-gradient(ellipse at 30% 50%, rgba(16,185,129,.25), transparent 60%); }
+  .header-inner { position: relative; z-index: 2; max-width: 800px; margin: 0 auto; }
+  .header-url { font-size: .85rem; opacity: .7; margin-bottom: 12px; letter-spacing: .04em; }
+  .header-title { font-size: clamp(1.6rem, 4vw, 2.4rem); font-weight: 800; margin-bottom: 8px; }
+  .header-version { font-size: .82rem; opacity: .6; margin-bottom: 28px; }
+
+  .score-wrap { display: flex; align-items: center; justify-content: center; gap: 24px; flex-wrap: wrap; margin-bottom: 16px; }
+  .score-circle { width: 140px; height: 140px; border-radius: 50%; border: 6px solid rgba(255,255,255,.25); display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,.1); backdrop-filter: blur(8px); }
+  .score-number { font-size: 3rem; font-weight: 800; line-height: 1; color: #34d399; }
+  .score-label { font-size: .7rem; opacity: .7; text-transform: uppercase; letter-spacing: .08em; }
+  .score-deltas { display: flex; flex-direction: column; gap: 10px; }
+  .score-delta { background: rgba(52,211,153,.15); border: 1px solid rgba(52,211,153,.35); border-radius: 10px; padding: 10px 18px; text-align: center; }
+  .score-delta-num { font-size: 1.4rem; font-weight: 800; color: #34d399; }
+  .score-delta-label { font-size: .72rem; opacity: .65; }
+  .score-level { font-size: .95rem; font-weight: 700; color: #34d399; margin-top: 10px; }
+  .header-date { font-size: .78rem; opacity: .5; margin-top: 6px; }
+
+  .container { max-width: 1100px; margin: -40px auto 0; padding: 0 24px 60px; position: relative; z-index: 10; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+  .summary-card { background: white; border-radius: 14px; padding: 22px; box-shadow: 0 2px 16px rgba(0,0,0,.08); text-align: center; }
+  .summary-card-icon { font-size: 1.8rem; margin-bottom: 8px; }
+  .summary-card-num { font-size: 2rem; font-weight: 800; line-height: 1; }
+  .summary-card-label { font-size: .78rem; color: var(--gray-600); margin-top: 4px; }
+  .c-green { color: var(--green); } .c-yellow { color: var(--yellow); } .c-navy { color: var(--navy); }
+
+  .progress-banner { background: linear-gradient(135deg, #ecfdf5, #d1fae5); border: 1px solid #6ee7b7; border-radius: 14px; padding: 20px 24px; margin-bottom: 28px; }
+  .progress-banner-title { font-weight: 700; color: #065f46; margin-bottom: 12px; font-size: .95rem; }
+  .progress-fixes { display: flex; flex-direction: column; gap: 7px; }
+  .progress-fix { display: flex; align-items: center; gap: 10px; font-size: .85rem; color: #047857; }
+  .fix-badge { background: #10b981; color: white; border-radius: 100px; padding: 2px 10px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+
+  .section { margin-bottom: 28px; }
+  .section-title { font-size: 1.1rem; font-weight: 700; color: var(--navy); margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+  .section-title::after { content:''; flex: 1; height: 1px; background: var(--gray-200); }
+
+  .corrections { display: flex; flex-direction: column; gap: 16px; }
+  .correction { background: white; border-radius: 14px; box-shadow: 0 2px 16px rgba(0,0,0,.07); overflow: hidden; border-left: 5px solid; }
+  .correction.info { border-color: var(--teal); }
+  .correction-header { padding: 18px 22px 14px; display: flex; align-items: flex-start; gap: 14px; }
+  .correction-badge { padding: 3px 10px; border-radius: 100px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; flex-shrink: 0; }
+  .badge-info { background: #ecfeff; color: var(--teal); }
+  .correction-title { font-weight: 700; font-size: .95rem; color: var(--gray-800); margin-bottom: 4px; }
+  .correction-why { font-size: .84rem; color: var(--gray-600); line-height: 1.55; }
+
+  .categories-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .category-card { background: white; border-radius: 14px; padding: 22px; box-shadow: 0 2px 16px rgba(0,0,0,.07); }
+  .cat-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .cat-name { font-weight: 700; font-size: .95rem; }
+  .cat-score { font-size: 1.3rem; font-weight: 800; }
+  .cat-delta { font-size: .75rem; font-weight: 600; color: var(--green); margin-left: 6px; }
+  .progress-bar { height: 8px; background: var(--gray-100); border-radius: 100px; overflow: hidden; margin-bottom: 14px; }
+  .progress-fill { height: 100%; border-radius: 100px; }
+  .fill-green { background: var(--green); }
+  .fill-yellow { background: var(--yellow); }
+  .findings { display: flex; flex-direction: column; gap: 7px; }
+  .finding { display: flex; align-items: flex-start; gap: 8px; font-size: .82rem; line-height: 1.45; }
+  .finding-icon { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .65rem; flex-shrink: 0; margin-top: 1px; }
+  .fi-ok { background: #dcfce7; color: var(--green); }
+  .fi-warn { background: #fef3c7; color: var(--yellow); }
+  .fi-fixed { background: #d1fae5; color: #059669; border: 1px solid #6ee7b7; }
+
+  .evolution-table { background: white; border-radius: 14px; box-shadow: 0 2px 16px rgba(0,0,0,.07); overflow: hidden; margin-bottom: 28px; }
+  .evolution-table table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .evolution-table th { background: var(--gray-100); padding: 12px 16px; text-align: left; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--gray-600); font-weight: 700; }
+  .evolution-table td { padding: 11px 16px; border-bottom: 1px solid var(--gray-100); }
+  .evolution-table tr:last-child td { border-bottom: none; }
+  .td-up { color: var(--green); font-weight: 700; }
+  .td-same { color: var(--gray-600); }
+
+  .detail-table { background: white; border-radius: 14px; box-shadow: 0 2px 16px rgba(0,0,0,.07); overflow: hidden; }
+  .detail-table table { width: 100%; border-collapse: collapse; font-size: .83rem; }
+  .detail-table th { background: var(--gray-100); padding: 12px 16px; text-align: left; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--gray-600); font-weight: 700; }
+  .detail-table td { padding: 11px 16px; border-bottom: 1px solid var(--gray-100); vertical-align: top; }
+  .detail-table tr:last-child td { border-bottom: none; }
+  .status-ok { color: var(--green); font-weight: 600; }
+  .status-warn { color: var(--yellow); font-weight: 600; }
+  .status-fixed { color: #059669; font-weight: 700; }
+
+  @media (max-width: 768px) {
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .categories-grid { grid-template-columns: 1fr; }
+    .container { padding: 0 16px 48px; }
+    .score-wrap { gap: 16px; }
+  }
+  @media print { .top-nav { display: none; } .container { margin-top: 0; } body { background: white; } }
+</style>
+</head>
+<body>
+
+<div class="top-nav">
+  <span class="top-nav-title">Auditoría SEO v3 — Klinner Cleaning</span>
+  <span class="top-nav-meta">klinnercleaning.com · 30 jun 2026</span>
+</div>
+
+<div class="header">
+  <div class="header-inner">
+    <div class="header-url">🌐 https://klinnercleaning.com</div>
+    <h1 class="header-title">Informe SEO Completo — v3</h1>
+    <div class="header-version">Auditoría post-optimización de imágenes y contenido</div>
+    <div class="score-wrap">
+      <div class="score-circle">
+        <div class="score-number">91</div>
+        <div class="score-label">/ 100</div>
+      </div>
+      <div class="score-deltas">
+        <div class="score-delta">
+          <div class="score-delta-num">↑ +3 pts</div>
+          <div class="score-delta-label">vs v2 (88 pts)</div>
+        </div>
+        <div class="score-delta">
+          <div class="score-delta-num">↑ +8 pts</div>
+          <div class="score-delta-label">vs v1 (83 pts)</div>
+        </div>
+      </div>
+    </div>
+    <div class="score-level">🏆 EXCELENTE — 0 críticos · 0 advertencias · 27 tests aprobados</div>
+    <div class="header-date">30 de junio de 2026</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="summary-card-icon">🎯</div>
+      <div class="summary-card-num c-navy">91</div>
+      <div class="summary-card-label">Puntuación global</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-card-icon">🔴</div>
+      <div class="summary-card-num c-green">0</div>
+      <div class="summary-card-label">Problemas críticos</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-card-icon">🟡</div>
+      <div class="summary-card-num c-green">0</div>
+      <div class="summary-card-label">Advertencias</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-card-icon">✅</div>
+      <div class="summary-card-num c-green">27</div>
+      <div class="summary-card-label">Tests aprobados</div>
+    </div>
+  </div>
+
+  <!-- FIXES APLICADOS EN ESTA RONDA -->
+  <div class="progress-banner">
+    <div class="progress-banner-title">🎉 Correcciones aplicadas desde v2</div>
+    <div class="progress-fixes">
+      <div class="progress-fix"><span class="fix-badge">RESUELTO</span> "Satisfaction Guaranteed" duplicado → reemplazado por "Always On Time"</div>
+      <div class="progress-fix"><span class="fix-badge">RESUELTO</span> Privacy Policy — página real creada (privacy.html) y link del footer actualizado</div>
+      <div class="progress-fix"><span class="fix-badge">RESUELTO</span> Terms of Service — página real creada (terms.html) y link del footer actualizado</div>
+      <div class="progress-fix"><span class="fix-badge">RESUELTO</span> Imágenes WebP — 18 imágenes convertidas, 22MB → 8MB (ahorro del 63%)</div>
+      <div class="progress-fix"><span class="fix-badge">RESUELTO</span> Etiquetas &lt;picture&gt; con fallback JPG/PNG en todos los &lt;img&gt;</div>
+    </div>
+  </div>
+
+  <!-- EVOLUCIÓN -->
+  <div class="section">
+    <div class="section-title">📈 Evolución de Puntuaciones</div>
+    <div class="evolution-table">
+      <table>
+        <thead>
+          <tr><th>Categoría</th><th>Peso</th><th>v1</th><th>v2</th><th>v3</th><th>Cambio</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1. Meta Tags</td><td>20%</td><td>95</td><td>95</td><td>95</td><td class="td-same">—</td></tr>
+          <tr><td>2. Headings</td><td>15%</td><td>85</td><td>85</td><td>85</td><td class="td-same">—</td></tr>
+          <tr><td>3. Imágenes</td><td>10%</td><td>80</td><td>80</td><td><strong>95</strong></td><td class="td-up">↑ +15</td></tr>
+          <tr><td>4. Enlaces</td><td>10%</td><td>70</td><td>80</td><td><strong>92</strong></td><td class="td-up">↑ +12</td></tr>
+          <tr><td>5. Open Graph</td><td>10%</td><td>98</td><td>98</td><td>98</td><td class="td-same">—</td></tr>
+          <tr><td>6. Schema</td><td>10%</td><td>72</td><td>95</td><td>95</td><td class="td-same">—</td></tr>
+          <tr><td>7. Técnico</td><td>15%</td><td>78</td><td>92</td><td>92</td><td class="td-same">—</td></tr>
+          <tr><td>8. Contenido</td><td>10%</td><td>72</td><td>72</td><td><strong>75</strong></td><td class="td-up">↑ +3</td></tr>
+          <tr style="background:#f8fafc"><td><strong>TOTAL</strong></td><td></td><td>83</td><td>88</td><td><strong style="color:var(--green)">91</strong></td><td class="td-up"><strong>↑ +8 total</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- LO QUE QUEDA -->
+  <div class="section">
+    <div class="section-title">💡 Mejoras Opcionales (sin advertencias críticas)</div>
+    <div class="corrections">
+
+      <div class="correction info">
+        <div class="correction-header">
+          <span class="correction-badge badge-info">Opcional</span>
+          <div>
+            <div class="correction-title">Sin subpáginas por servicio — limita el posicionamiento long-tail</div>
+            <div class="correction-why">Como es un sitio de una sola página, Google solo puede posicionarte por las keywords del home. Si alguien busca <em>"Airbnb cleaning Nashville"</em> o <em>"move-out cleaning Brentwood"</em>, no hay una página específica para esa búsqueda. Crear subpáginas por servicio (airbnb-cleaning.html, deep-cleaning.html, etc.) multiplicaría las oportunidades de aparecer en Google. No es urgente, pero es el siguiente nivel de SEO.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="correction info">
+        <div class="correction-header">
+          <span class="correction-badge badge-info">Opcional</span>
+          <div>
+            <div class="correction-title">Sin reseñas reales de clientes visibles en la página</div>
+            <div class="correction-why">La sección de testimonios invita a dejar reviews pero no muestra ninguna. Mostrar 3-5 reseñas reales de Google con nombre, texto y estrellas genera mucha más confianza en el visitante y también puede añadirse al Schema como <code>Review</code> para que Google las muestre en los resultados de búsqueda.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- CATEGORÍAS -->
+  <div class="section">
+    <div class="section-title">📊 Desglose por Categoría</div>
+    <div class="categories-grid">
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">1. Meta Tags</span><span class="cat-score c-green">95/100</span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:95%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Title 59 chars con keyword + ciudad</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Meta description 154 chars, persuasiva y con CTA</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Canonical, robots, viewport, lang="en" — todos presentes</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Google Search Console verification tag</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">2. Headings</span><span class="cat-score c-green">85/100</span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:85%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Un solo H1 bien definido</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Jerarquía correcta H1 → H2 → H3</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>H2s descriptivos por sección</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Keyword principal incluida via sr-only en H1</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">3. Imágenes</span><span class="cat-score c-green">95/100<span class="cat-delta">↑ +15</span></span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:95%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>11/11 imágenes con alt descriptivo y keyword local</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>loading="lazy" en todas las imágenes below-fold</span></div>
+          <div class="finding"><div class="finding-icon fi-fixed">✓</div><span>18 archivos WebP generados — ahorro del 63% (22MB → 8MB)</span></div>
+          <div class="finding"><div class="finding-icon fi-fixed">✓</div><span>&lt;picture&gt; con source WebP + fallback JPG/PNG en todos los &lt;img&gt;</span></div>
+          <div class="finding"><div class="finding-icon fi-fixed">✓</div><span>CSS backgrounds actualizados a .webp (hero + 6 tarjetas de servicios)</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">4. Enlaces</span><span class="cat-score c-green">92/100<span class="cat-delta">↑ +12</span></span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:92%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Navegación interna clara y funcional</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>rel="noopener noreferrer" en el único enlace externo</span></div>
+          <div class="finding"><div class="finding-icon fi-fixed">✓</div><span>Privacy Policy → privacy.html (página real)</span></div>
+          <div class="finding"><div class="finding-icon fi-fixed">✓</div><span>Terms of Service → terms.html (página real)</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">5. Open Graph & Social</span><span class="cat-score c-green">98/100</span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:98%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>og:title, description, image, url, type — completos</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>og:image con dimensiones 1200×630 y alt text</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Twitter Card completa (summary_large_image)</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>og:site_name definido correctamente</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">6. Schema / JSON-LD</span><span class="cat-score c-green">95/100</span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:95%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>HouseCleaningService con teléfono, email, dirección y geo</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>hasOfferCatalog con 6 servicios, areaServed con 13 ciudades</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>sameAs apunta a Google Business Profile real</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>priceRange, openingHours y coordenadas GPS incluidos</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">7. Técnico</span><span class="cat-score c-green">92/100</span></div>
+        <div class="progress-bar"><div class="progress-fill fill-green" style="width:92%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>HTTPS activo (HTTP/2), tiempo de respuesta 0.10s</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>http → https redirect 308 Permanent</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>www → no-www redirect 308 Permanent</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>robots.txt correcto, sitemap.xml simplificado</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Responsive completo (360px – 1440px)</span></div>
+        </div>
+      </div>
+
+      <div class="category-card">
+        <div class="cat-header"><span class="cat-name">8. Contenido</span><span class="cat-score c-yellow">75/100<span class="cat-delta">↑ +3</span></span></div>
+        <div class="progress-bar"><div class="progress-fill fill-yellow" style="width:75%"></div></div>
+        <div class="findings">
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>~800 palabras visibles con keywords locales distribuidas</span></div>
+          <div class="finding"><div class="finding-icon fi-ok">✓</div><span>Title y description únicos</span></div>
+          <div class="finding"><div class="finding-icon fi-fixed">✓</div><span>"Always On Time" reemplaza el feature-title duplicado</span></div>
+          <div class="finding"><div class="finding-icon fi-warn">!</div><span>Single-page — sin subpáginas por servicio para long-tail keywords</span></div>
+          <div class="finding"><div class="finding-icon fi-warn">!</div><span>Sin reseñas reales de clientes visibles en la página</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- DETALLE TÉCNICO -->
+  <div class="section">
+    <div class="section-title">📋 Tabla de Detalle Técnico Completo</div>
+    <div class="detail-table">
+      <table>
+        <thead>
+          <tr><th>Elemento</th><th>Valor / Estado</th><th>Estado</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>URL</strong></td><td>https://klinnercleaning.com/</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>HTTP Status</strong></td><td>200 OK (HTTP/2)</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Tiempo respuesta</strong></td><td>0.10s — excelente</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>HTTPS</strong></td><td>Activo</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>http → https</strong></td><td>308 Permanent Redirect</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>www → no-www</strong></td><td>308 Permanent Redirect</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Title</strong></td><td>House Cleaning Services in Nashville, TN | Klinner Cleaning (59 chars)</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Meta description</strong></td><td>154 chars con keyword y CTA</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>H1</strong></td><td>1 elemento único (keyword en sr-only)</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Canonical</strong></td><td>https://klinnercleaning.com/</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>robots.txt</strong></td><td>Allow: *, Sitemap referenciado</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>sitemap.xml</strong></td><td>Solo la URL real de la homepage</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Open Graph</strong></td><td>10/10 tags completos</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Twitter Card</strong></td><td>summary_large_image completa</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Schema sameAs</strong></td><td>URL real de Google Business Profile</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>rel="noopener noreferrer"</strong></td><td>Presente en todos los enlaces externos</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Imágenes con alt</strong></td><td>11/11 con alt descriptivo</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Formato imágenes</strong></td><td>WebP con fallback JPG/PNG via &lt;picture&gt;</td><td class="status-fixed">✓ OPTIMIZADO</td></tr>
+          <tr><td><strong>Peso total imágenes</strong></td><td>22MB → 8MB (-63%)</td><td class="status-fixed">✓ OPTIMIZADO</td></tr>
+          <tr><td><strong>Privacy Policy</strong></td><td>privacy.html — página real</td><td class="status-fixed">✓ RESUELTO</td></tr>
+          <tr><td><strong>Terms of Service</strong></td><td>terms.html — página real</td><td class="status-fixed">✓ RESUELTO</td></tr>
+          <tr><td><strong>Feature titles únicos</strong></td><td>"Always On Time" reemplaza duplicado</td><td class="status-fixed">✓ RESUELTO</td></tr>
+          <tr><td><strong>Google Verification</strong></td><td>Meta tag Search Console presente</td><td class="status-ok">✓ OK</td></tr>
+          <tr><td><strong>Responsive</strong></td><td>Media queries 360px–1440px</td><td class="status-ok">✓ OK</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="text-align:center; color:var(--gray-600); font-size:.78rem; margin-top:40px; padding-top:24px; border-top:1px solid var(--gray-200);">
+    Auditoría SEO v3 — <strong>klinnercleaning.com</strong> · 30 jun 2026 · Claude Code
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sI -o /dev/null -w \"HTTP %{http_code} | Tiempo: %{time_total}s | Redirect: %{redirect_url}\" https://klinnercleaning.com)",
+      "Bash(curl -sI https://klinnercleaning.com)",
+      "Bash(curl -sI https://www.klinnercleaning.com)",
+      "Bash(curl -sI http://klinnercleaning.com)"
+    ]
+  }
+}
