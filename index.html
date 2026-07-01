@@ -1010,8 +1010,10 @@
     .review-trust-icon svg { color: var(--teal); }
     .testimonials-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 24px;
+      max-width: 900px;
+      margin: 0 auto;
     }
     .testimonial-card {
       background: var(--gray-100);
@@ -1058,6 +1060,7 @@
     }
     .author-name { font-weight: 700; font-size: .9rem; color: var(--navy); }
     .author-location { font-size: .78rem; color: var(--gray-400); }
+    .author-google { display: flex; align-items: center; gap: 5px; font-size: .78rem; color: var(--gray-400); margin-top: 2px; }
 
     /* =============================================
        QUOTE / CONTACT FORM
@@ -1475,7 +1478,39 @@
     },
     "sameAs": [
       "https://g.page/r/CZcGPuG6bM5CEBM/review"
-    ]
+    ],
+    "review": [
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Carlos Gonzalez" },
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5" },
+        "reviewBody": "I requested a deep clean service and everything turned out spotless. The team was professional, detailed, and exceeded my expectations. The house looked fresh, clean, and well taken care of. I'm very happy with the service and would definitely recommend them."
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Jhessyca Alves" },
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5" },
+        "reviewBody": "Amazing detailed work! Decided to try them out after the group I was working with for the airbnbs was not working. Happy to have made the switch — this team is communicative and does a great job."
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Ana Rubio" },
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5" },
+        "reviewBody": "I highly recommend this service! They did an amazing job and I'm very happy with the results."
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Luis Salazar" },
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5" },
+        "reviewBody": "Thank you for the great work — you were very responsible and respectful. My property looks different, thanks!"
+      }
+    ],
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "5",
+      "reviewCount": "4",
+      "bestRating": "5"
+    }
   }
   </script>
 </head>
@@ -2108,41 +2143,104 @@
   <!-- ===== TESTIMONIALS ===== -->
   <section id="testimonials">
     <div class="container">
-      <div class="review-cta-wrap reveal">
-        <div class="review-stars">★★★★★</div>
-        <h2 class="review-cta-title">Love Your Clean Home?<br>Tell Nashville About It.</h2>
-        <p class="review-cta-text">We're just getting started in Nashville — and your honest review helps other homeowners and Airbnb hosts find a cleaning service they can trust. It takes less than a minute and means the world to us.</p>
-        <div class="review-actions">
-          <a href="https://g.page/r/CZcGPuG6bM5CEBM/review" target="_blank" rel="noopener noreferrer" class="btn-google">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-            </svg>
-            Leave a Google Review
-          </a>
+      <div class="section-header reveal">
+        <span class="section-tag">Client Reviews</span>
+        <h2 class="section-title">What Our Clients Say</h2>
+        <p class="section-subtitle" style="margin:0 auto">Real feedback from homeowners and Airbnb hosts across Nashville who trust Klinner with their space.</p>
+      </div>
+
+      <div class="testimonials-grid">
+        <div class="testimonial-card reveal delay-1">
+          <div class="stars"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span></div>
+          <p class="testimonial-text">"I requested a deep clean service and everything turned out spotless. The team was professional, detailed, and exceeded my expectations. The house looked fresh, clean, and well taken care of. I'm very happy with the service and would definitely recommend them."</p>
+          <div class="testimonial-author">
+            <div class="author-avatar">CG</div>
+            <div>
+              <div class="author-name">Carlos Gonzalez</div>
+              <div class="author-google">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                via Google
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="review-trust">
-          <div class="review-trust-item">
-            <div class="review-trust-icon">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <div class="testimonial-card reveal delay-2">
+          <div class="stars"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span></div>
+          <p class="testimonial-text">"Amazing detailed work! Decided to try them out after the group I was working with for the airbnbs was not working. Happy to have made the switch — this team is communicative and does a great job."</p>
+          <div class="testimonial-author">
+            <div class="author-avatar">JA</div>
+            <div>
+              <div class="author-name">Jhessyca Alves</div>
+              <div class="author-google">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                via Google
+              </div>
             </div>
-            Trusted Local Cleaners
           </div>
-          <div class="review-trust-item">
-            <div class="review-trust-icon">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+
+        <div class="testimonial-card reveal delay-3">
+          <div class="stars"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span></div>
+          <p class="testimonial-text">"I highly recommend this service! They did an amazing job and I'm very happy with the results."</p>
+          <div class="testimonial-author">
+            <div class="author-avatar">AR</div>
+            <div>
+              <div class="author-name">Ana Rubio</div>
+              <div class="author-google">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                via Google
+              </div>
             </div>
-            Satisfaction Guaranteed
           </div>
-          <div class="review-trust-item">
-            <div class="review-trust-icon">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+
+        <div class="testimonial-card reveal delay-4">
+          <div class="stars"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span></div>
+          <p class="testimonial-text">"Thank you for the great work — you were very responsible and respectful. My property looks different, thanks!"</p>
+          <div class="testimonial-author">
+            <div class="author-avatar">LS</div>
+            <div>
+              <div class="author-name">Luis Salazar</div>
+              <div class="author-google">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                via Google
+              </div>
             </div>
-            Serving Nashville Metro
           </div>
+        </div>
+      </div>
+
+      <div class="review-actions reveal" style="margin-top:44px">
+        <a href="https://g.page/r/CZcGPuG6bM5CEBM/review" target="_blank" rel="noopener noreferrer" class="btn-google">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          Read all reviews on Google
+        </a>
+      </div>
+
+      <div class="review-trust">
+        <div class="review-trust-item">
+          <div class="review-trust-icon">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          Trusted Local Cleaners
+        </div>
+        <div class="review-trust-item">
+          <div class="review-trust-icon">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          Satisfaction Guaranteed
+        </div>
+        <div class="review-trust-item">
+          <div class="review-trust-icon">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          </div>
+          Serving Nashville Metro
         </div>
       </div>
     </div>
