@@ -64,7 +64,7 @@ h1 { font-size: clamp(2.35rem, 6vw, 4.6rem); line-height: 1.04; letter-spacing: 
 .hero-copy { max-width: 660px; font-size: clamp(1.02rem, 2vw, 1.22rem); color: rgba(255,255,255,.86); margin-bottom: 30px; }
 .hero-ctas { display: flex; flex-wrap: wrap; gap: 14px; }
 .trust-strip { position: relative; z-index: 3; margin-top: -54px; }
-.trust-grid { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--white); border-radius: 8px; box-shadow: var(--shadow-lg); overflow: hidden; }
+.trust-grid { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--white); border-radius: 8px; box-shadow: var(--shadow-lg); overflow: hidden; }
 .trust-item { padding: 25px 18px; text-align: center; border-right: 1px solid var(--gray-200); }
 .trust-item:last-child { border-right: 0; }
 .trust-number { color: var(--navy); font-size: 1.75rem; font-weight: 800; }
