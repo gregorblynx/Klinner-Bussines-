@@ -52,6 +52,14 @@
     .post-content figure { margin: 26px 0; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
     .post-content img { width: 100%; }
     .post-content hr { border: 0; border-top: 1px solid var(--gray-200); margin: 34px 0; }
+    .ba-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 26px 0; }
+    .ba-item { position: relative; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); background: var(--gray-100); }
+    .ba-item img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+    .ba-badge { position: absolute; top: 12px; left: 12px; padding: 5px 13px; border-radius: 100px; font-size: .72rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--white); }
+    .ba-badge.before { background: rgba(30,41,59,.85); }
+    .ba-badge.after { background: var(--teal); }
+    .ba-caption { padding: 12px 14px; font-size: .88rem; color: var(--gray-600); line-height: 1.45; }
+    @media (max-width: 640px) { .ba-grid { gap: 12px; } .ba-caption { font-size: .8rem; padding: 10px 10px; } }
     .post-featured { border-radius: 8px; overflow: hidden; box-shadow: var(--shadow-lg); margin: -46px auto 40px; position: relative; z-index: 3; max-width: 720px; }
     .post-featured img { width: 100%; max-height: 420px; object-fit: cover; }
     .blog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 38px; }
@@ -153,6 +161,20 @@
 <li>Set the thermostat and lighting for arrival</li>
 </ul>
 <p>That damage report matters more than most hosts realize: to claim through Airbnb's resolution process, you need evidence collected <em>before</em> the next guest checks in. A cleaner who photographs and reports issues the same day protects your income, not just your reviews.</p>
+<h2>What a real turnover looks like</h2>
+<p>These photos are from an actual Klinner turnover at a short-term rental in Nashville — the same property, the same day. This is what checkout morning looks like, and what the next guest walks into.</p>
+<div class="ba-grid">
+<div class="ba-item"><span class="ba-badge before">before</span><picture><source srcset="/images/blog/turnover-bedroom-before.webp" type="image/webp"><img src="/images/blog/turnover-bedroom-before.jpg" alt="Checkout morning: beds stripped, linens on the floor, ready for a full reset" loading="lazy"></picture><div class="ba-caption">Checkout morning: beds stripped, linens on the floor, ready for a full reset</div></div>
+<div class="ba-item"><span class="ba-badge after">after</span><picture><source srcset="/images/blog/turnover-bedroom-after.webp" type="image/webp"><img src="/images/blog/turnover-bedroom-after.jpg" alt="A few hours later: the master suite staged and guest-ready" loading="lazy"></picture><div class="ba-caption">A few hours later: the master suite staged and guest-ready</div></div>
+</div>
+<div class="ba-grid">
+<div class="ba-item"><span class="ba-badge before">before</span><picture><source srcset="/images/blog/turnover-bathroom-before.webp" type="image/webp"><img src="/images/blog/turnover-bathroom-before.jpg" alt="Used towels and an empty shower after the guests leave" loading="lazy"></picture><div class="ba-caption">Used towels and an empty shower after the guests leave</div></div>
+<div class="ba-item"><span class="ba-badge after">after</span><picture><source srcset="/images/blog/turnover-bathroom-after.webp" type="image/webp"><img src="/images/blog/turnover-bathroom-after.jpg" alt="The same bathroom: sanitized, restocked and staged with fresh robes" loading="lazy"></picture><div class="ba-caption">The same bathroom: sanitized, restocked and staged with fresh robes</div></div>
+</div>
+<div class="ba-grid">
+<div class="ba-item"><picture><source srcset="/images/blog/turnover-kitchen-after.webp" type="image/webp"><img src="/images/blog/turnover-kitchen-after.jpg" alt="The kitchen detailed down to the stainless stove" loading="lazy"></picture><div class="ba-caption">The kitchen detailed down to the stainless stove</div></div>
+<div class="ba-item"><picture><source srcset="/images/blog/turnover-living-after.webp" type="image/webp"><img src="/images/blog/turnover-living-after.jpg" alt="Living room reset to match the listing photos" loading="lazy"></picture><div class="ba-caption">Living room reset to match the listing photos</div></div>
+</div>
 <h2>Timing: the Nashville checkout window</h2>
 <p>Most Nashville listings run checkout at 10–11 AM and check-in at 3–4 PM. That gives a 4–6 hour window to do everything above — tighter if you host a full house near Broadway or a multi-bedroom place in East Nashville that sleeps ten bachelorette guests.</p>
 <p>A realistic budget for a thorough turnover:</p>

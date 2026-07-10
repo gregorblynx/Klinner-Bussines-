@@ -40,6 +40,16 @@ Field notes:
 - `keywords` (optional) — a few comma-separated search phrases.
 - Supported Markdown: `##`/`###` headings, paragraphs, `-` bullet lists, `1.` numbered lists, `**bold**`, `*italic*`, `[links](url)`, `![images](/path.jpg)`, `>` quotes, `---` dividers.
 
+### Before/after photo pairs
+
+For side-by-side photos, use the `::pair` shortcode (adds BEFORE/AFTER badges) or `::duo` (no badges), on its own line:
+
+```
+::pair /images/blog/my-before | Caption for the before photo | /images/blog/my-after | Caption for the after photo
+```
+
+The image paths go **without extension** — both a `.jpg` and a `.webp` with that name must exist in the repo. To prepare web-sized versions of new photos (resize + jpg + webp), ask Claude to process them into `images/blog/`.
+
 ## 2. Generate the pages
 
 From the repo folder, run:

@@ -43,6 +43,27 @@ function inline(s) {
     .replace(/\*([^*]+)\*/g, '<em>$1</em>');
 }
 
+/* ::pair <img-base> | <caption> | <img-base> | <caption>
+   Renders a BEFORE/AFTER photo pair. img-base is the path without extension;
+   .webp and .jpg versions must both exist (e.g. /images/blog/turnover-bathroom-before).
+   ::duo works the same but without the BEFORE/AFTER badges. */
+function picture(base, alt) {
+  return `<picture><source srcset="${escAttr(base)}.webp" type="image/webp"><img src="${escAttr(base)}.jpg" alt="${escAttr(alt)}" loading="lazy"></picture>`;
+}
+
+function renderPairShortcode(t) {
+  const m = t.match(/^::(pair|duo)\s+(.+)$/);
+  if (!m) return null;
+  const parts = m[2].split('|').map((s) => s.trim());
+  if (parts.length !== 4) throw new Error(`::${m[1]} needs 4 fields separated by | — got: ${t}`);
+  const [img1, cap1, img2, cap2] = parts;
+  const badge = (kind) => m[1] === 'pair' ? `<span class="ba-badge ${kind}">${kind}</span>` : '';
+  return `<div class="ba-grid">
+<div class="ba-item">${badge('before')}${picture(img1, cap1)}<div class="ba-caption">${inline(esc(cap1))}</div></div>
+<div class="ba-item">${badge('after')}${picture(img2, cap2)}<div class="ba-caption">${inline(esc(cap2))}</div></div>
+</div>`;
+}
+
 function mdToHtml(md) {
   const lines = md.split(/\r?\n/);
   const out = [];
@@ -58,7 +79,12 @@ function mdToHtml(md) {
     const t = line.trim();
     let m;
     if (!t) { closePara(); closeList(); continue; }
-    if ((m = t.match(/^(#{2,4})\s+(.*)$/))) {
+    if (t.startsWith('::')) {
+      closePara(); closeList();
+      const html = renderPairShortcode(t);
+      if (!html) throw new Error(`Unknown shortcode: ${t}`);
+      out.push(html);
+    } else if ((m = t.match(/^(#{2,4})\s+(.*)$/))) {
       closePara(); closeList();
       const level = m[1].length;
       out.push(`<h${level}>${inline(esc(m[2]))}</h${level}>`);
@@ -130,6 +156,14 @@ const BLOG_CSS = `  <style>
     .post-content figure { margin: 26px 0; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
     .post-content img { width: 100%; }
     .post-content hr { border: 0; border-top: 1px solid var(--gray-200); margin: 34px 0; }
+    .ba-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 26px 0; }
+    .ba-item { position: relative; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); background: var(--gray-100); }
+    .ba-item img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+    .ba-badge { position: absolute; top: 12px; left: 12px; padding: 5px 13px; border-radius: 100px; font-size: .72rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--white); }
+    .ba-badge.before { background: rgba(30,41,59,.85); }
+    .ba-badge.after { background: var(--teal); }
+    .ba-caption { padding: 12px 14px; font-size: .88rem; color: var(--gray-600); line-height: 1.45; }
+    @media (max-width: 640px) { .ba-grid { gap: 12px; } .ba-caption { font-size: .8rem; padding: 10px 10px; } }
     .post-featured { border-radius: 8px; overflow: hidden; box-shadow: var(--shadow-lg); margin: -46px auto 40px; position: relative; z-index: 3; max-width: 720px; }
     .post-featured img { width: 100%; max-height: 420px; object-fit: cover; }
     .blog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 38px; }

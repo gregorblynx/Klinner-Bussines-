@@ -61,6 +61,16 @@ A professional turnover ends with a final inspection pass, because the cleaner i
 
 That damage report matters more than most hosts realize: to claim through Airbnb's resolution process, you need evidence collected *before* the next guest checks in. A cleaner who photographs and reports issues the same day protects your income, not just your reviews.
 
+## What a real turnover looks like
+
+These photos are from an actual Klinner turnover at a short-term rental in Nashville — the same property, the same day. This is what checkout morning looks like, and what the next guest walks into.
+
+::pair /images/blog/turnover-bedroom-before | Checkout morning: beds stripped, linens on the floor, ready for a full reset | /images/blog/turnover-bedroom-after | A few hours later: the master suite staged and guest-ready
+
+::pair /images/blog/turnover-bathroom-before | Used towels and an empty shower after the guests leave | /images/blog/turnover-bathroom-after | The same bathroom: sanitized, restocked and staged with fresh robes
+
+::duo /images/blog/turnover-kitchen-after | The kitchen detailed down to the stainless stove | /images/blog/turnover-living-after | Living room reset to match the listing photos
+
 ## Timing: the Nashville checkout window
 
 Most Nashville listings run checkout at 10–11 AM and check-in at 3–4 PM. That gives a 4–6 hour window to do everything above — tighter if you host a full house near Broadway or a multi-bedroom place in East Nashville that sleeps ten bachelorette guests.
