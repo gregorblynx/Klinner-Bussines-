@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Cleaning tips, Airbnb turnover guides and home care advice for Nashville homeowners and short-term rental hosts, from the Klinner Cleaning team.">
+  <title>Cleaning Tips &amp; Airbnb Host Guides | Klinner Cleaning Blog</title>
+  <link rel="canonical" href="https://klinnercleaning.com/blog/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Klinner Cleaning &amp; Maintenance">
+  <meta property="og:title" content="Cleaning Tips &amp; Airbnb Host Guides | Klinner Cleaning Blog">
+  <meta property="og:description" content="Cleaning tips, Airbnb turnover guides and home care advice for Nashville homeowners and short-term rental hosts.">
+  <meta property="og:url" content="https://klinnercleaning.com/blog/">
+  <meta property="og:image" content="https://klinnercleaning.com/og-image.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Cleaning Tips &amp; Airbnb Host Guides | Klinner Cleaning Blog">
+  <meta name="twitter:description" content="Cleaning tips and Airbnb turnover guides for Nashville hosts.">
+  <meta name="twitter:image" content="https://klinnercleaning.com/og-image.jpg">
+  <link rel="icon" type="image/png" href="/favicon Klinner.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1B2F6E">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Klinner">
+  <meta name="robots" content="index, follow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/service-page.css">
+  <style>
+    .blog-hero { background: linear-gradient(135deg, var(--navy), var(--navy-dark)); color: var(--white); padding: 84px 0 64px; }
+    .blog-hero .breadcrumb { color: rgba(255,255,255,.76); }
+    .blog-hero h1 { font-size: clamp(2rem, 5vw, 3.4rem); }
+    .post-meta { color: rgba(255,255,255,.72); font-weight: 600; font-size: .95rem; }
+    .post-wrap { max-width: 720px; margin: 0 auto; }
+    .post-content { font-size: 1.05rem; line-height: 1.75; color: var(--gray-800); }
+    .post-content h2 { color: var(--navy); font-size: 1.65rem; line-height: 1.25; margin: 42px 0 14px; }
+    .post-content h3 { color: var(--navy); font-size: 1.25rem; margin: 32px 0 10px; }
+    .post-content p { margin: 16px 0; }
+    .post-content ul, .post-content ol { margin: 16px 0 16px 4px; padding-left: 0; }
+    .post-content ul li, .post-content ol li { position: relative; padding-left: 28px; margin: 9px 0; color: var(--gray-800); list-style: none; }
+    .post-content ul li::before { content: "✓"; position: absolute; left: 0; color: var(--teal-dark); font-weight: 800; }
+    .post-content ol { counter-reset: postol; }
+    .post-content ol li { counter-increment: postol; }
+    .post-content ol li::before { content: counter(postol) "."; position: absolute; left: 0; color: var(--teal-dark); font-weight: 800; }
+    .post-content a { color: var(--teal-dark); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+    .post-content blockquote { border-left: 4px solid var(--teal); background: var(--off-white); padding: 14px 20px; border-radius: 0 8px 8px 0; margin: 20px 0; color: var(--gray-600); }
+    .post-content figure { margin: 26px 0; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+    .post-content img { width: 100%; }
+    .post-content hr { border: 0; border-top: 1px solid var(--gray-200); margin: 34px 0; }
+    .post-featured { border-radius: 8px; overflow: hidden; box-shadow: var(--shadow-lg); margin: -46px auto 40px; position: relative; z-index: 3; max-width: 720px; }
+    .post-featured img { width: 100%; max-height: 420px; object-fit: cover; }
+    .blog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 38px; }
+    .blog-card { background: var(--white); border: 1px solid var(--gray-200); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; transition: .25s ease; }
+    .blog-card:hover { transform: translateY(-4px); border-color: rgba(42,191,191,.45); }
+    .blog-card .thumb { aspect-ratio: 16 / 9; overflow: hidden; background: var(--gray-100); }
+    .blog-card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .blog-card .card-body { padding: 22px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+    .blog-card time { color: var(--teal-dark); font-weight: 800; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }
+    .blog-card h2 { color: var(--navy); font-size: 1.15rem; line-height: 1.35; }
+    .blog-card p { color: var(--gray-600); font-size: .95rem; flex: 1; }
+    .blog-card .read-more { color: var(--teal-dark); font-weight: 800; font-size: .9rem; }
+    @media (max-width: 980px) { .blog-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 640px) { .blog-grid { grid-template-columns: 1fr; } .blog-hero { padding: 64px 0 52px; } }
+  </style>
+</head>
+<body>
+  <nav class="site-nav">
+    <div class="container nav-inner">
+      <a href="/index.html" class="nav-logo">
+        <picture><source srcset="/klinner-logo.webp" type="image/webp"><img src="/klinner-logo.png" class="logo-img" alt="Klinner Cleaning & Maintenance"></picture>
+        <span><span class="logo-brand">Klinner<span>.</span></span><span class="logo-sub">Cleaning & Maintenance</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/index.html#services">Services</a></li><li><a href="/index.html#features">About</a></li><li><a href="/index.html#gallery">Gallery</a></li><li><a href="/blog/" style="color:var(--teal-dark)">Blog</a></li><li><a href="/index.html#quote">Quote</a></li><li><a href="/index.html#contact-section">Contact</a></li>
+      </ul>
+      <div class="nav-actions"><a href="tel:+16156694072" class="nav-phone">(615) 669-4072</a><a href="/index.html#quote" class="btn btn-primary">Get Quote</a></div>
+      <button class="hamburger" id="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
+    </div>
+    <div class="mobile-menu" id="mobileMenu">
+      <a href="/index.html#services">Services</a>
+      <a href="/index.html#features">About</a>
+      <a href="/index.html#gallery">Gallery</a>
+      <a href="/blog/">Blog</a>
+      <a href="/index.html#quote">Quote</a>
+      <a href="/index.html#contact-section">Contact</a>
+      <div class="mobile-cta"><a href="/index.html#quote" class="btn btn-primary">Get Quote</a></div>
+    </div>
+  </nav>
+  <header class="blog-hero">
+    <div class="container">
+      <div class="breadcrumb"><a href="/index.html">Home</a><span>/</span><span>Blog</span></div>
+      <span class="eyebrow">Klinner Blog</span>
+      <h1>Cleaning Tips &amp; Host Guides</h1>
+      <p class="post-meta" style="max-width:640px">Practical cleaning advice for Nashville homeowners and short-term rental hosts — from the team that cleans them every day.</p>
+    </div>
+  </header>
+  <main>
+    <section>
+      <div class="container">
+        <div class="blog-grid">
+        <a class="blog-card" href="/blog/airbnb-turnover-cleaning-checklist-nashville/">
+          <div class="thumb"><img src="/servicios/airbnb-cleaning-gallery/airbnb-02.jpg" alt="Airbnb Turnover Cleaning Checklist: What Nashville Hosts Should Expect" loading="lazy"></div>
+          <div class="card-body">
+            <time datetime="2026-07-10">July 10, 2026</time>
+            <h2>Airbnb Turnover Cleaning Checklist: What Nashville Hosts Should Expect</h2>
+            <p>A room-by-room Airbnb turnover cleaning checklist for Nashville hosts — what a professional clean should cover between guests, plus timing tips and common mistakes to avoid.</p>
+            <span class="read-more">Read article →</span>
+          </div>
+        </a>
+        </div>
+      </div>
+    </section>
+    <section class="cta-band">
+      <div class="container">
+        <h2 class="section-title">Need reliable cleaning in Nashville?</h2>
+        <p class="section-copy">Tell us about your home or rental property. We will respond with a custom quote.</p>
+        <a href="/index.html#quote" class="btn btn-primary">Request Free Quote</a>
+      </div>
+    </section>
+  </main>
+  <footer class="footer"><div class="container"><div class="footer-grid"><div><picture><source srcset="/klinner-logo.webp" type="image/webp"><img src="/klinner-logo.png" class="logo-img" alt="Klinner Cleaning & Maintenance"></picture><p>Nashville's trusted cleaning and maintenance team.</p><p style="margin-top:8px;font-size:.85rem;display:flex;align-items:center;gap:8px"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Licensed &amp; Insured — $1M General Liability</p></div><div><div class="footer-title">Quick Links</div><ul class="footer-links"><li><a href="/index.html#services">Services</a></li><li><a href="/index.html#features">About Us</a></li><li><a href="/blog/">Blog</a></li><li><a href="/index.html#quote">Get a Quote</a></li></ul></div><div><div class="footer-title">Services</div><ul class="footer-links"><li><a href="/airbnb-cleaning.html">Airbnb Cleaning</a></li><li><a href="/move-in-cleaning.html">Move-In Cleaning</a></li><li><a href="/move-out-cleaning.html">Move-Out Cleaning</a></li><li><a href="/deep-cleaning.html">Deep Cleaning</a></li><li><a href="/recurring-cleaning.html">Recurring Cleaning</a></li><li><a href="/handyman-services.html">Basic Handyman</a></li></ul></div><div><div class="footer-title">Contact</div><ul class="footer-links"><li><a href="tel:+16156694072">(615) 669-4072</a></li><li><a href="mailto:klinnercleaning@gmail.com">klinnercleaning@gmail.com</a></li><li><span>Nashville, TN &amp; Metro Area</span></li></ul></div></div><div class="footer-bottom"><p>&copy; 2025 Klinner Cleaning & Maintenance. All rights reserved.</p><div class="footer-legal"><a href="/privacy.html">Privacy Policy</a><a href="/terms.html">Terms of Service</a></div></div></div></footer>
+  <script src="/nav-menu.js" defer></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+    }
+  </script>
+  <script src="/pwa-install.js" defer></script>
+</body>
+</html>
