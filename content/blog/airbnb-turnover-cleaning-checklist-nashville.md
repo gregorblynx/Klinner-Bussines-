@@ -65,7 +65,9 @@ That damage report matters more than most hosts realize: to claim through Airbnb
 
 These photos are from an actual Klinner turnover at a short-term rental in Nashville — the same property, the same day. This is what checkout morning looks like, and what the next guest walks into.
 
-::pair /images/blog/turnover-bedroom-before | Checkout morning: beds stripped, linens on the floor, ready for a full reset | /images/blog/turnover-bedroom-after | A few hours later: the master suite staged and guest-ready
+::pair /images/blog/turnover-bedroom-before | Checkout morning in the master suite: bed stripped, duvet piled on the mattress | /images/blog/turnover-bedroom-after | The same bed a few hours later: fresh linens, staged and guest-ready
+
+::pair /images/blog/turnover-guestroom-before | Guest room after checkout: used linens and towels on the floor | /images/blog/turnover-guestroom-after | Same room, same angle: both beds made and reset to match the listing
 
 ::pair /images/blog/turnover-bathroom-before | Used towels and an empty shower after the guests leave | /images/blog/turnover-bathroom-after | The same bathroom: sanitized, restocked and staged with fresh robes
 
