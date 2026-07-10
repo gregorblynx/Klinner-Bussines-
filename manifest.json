@@ -1,0 +1,29 @@
+{
+  "name": "Klinner Cleaning & Maintenance",
+  "short_name": "Klinner",
+  "description": "Professional home cleaning in Nashville, TN. Get your free quote in seconds.",
+  "start_url": "/?utm_source=pwa#quote",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1B2F6E",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -7,7 +7,13 @@
   <meta name="description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out & recurring services. Get a free quote today — (615) 669-4072.">
   <title>House Cleaning Services in Nashville, TN | Klinner Cleaning</title>
   <link rel="icon" type="image/png" href="favicon Klinner.png">
-  <link rel="apple-touch-icon" href="favicon Klinner.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1B2F6E">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Klinner">
   <link rel="canonical" href="https://klinnercleaning.com/">
   <meta name="robots" content="index, follow">
 
@@ -2550,6 +2556,11 @@
 
     const statsEl = document.querySelector('.hero-stats');
     if (statsEl) statsObserver.observe(statsEl);
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+    }
   </script>
 </body>
 </html>
