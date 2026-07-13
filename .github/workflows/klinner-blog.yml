@@ -1,0 +1,158 @@
+name: Klinner Blog Draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      category:
+        description: Article category (auto alternates from publication history)
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - educational
+          - local-commercial
+  schedule:
+    # GitHub cron is UTC. 15:00 UTC is 9:00 AM CST / 10:00 AM CDT in Nashville.
+    - cron: '0 15 * * 2'
+    - cron: '0 15 * * 5'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: klinner-blog-draft
+  cancel-in-progress: false
+
+env:
+  TZ: America/Chicago
+
+jobs:
+  prepare-draft:
+    name: Generate and open Draft PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Select category and create isolated branch
+        id: prepare
+        shell: bash
+        env:
+          REQUESTED_CATEGORY: ${{ inputs.category || 'auto' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          category="$REQUESTED_CATEGORY"
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            weekday="$(date +%u)"
+            if [[ "$weekday" == "2" ]]; then
+              category="educational"
+            elif [[ "$weekday" == "5" ]]; then
+              category="local-commercial"
+            else
+              echo "Scheduled run occurred outside Tuesday or Friday in America/Chicago" >&2
+              exit 1
+            fi
+          fi
+          local_date="$(date +%F)"
+          branch="automation/klinner-blog-${local_date}-${category}-${RUN_ID}"
+          git switch -c "$branch"
+          if [[ "$(git branch --show-current)" == "$DEFAULT_BRANCH" ]]; then
+            echo "Refusing to work directly on the default branch" >&2
+            exit 1
+          fi
+          echo "category=$category" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "date=$local_date" >> "$GITHUB_OUTPUT"
+
+      - name: Generate article and editorial handoff
+        id: generate
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node scripts/generate-blog.mjs --type "${{ steps.prepare.outputs.category }}" --date "${{ steps.prepare.outputs.date }}"
+
+      - name: Build blog pages
+        run: node build-blog.js
+
+      - name: Validate content, links, metadata, history, and change scope
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node scripts/validate-blog.mjs --slug "${{ steps.generate.outputs.slug }}" --scope
+
+      - name: Check generated diff
+        run: |
+          set -euo pipefail
+          git diff --check
+          if [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "The generator produced no changes" >&2
+            exit 1
+          fi
+
+      - name: Commit the draft on the automation branch
+        env:
+          ARTICLE_TITLE: ${{ steps.generate.outputs.title }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            "content/blog/${{ steps.generate.outputs.slug }}.md" \
+            "content/blog/${{ steps.generate.outputs.slug }}.handoff.json" \
+            "blog/${{ steps.generate.outputs.slug }}/index.html" \
+            blog/index.html \
+            sitemap.xml \
+            content/blog-history.json \
+            content/blog-topics.json
+          git commit -m "Prepare blog draft: ${ARTICLE_TITLE}"
+
+      - name: Push only the automation branch
+        env:
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "Direct publication to the default branch is forbidden" >&2
+            exit 1
+          fi
+          git push --set-upstream origin "HEAD:${BRANCH}"
+
+      - name: Open Draft Pull Request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ARTICLE_TITLE: ${{ steps.generate.outputs.title }}
+          PR_BODY: |
+            Automated ${{ steps.generate.outputs.category }} blog draft for editorial review.
+
+            Review checklist:
+            - Read content/blog/${{ steps.generate.outputs.slug }}.handoff.json and verify all facts.
+            - Approve or supply a real image; the automation publishes only an image brief.
+            - Check internal links, CTA, metadata, and rendered layout.
+            - Review the Vercel Preview Deployment before considering merge.
+
+            This pull request is intentionally a draft. This workflow never merges or deploys to production.
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --draft \
+            --base "$DEFAULT_BRANCH" \
+            --head "$BRANCH" \
+            --title "Blog draft: ${ARTICLE_TITLE}" \
+            --body "$PR_BODY"

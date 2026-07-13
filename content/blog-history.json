@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "posts": [
+    {
+      "title": "Airbnb Turnover Cleaning Checklist: What Nashville Hosts Should Expect",
+      "slug": "airbnb-turnover-cleaning-checklist-nashville",
+      "primaryKeyword": "airbnb turnover cleaning nashville",
+      "searchIntent": "Informational guidance for Nashville short-term-rental hosts evaluating turnover cleaning",
+      "category": "local-commercial",
+      "publicationDate": "2026-07-10",
+      "pullRequestStatus": "published",
+      "source": "repository-import"
+    }
+  ]
+}
