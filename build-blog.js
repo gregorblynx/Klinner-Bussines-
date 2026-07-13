@@ -238,7 +238,7 @@ function renderPost(post) {
   });
 
   const featured = meta.image
-    ? `  <div class="container"><div class="post-featured"><img src="${escAttr(meta.image)}" alt="${escAttr(meta.title)}"></div></div>\n`
+    ? `  <div class="container"><div class="post-featured"><img src="${escAttr(meta.image)}" alt="${escAttr(meta.image_alt || meta.title)}"></div></div>\n`
     : '';
 
   return `<!DOCTYPE html>
@@ -247,7 +247,7 @@ function renderPost(post) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="${escAttr(meta.description)}">
-  <title>${esc(meta.title)} | Klinner Cleaning</title>
+  <title>${esc(meta.seo_title || meta.title)} | Klinner Cleaning</title>
 ${meta.keywords ? `  <meta name="keywords" content="${escAttr(meta.keywords)}">\n` : ''}  <link rel="canonical" href="${url}">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Klinner Cleaning &amp; Maintenance">
@@ -308,7 +308,7 @@ function renderIndex(posts) {
           <div class="card-body">
             <time datetime="${p.meta.date}">${prettyDate(p.meta.date)}</time>
             <h2>${esc(p.meta.title)}</h2>
-            <p>${esc(p.meta.description)}</p>
+            <p>${esc(p.meta.excerpt || p.meta.description)}</p>
             <span class="read-more">Read article →</span>
           </div>
         </a>`;
@@ -371,7 +371,9 @@ ${FOOTER}
 function updateSitemap(posts) {
   const file = path.join(ROOT, 'sitemap.xml');
   let xml = fs.readFileSync(file, 'utf8');
-  const today = new Date().toISOString().slice(0, 10);
+  // Use the newest publication date so a no-op rebuild does not create a
+  // timezone-dependent sitemap diff.
+  const today = posts[0]?.meta.date || new Date().toISOString().slice(0, 10);
   const entries = [
     `  <!-- BLOG:START (managed by build-blog.js — do not edit between markers) -->`,
     `  <url>\n    <loc>${SITE}/blog/</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.8</priority>\n  </url>`,
