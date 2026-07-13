@@ -14,8 +14,9 @@ on:
           - local-commercial
   schedule:
     # GitHub cron is UTC. 15:00 UTC is 9:00 AM CST / 10:00 AM CDT in Nashville.
-    - cron: '0 15 * * 2'
-    - cron: '0 15 * * 5'
+    # Drafts are prepared one day before the proposed Tuesday/Friday publication dates.
+    - cron: '0 15 * * 1'
+    - cron: '0 15 * * 4'
 
 permissions:
   contents: write
@@ -58,17 +59,20 @@ jobs:
           category="$REQUESTED_CATEGORY"
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             weekday="$(date +%u)"
-            if [[ "$weekday" == "2" ]]; then
+            if [[ "$weekday" == "1" ]]; then
               category="educational"
-            elif [[ "$weekday" == "5" ]]; then
+            elif [[ "$weekday" == "4" ]]; then
               category="local-commercial"
             else
-              echo "Scheduled run occurred outside Tuesday or Friday in America/Chicago" >&2
+              echo "Scheduled run occurred outside Monday or Thursday in America/Chicago" >&2
               exit 1
             fi
           fi
-          local_date="$(date +%F)"
-          branch="automation/klinner-blog-${local_date}-${category}-${RUN_ID}"
+          publication_date="$(date +%F)"
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            publication_date="$(date -d 'tomorrow' +%F)"
+          fi
+          branch="automation/klinner-blog-${publication_date}-${category}-${RUN_ID}"
           git switch -c "$branch"
           if [[ "$(git branch --show-current)" == "$DEFAULT_BRANCH" ]]; then
             echo "Refusing to work directly on the default branch" >&2
@@ -76,7 +80,7 @@ jobs:
           fi
           echo "category=$category" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "date=$local_date" >> "$GITHUB_OUTPUT"
+          echo "date=$publication_date" >> "$GITHUB_OUTPUT"
 
       - name: Generate article and editorial handoff
         id: generate
@@ -140,6 +144,7 @@ jobs:
           ARTICLE_TITLE: ${{ steps.generate.outputs.title }}
           PR_BODY: |
             Automated ${{ steps.generate.outputs.category }} blog draft for editorial review.
+            Proposed publication date: ${{ steps.prepare.outputs.date }} (America/Chicago).
 
             Review checklist:
             - Read content/blog/${{ steps.generate.outputs.slug }}.handoff.json and verify all facts.
