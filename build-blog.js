@@ -137,7 +137,8 @@ const HEAD_COMMON = `  <link rel="icon" type="image/png" href="/favicon Klinner.
   <!-- klinner-analytics:start (IDs injected at build time from Vercel env vars — see docs/analytics-setup.md) -->
   <script>window.KLINNER_ANALYTICS_CONFIG={gaId:"__NEXT_PUBLIC_GA_MEASUREMENT_ID__",clarityId:"__NEXT_PUBLIC_CLARITY_PROJECT_ID__"};</script>
   <script src="/analytics.js" defer></script>
-  <!-- klinner-analytics:end -->`;
+  <!-- klinner-analytics:end -->
+  <script src="/phone-cta.js" defer></script>`;
 
 const BLOG_CSS = `  <style>
     .blog-hero { background: linear-gradient(135deg, var(--navy), var(--navy-dark)); color: var(--white); padding: 84px 0 64px; }
