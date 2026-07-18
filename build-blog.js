@@ -306,11 +306,10 @@ ${FOOTER}
 function renderIndex(posts) {
   const cards = posts.map((p) => {
     const thumb = p.meta.image
-      ? `<div class="thumb"><img src="${escAttr(p.meta.image)}" alt="${escAttr(p.meta.title)}" loading="lazy"></div>`
+      ? `          <div class="thumb"><img src="${escAttr(p.meta.image)}" alt="${escAttr(p.meta.title)}" loading="lazy"></div>\n`
       : '';
     return `        <a class="blog-card" href="/blog/${p.meta.slug}/">
-          ${thumb}
-          <div class="card-body">
+${thumb}          <div class="card-body">
             <time datetime="${p.meta.date}">${prettyDate(p.meta.date)}</time>
             <h2>${esc(p.meta.title)}</h2>
             <p>${esc(p.meta.excerpt || p.meta.description)}</p>
@@ -421,4 +420,6 @@ function main() {
   console.log(`\nDone — ${posts.length} post(s) published.`);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { renderIndex };
