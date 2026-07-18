@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "category": "local-commercial",
+  "publicationDate": "2026-07-17",
+  "topic": {
+    "articleTitle": "Rental Property Move-Out Cleaning in Nashville: A Handoff Guide for Property Managers",
+    "primaryKeyword": "rental property move-out cleaning Nashville",
+    "searchIntent": "Commercial investigation and practical planning for Nashville property managers, landlords, and leasing teams preparing a rental property for inspection, handoff, or the next resident",
+    "relatedService": "Move-Out Cleaning",
+    "targetAudience": "Property managers, landlords, leasing teams, and rental owners in the Nashville metro area",
+    "seoValue": "This topic targets a locally qualified service query while addressing the operational concerns property managers face between occupants. It expands Klinner’s local-commercial coverage beyond short-term-rental turnovers and creates natural internal-link opportunities to move-out cleaning, deep cleaning, move-in cleaning, and basic handyman services.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Create a practical handoff framework for Nashville-area property managers rather than another room-by-room Airbnb turnover checklist. Organize the article around scope definition, access, documentation, cleaning priorities, repair separation, final inspection, and vendor communication so readers can use it for apartments, condos, and rental homes without implying that every task is included in a specific cleaning service.",
+  "primaryKeyword": "rental property move-out cleaning Nashville",
+  "secondaryKeywords": [
+    "Nashville rental property cleaning",
+    "move-out cleaning for property managers",
+    "rental turnover cleaning Nashville",
+    "apartment move-out cleaning Nashville",
+    "rental property handoff checklist",
+    "vacant rental cleaning Nashville"
+  ],
+  "searchIntent": "Commercial investigation and practical planning for Nashville property managers, landlords, and leasing teams preparing a rental property for inspection, handoff, or the next resident",
+  "seoTitle": "Rental Property Move-Out Cleaning Nashville Guide",
+  "metaDescription": "Plan rental property move-out cleaning in Nashville with a practical guide to scope, access, documentation, repairs, inspections, and property handoff.",
+  "suggestedSlug": "rental-property-move-out-cleaning-nashville",
+  "h1": "Rental Property Move-Out Cleaning in Nashville: A Handoff Guide for Property Managers",
+  "internalLinks": [
+    {
+      "url": "/move-out-cleaning.html",
+      "anchorText": "move-out cleaning in Nashville",
+      "rationale": "Links the primary commercial intent to the confirmed service page most directly associated with the article."
+    },
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service",
+      "rationale": "Helps readers evaluate a related confirmed service when a vacant property has heavier visible buildup or needs extra detail."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman service",
+      "rationale": "Supports the article’s distinction between cleaning and minor repair tasks while linking only to a confirmed repository page."
+    },
+    {
+      "url": "/move-in-cleaning.html",
+      "anchorText": "move-in cleaning scope",
+      "rationale": "Provides a relevant next-step resource for property managers preparing the rental for a new resident."
+    }
+  ],
+  "cta": "**Moving out in Nashville? [Request a final cleaning quote](/index.html#quote) and leave the space ready for what comes next.**",
+  "image": {
+    "brief": "Create an original, unbranded editorial image of an empty Nashville-area rental apartment or home after a move-out, showing a bright kitchen and adjoining living area with cleaning supplies arranged neatly in the foreground. The space should look realistic and ready for a property-manager walkthrough, without people, company logos, uniforms, identifiable addresses, or claims that it depicts actual Klinner work.",
+    "recommendedDimensions": "1600 × 900 px",
+    "suggestedFilename": "rental-property-move-out-cleaning-nashville.jpg",
+    "altText": "Empty Nashville rental property prepared for a move-out cleaning walkthrough",
+    "publicationStatus": "brief-only-awaiting-approved-real-image"
+  },
+  "blogExcerpt": "A practical guide for Nashville property managers planning rental move-out cleaning, from documenting the property and defining the scope to coordinating access, repairs, and the final walkthrough.",
+  "socialMediaPost": "Managing a rental handoff in Nashville? A clear move-out cleaning scope can help organize access, documentation, cleaning priorities, repair notes, and the final walkthrough. Read the new property manager guide.",
+  "CODEX HANDOFF": "Before approval, verify the publication date is set to July 17, 2026 in America/Chicago and confirm the title, slug, primary keyword, and search intent do not duplicate the existing Airbnb turnover article. Review every factual and service-related statement against the supplied repository sources; the article is intentionally framed as general practical guidance, and the only company-specific sentence is the CTA recorded in companyClaims. Confirm that /move-out-cleaning.html, /deep-cleaning.html, /handyman-services.html, /move-in-cleaning.html, and /index.html#quote resolve correctly in the current build. Check that the article template renders the H1 from front matter and does not add a second H1 from articleMarkdown. Obtain editorial approval for a newly created or properly licensed image matching the brief; do not substitute or represent it as a real Klinner project without evidence and permission. Review the article, metadata, CTA, internal links, responsive layout, and image treatment on Vercel Preview before production approval.",
+  "companyClaims": [
+    {
+      "claim": "Moving out in Nashville? Request a final cleaning quote and leave the space ready for what comes next.",
+      "sourcePath": "move-out-cleaning.html",
+      "sourceQuote": "Moving out in Nashville? Request a final cleaning quote and leave the space ready for what comes next."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
