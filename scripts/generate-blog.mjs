@@ -389,6 +389,19 @@ export function verifySourceClaims(claims, sources) {
   }
 }
 
+export function imageBriefRequestsDisallowedAsset(brief) {
+  const patterns = [
+    /\b(?:use|select|source|choose|provide)\s+(?:an?\s+)?(?:generic\s+)?stock\s+(?:photo|image)\b/,
+    /\b(?:use|add|publish|provide)\s+(?:an?\s+)?placeholder\s+(?:photo|image)\b/,
+    /\b(?:create|show|depict|publish|provide)\s+(?:an?\s+)?before\s+and\s+after\b/
+  ];
+  return String(brief || '').split(/[.!?]+/).some((sentence) => {
+    const text = normalize(sentence);
+    if (/\b(?:do not|dont|never|must not|should not)\b/.test(text)) return false;
+    return patterns.some((pattern) => pattern.test(text));
+  });
+}
+
 function staticChecks(result, { type, history, topics, posts, sources }) {
   const { topic, article } = result;
   if (topic.primaryKeyword !== article.primaryKeyword) fail('Topic and article primary keywords do not match');
@@ -407,7 +420,7 @@ function staticChecks(result, { type, history, topics, posts, sources }) {
   if (/(?:\$|\bUSD\b|\bdollars?\b|\bpercent\b|%)/i.test(publicCopy)) {
     fail('Prices or numeric/statistical claims are not allowed');
   }
-  if (/(?:placeholder|stock photo|before[- ]and[- ]after)/i.test(article.imageBrief)) {
+  if (imageBriefRequestsDisallowedAsset(article.imageBrief)) {
     fail('Image brief must not imply a stock, placeholder, or before-and-after asset');
   }
   for (const link of article.internalLinks) {
