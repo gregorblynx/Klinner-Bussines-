@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 import {
   editorialAuditPrompt,
+  imageBriefRequestsDisallowedAsset,
   sourceQuoteSupported,
   verifySourceClaims
 } from '../scripts/generate-blog.mjs';
@@ -52,4 +53,15 @@ test('editorial audit explicitly validates one category per execution', () => {
 
   assert.match(prompt, /exactly one educational article in this execution/);
   assert.match(prompt, /Do not fail this package because the other weekly article is absent/);
+});
+
+test('image brief may explicitly prohibit stock, placeholder, and before-and-after assets', () => {
+  const brief = 'Create a neutral home-care illustration. Do not use a stock photo, placeholder image, or before-and-after presentation.';
+  assert.equal(imageBriefRequestsDisallowedAsset(brief), false);
+});
+
+test('image brief rejects requests to publish disallowed assets', () => {
+  assert.equal(imageBriefRequestsDisallowedAsset('Use a generic stock photo of a clean kitchen.'), true);
+  assert.equal(imageBriefRequestsDisallowedAsset('Publish a placeholder image until a real photo is available.'), true);
+  assert.equal(imageBriefRequestsDisallowedAsset('Create a before-and-after image of the room.'), true);
 });
