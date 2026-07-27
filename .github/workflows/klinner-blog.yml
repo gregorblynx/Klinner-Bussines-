@@ -106,7 +106,7 @@ jobs:
         run: node build-blog.js
 
       - name: Test blog renderer
-        run: node --test tests/blog-build.test.js
+        run: node --test tests/blog-build.test.js tests/blog-generator-guardrails.test.mjs
 
       - name: Validate content, links, metadata, history, and change scope
         env:

@@ -328,7 +328,7 @@ Non-negotiable production rules:
 - Produce a complete, useful article. Keep the CTA separate in ctaMarkdown and link it to /index.html#quote or /index.html#contact-section.
 - Use two to six relevant internal links. Only use URLs that are visibly supported by the repository source paths.
 - Do not select or claim a real Klinner photo. Supply only an image brief, recommended dimensions, filename, and alt text. No featured image path will be published automatically.
-- Every company-specific sentence must be listed in companyClaims with an exact supporting quote and source path. Prefer no company-specific claim beyond the CTA.
+- Every company-specific sentence must be listed in companyClaims with a supporting quote and source path. Copy one contiguous quote from the source whenever possible; do not combine unrelated excerpts. Prefer no company-specific claim beyond the CTA.
 - codexHandoff must tell the reviewer what to verify before approval, including factual claims, links, image approval, and Vercel Preview.
 - seoValue must be two or three sentences.
 
@@ -357,13 +357,34 @@ function resolveInternalPath(url) {
   return target;
 }
 
-function verifySourceClaims(claims, sources) {
+function orderedTokenSubsequence(needle, haystack) {
+  const expected = normalize(needle).split(' ').filter(Boolean);
+  const available = normalize(haystack).split(' ').filter(Boolean);
+  if (expected.length < 8) return false;
+  let cursor = 0;
+  for (const token of available) {
+    if (token === expected[cursor]) cursor += 1;
+    if (cursor === expected.length) return true;
+  }
+  return false;
+}
+
+export function sourceQuoteSupported(source, quote) {
+  const normalizedSource = normalize(source);
+  const normalizedQuote = normalize(quote);
+  if (normalizedQuote.length < 12) return false;
+  return normalizedSource.includes(normalizedQuote) || orderedTokenSubsequence(normalizedQuote, normalizedSource);
+}
+
+export function verifySourceClaims(claims, sources) {
   const byPath = new Map(sources.map((source) => [source.path, normalize(source.text)]));
   for (const item of claims) {
     if (!byPath.has(item.sourcePath)) fail(`Company claim cites an unauthorized source: ${item.sourcePath}`);
-    const quote = normalize(item.sourceQuote);
-    if (quote.length < 12 || !byPath.get(item.sourcePath).includes(quote)) {
-      fail(`Company claim source quote was not found verbatim in ${item.sourcePath}: ${item.sourceQuote}`);
+    if (!sourceQuoteSupported(byPath.get(item.sourcePath), item.sourceQuote)) {
+      fail(`Company claim source quote was not found in order in ${item.sourcePath}: ${item.sourceQuote}`);
+    }
+    if (jaccard(item.claim, item.sourceQuote) < 0.35) {
+      fail(`Company claim is not sufficiently supported by its cited quote in ${item.sourcePath}: ${item.claim}`);
     }
   }
 }
@@ -438,9 +459,10 @@ ${article.ctaMarkdown.trim()}
 `;
 }
 
-async function editorialAudit({ result, master, sources, history, topics }) {
-  const system = 'You are a strict factual and SEO compliance auditor. Fail closed: any unsupported business claim or meaningful duplication must make passed false.';
-  const user = `Audit this proposed Klinner blog package against the source material.
+export function editorialAuditPrompt({ result, master, sources, history, topics, type }) {
+  return `Audit this proposed Klinner blog package against the source material.
+
+This workflow intentionally creates exactly one ${type} article in this execution. The other weekly category is created by a separate scheduled execution. Do not fail this package because the other weekly article is absent.
 
 Fail it if it contains an invented or unsupported price, service, statistic, certification, guarantee, review, promotion, city served, company fact, business process, timing promise, or real-work/photo claim. Fail it for a duplicate or substantially equivalent topic, primary keyword, slug, or search intent. Fail it if the CTA, metadata, internal links, image brief, alt text, full article, or CODEX handoff is missing. General non-quantitative home-care guidance is allowed.
 
@@ -458,6 +480,12 @@ ${JSON.stringify(topics.topics, null, 2)}
 
 PROPOSED PACKAGE:
 ${JSON.stringify(result, null, 2)}`;
+}
+
+async function editorialAudit({ result, master, sources, history, topics, type }) {
+  const system = `You are a strict factual and SEO compliance auditor. Fail closed: any unsupported business claim or meaningful duplication must make passed false.
+Audit exactly one requested article category per execution. Never require the other weekly category in the same package.`;
+  const user = editorialAuditPrompt({ result, master, sources, history, topics, type });
   return structuredResponse({ name: 'klinner_blog_audit', jsonSchema: auditSchema(), system, user });
 }
 
@@ -483,7 +511,7 @@ async function main() {
   });
 
   staticChecks(result, { type, history, topics, posts, sources });
-  const audit = await editorialAudit({ result, master, sources, history, topics });
+  const audit = await editorialAudit({ result, master, sources, history, topics, type });
   if (!audit.passed || audit.issues.length) {
     const details = audit.issues.map((item) => `${item.type}: ${item.reason} [${item.excerpt}]`).join('\n');
     fail(`Editorial audit failed:\n${details || 'audit did not pass'}`);
@@ -557,7 +585,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`Klinner blog generation failed: ${error.message}`);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error(`Klinner blog generation failed: ${error.message}`);
+    process.exit(1);
+  });
+}
