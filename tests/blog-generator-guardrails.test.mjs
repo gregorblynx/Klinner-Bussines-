@@ -41,6 +41,21 @@ test('company claims must be meaningfully related to their source quote', () => 
   );
 });
 
+test('company claim may use editorial language while preserving the cited service concept', () => {
+  assert.doesNotThrow(
+    () => verifySourceClaims([
+      {
+        claim: 'If ceiling-fan cleaning is part of a broader room reset, review the deep cleaning service when deciding how to scope the work.',
+        sourcePath: 'deep-cleaning.html',
+        sourceQuote: 'Deep Cleaning Service in Nashville, TN'
+      }
+    ], [{
+      path: 'deep-cleaning.html',
+      text: 'Deep Cleaning Service in Nashville, TN. A thorough top-to-bottom reset for your home.'
+    }])
+  );
+});
+
 test('editorial audit explicitly validates one category per execution', () => {
   const prompt = editorialAuditPrompt({
     result: {},

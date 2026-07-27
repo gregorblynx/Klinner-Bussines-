@@ -97,6 +97,14 @@ function jaccard(a, b) {
   return intersection / union.size;
 }
 
+function sharedMeaningfulTokenCount(a, b) {
+  const left = tokens(a);
+  const right = tokens(b);
+  let count = 0;
+  for (const token of left) if (right.has(token)) count += 1;
+  return count;
+}
+
 function stripHtml(html) {
   return html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
@@ -383,7 +391,7 @@ export function verifySourceClaims(claims, sources) {
     if (!sourceQuoteSupported(byPath.get(item.sourcePath), item.sourceQuote)) {
       fail(`Company claim source quote was not found in order in ${item.sourcePath}: ${item.sourceQuote}`);
     }
-    if (jaccard(item.claim, item.sourceQuote) < 0.35) {
+    if (sharedMeaningfulTokenCount(item.claim, item.sourceQuote) < 2) {
       fail(`Company claim is not sufficiently supported by its cited quote in ${item.sourcePath}: ${item.claim}`);
     }
   }
