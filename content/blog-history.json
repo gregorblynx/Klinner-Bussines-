@@ -10,6 +10,16 @@
       "publicationDate": "2026-07-10",
       "pullRequestStatus": "published",
       "source": "repository-import"
+    },
+    {
+      "title": "Rental Property Move-Out Cleaning in Nashville: A Handoff Guide for Property Managers",
+      "slug": "rental-property-move-out-cleaning-nashville",
+      "primaryKeyword": "rental property move-out cleaning Nashville",
+      "searchIntent": "Commercial investigation and practical planning for Nashville property managers, landlords, and leasing teams preparing a rental property for inspection, handoff, or the next resident",
+      "category": "local-commercial",
+      "publicationDate": "2026-07-27",
+      "pullRequestStatus": "published",
+      "source": "github-actions"
     }
   ]
 }
