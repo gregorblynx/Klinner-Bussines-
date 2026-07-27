@@ -1598,7 +1598,7 @@
           </div>
           <div class="hero-trust-item">
             <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
-            200+ Happy Clients
+            Nashville-Based Service
           </div>
           <div class="hero-trust-item">
             <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -1613,8 +1613,8 @@
       <div class="container">
         <div class="hero-stats-inner">
           <div class="hero-stat">
-            <div class="hero-stat-number">200+</div>
-            <div class="hero-stat-label">Happy Clients</div>
+            <div class="hero-stat-number">Local</div>
+            <div class="hero-stat-label">Nashville Service</div>
           </div>
           <div class="hero-stat">
             <div class="hero-stat-number">5★</div>
@@ -1751,8 +1751,8 @@
               </div>
             </div>
             <div class="features-image-badge2">
-              <div class="badge2-number">200+</div>
-              <div class="badge2-label">Clients Served</div>
+              <div class="badge2-number">Local</div>
+              <div class="badge2-label">Nashville Service</div>
             </div>
           </div>
         </div>
@@ -2518,8 +2518,7 @@
         if (entry.isIntersecting) {
           document.querySelectorAll('.hero-stat-number').forEach(stat => {
             const text = stat.textContent;
-            if (text.includes('200+')) animateCount(stat, 200, 1800), stat.dataset.suffix = '+';
-            else if (text.includes('5')) { /* star stays */ }
+            if (text.includes('5')) { /* star stays */ }
             else if (text.includes('6')) animateCount(stat, 6, 1200);
             else if (text.includes('100')) animateCount(stat, 100, 1600), stat.dataset.suffix = '%';
           });
