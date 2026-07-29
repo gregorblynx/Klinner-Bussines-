@@ -138,7 +138,7 @@ const HEAD_COMMON = `  <link rel="icon" type="image/png" href="/favicon Klinner.
   <script>window.KLINNER_ANALYTICS_CONFIG={gaId:"__NEXT_PUBLIC_GA_MEASUREMENT_ID__",clarityId:"__NEXT_PUBLIC_CLARITY_PROJECT_ID__"};</script>
   <script src="/analytics.js" defer></script>
   <!-- klinner-analytics:end -->
-  <script src="/phone-cta.js" defer></script>`;
+`;
 
 const BLOG_CSS = `  <style>
     .blog-hero { background: linear-gradient(135deg, var(--navy), var(--navy-dark)); color: var(--white); padding: 84px 0 64px; }
@@ -196,7 +196,7 @@ function nav(active) {
       <ul class="nav-links">
         <li><a href="/index.html#services">Services</a></li><li><a href="/index.html#features">About</a></li><li><a href="/index.html#gallery">Gallery</a></li>${blogLink}<li><a href="/index.html#quote">Quote</a></li><li><a href="/index.html#contact-section">Contact</a></li>
       </ul>
-      <div class="nav-actions"><a href="tel:+16156694072" class="nav-phone">(615) 669-4072</a><a href="/index.html#quote" class="btn btn-primary">Get Quote</a></div>
+      <div class="nav-actions"><a href="/index.html#quote" class="btn btn-primary">Get Quote</a></div>
       <button class="hamburger" id="hamburger" aria-label="Menu"><span></span><span></span><span></span></button>
     </div>
     <div class="mobile-menu" id="mobileMenu">
@@ -211,7 +211,7 @@ function nav(active) {
   </nav>`;
 }
 
-const FOOTER = `  <footer class="footer"><div class="container"><div class="footer-grid"><div><picture><source srcset="/klinner-logo.webp" type="image/webp"><img src="/klinner-logo.png" class="logo-img" alt="Klinner Cleaning & Maintenance"></picture><p>Nashville's trusted cleaning and maintenance team.</p><p style="margin-top:8px;font-size:.85rem;display:flex;align-items:center;gap:8px"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Licensed &amp; Insured — $1M General Liability</p></div><div><div class="footer-title">Quick Links</div><ul class="footer-links"><li><a href="/index.html#services">Services</a></li><li><a href="/index.html#features">About Us</a></li><li><a href="/blog/">Blog</a></li><li><a href="/index.html#quote">Get a Quote</a></li></ul></div><div><div class="footer-title">Services</div><ul class="footer-links"><li><a href="/airbnb-cleaning.html">Airbnb Cleaning</a></li><li><a href="/move-in-cleaning.html">Move-In Cleaning</a></li><li><a href="/move-out-cleaning.html">Move-Out Cleaning</a></li><li><a href="/deep-cleaning.html">Deep Cleaning</a></li><li><a href="/recurring-cleaning.html">Recurring Cleaning</a></li><li><a href="/handyman-services.html">Basic Handyman</a></li></ul></div><div><div class="footer-title">Contact</div><ul class="footer-links"><li><a href="tel:+16156694072">(615) 669-4072</a></li><li><a href="mailto:info@klinnercleaning.com">info@klinnercleaning.com</a></li><li><span>Nashville, TN &amp; Metro Area</span></li></ul></div></div><div class="footer-bottom"><p>&copy; 2025 Klinner Cleaning & Maintenance. All rights reserved.</p><div class="footer-legal"><a href="/privacy.html">Privacy Policy</a><a href="/terms.html">Terms of Service</a></div></div></div></footer>
+const FOOTER = `  <footer class="footer"><div class="container"><div class="footer-grid"><div><picture><source srcset="/klinner-logo.webp" type="image/webp"><img src="/klinner-logo.png" class="logo-img" alt="Klinner Cleaning & Maintenance"></picture><p>Nashville's trusted cleaning and maintenance team.</p><p style="margin-top:8px;font-size:.85rem;display:flex;align-items:center;gap:8px"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Licensed &amp; Insured — $1M General Liability</p></div><div><div class="footer-title">Quick Links</div><ul class="footer-links"><li><a href="/index.html#services">Services</a></li><li><a href="/index.html#features">About Us</a></li><li><a href="/blog/">Blog</a></li><li><a href="/index.html#quote">Get a Quote</a></li></ul></div><div><div class="footer-title">Services</div><ul class="footer-links"><li><a href="/airbnb-cleaning.html">Airbnb Cleaning</a></li><li><a href="/move-in-cleaning.html">Move-In Cleaning</a></li><li><a href="/move-out-cleaning.html">Move-Out Cleaning</a></li><li><a href="/deep-cleaning.html">Deep Cleaning</a></li><li><a href="/recurring-cleaning.html">Recurring Cleaning</a></li><li><a href="/handyman-services.html">Basic Handyman</a></li></ul></div><div><div class="footer-title">Contact</div><ul class="footer-links"><li><a href="mailto:info@klinnercleaning.com">info@klinnercleaning.com</a></li><li><span>Nashville, TN &amp; Metro Area</span></li></ul></div></div><div class="footer-bottom"><p>&copy; 2025 Klinner Cleaning & Maintenance. All rights reserved.</p><div class="footer-legal"><a href="/privacy.html">Privacy Policy</a><a href="/terms.html">Terms of Service</a></div></div></div></footer>
   <script src="/nav-menu.js" defer></script>
   <script>
     if ('serviceWorker' in navigator) {
@@ -243,7 +243,7 @@ function renderPost(post) {
   });
 
   const featured = meta.image
-    ? `  <div class="container"><div class="post-featured"><img src="${escAttr(meta.image)}" alt="${escAttr(meta.image_alt || meta.title)}"></div></div>\n`
+    ? `  <div class="container"><div class="post-featured"><img src="${escAttr(meta.image)}" alt="${escAttr(meta.image_alt || meta.title)}">${meta.image_caption ? `<div style="background:var(--off-white);color:var(--gray-600);font-size:.8rem;line-height:1.4;padding:9px 14px">${esc(meta.image_caption)}</div>` : ''}</div></div>\n`
     : '';
 
   return `<!DOCTYPE html>

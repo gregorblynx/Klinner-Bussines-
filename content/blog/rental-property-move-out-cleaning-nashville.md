@@ -6,6 +6,9 @@ slug: rental-property-move-out-cleaning-nashville
 seo_title: "Rental Property Move-Out Cleaning Nashville Guide"
 excerpt: "A practical guide for Nashville property managers planning rental move-out cleaning, from documenting the property and defining the scope to coordinating access, repairs, and the final walkthrough."
 keywords: rental property move-out cleaning Nashville, Nashville rental property cleaning, move-out cleaning for property managers, rental turnover cleaning Nashville, apartment move-out cleaning Nashville, rental property handoff checklist, vacant rental cleaning Nashville
+image: "/images/blog/rental-property-move-out-cleaning-editorial.png"
+image_alt: "Empty rental kitchen and living area prepared for a move-out cleaning walkthrough"
+image_caption: "Illustrative AI-generated image. Not a photo of a Klinner project."
 ---
 
 A rental handoff involves more than making an empty property look tidy. Property managers must coordinate access, identify cleaning priorities, separate cleaning needs from repair work, document the condition, and prepare the space for its next step.

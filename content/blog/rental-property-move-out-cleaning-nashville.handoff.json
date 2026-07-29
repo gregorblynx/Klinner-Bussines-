@@ -53,9 +53,12 @@
   "image": {
     "brief": "Create an original, unbranded editorial image of an empty Nashville-area rental apartment or home after a move-out, showing a bright kitchen and adjoining living area with cleaning supplies arranged neatly in the foreground. The space should look realistic and ready for a property-manager walkthrough, without people, company logos, uniforms, identifiable addresses, or claims that it depicts actual Klinner work.",
     "recommendedDimensions": "1600 × 900 px",
-    "suggestedFilename": "rental-property-move-out-cleaning-nashville.jpg",
-    "altText": "Empty Nashville rental property prepared for a move-out cleaning walkthrough",
-    "publicationStatus": "brief-only-awaiting-approved-real-image"
+    "suggestedFilename": "rental-property-move-out-cleaning-editorial.png",
+    "altText": "Empty rental kitchen and living area prepared for a move-out cleaning walkthrough",
+    "path": "/images/blog/rental-property-move-out-cleaning-editorial.png",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project.",
+    "publicationStatus": "generated-editorial-image-awaiting-review"
   },
   "blogExcerpt": "A practical guide for Nashville property managers planning rental move-out cleaning, from documenting the property and defining the scope to coordinating access, repairs, and the final walkthrough.",
   "socialMediaPost": "Managing a rental handoff in Nashville? A clear move-out cleaning scope can help organize access, documentation, cleaning priorities, repair notes, and the final walkthrough. Read the new property manager guide.",

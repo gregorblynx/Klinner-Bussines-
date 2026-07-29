@@ -126,6 +126,7 @@ function verifyScope(slug) {
   const allowed = new Set([
     `content/blog/${slug}.md`,
     `content/blog/${slug}.handoff.json`,
+    `images/blog/${slug}-editorial.webp`,
     `blog/${slug}/index.html`,
     'blog/index.html',
     'sitemap.xml',
@@ -177,6 +178,12 @@ function main() {
     fail('Complete image brief is required');
   }
   if (!handoff.image?.altText?.trim()) fail('Image alt text is required');
+  if (!post.meta.image?.trim() || !post.meta.image_alt?.trim()) fail('Featured image and alt text are required');
+  if (!post.meta.image_caption?.trim()) fail('Featured image disclosure is required');
+  const imagePath = post.meta.image.startsWith('/')
+    ? path.join(ROOT, post.meta.image.slice(1))
+    : path.resolve(path.dirname(postPath), post.meta.image);
+  if (!fs.existsSync(imagePath) || !fs.statSync(imagePath).isFile()) fail(`Featured image is missing: ${post.meta.image}`);
   if (!handoff.blogExcerpt?.trim() || !handoff.socialMediaPost?.trim() || !handoff['CODEX HANDOFF']?.trim()) {
     fail('Excerpt, social post, and CODEX HANDOFF are required');
   }
@@ -187,6 +194,7 @@ function main() {
   if (!html.includes(`<title>${escapeHtml(handoff.seoTitle)} | Klinner Cleaning</title>`)) fail('Generated HTML is not using the supplied SEO title');
   if (!/<h1>[^<]+<\/h1>/i.test(html)) fail('Generated HTML is missing H1');
   if (!/href=["']\/index\.html#(?:quote|contact-section)["']/i.test(html)) fail('Generated HTML is missing the quote/contact CTA');
+  if (!html.includes(`src="${post.meta.image}"`) || !html.includes(`alt="${post.meta.image_alt}"`)) fail('Generated HTML is missing the featured image or alt text');
   verifyImageAlts(html, path.relative(ROOT, htmlPath));
 
   const history = readJson('content/blog-history.json');

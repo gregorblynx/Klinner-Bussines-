@@ -102,4 +102,4 @@ A dedicated turnover team gives you a repeatable standard, a same-day damage rep
 
 Klinner Cleaning & Maintenance handles Airbnb and short-term rental turnovers across Nashville, Franklin, Brentwood, Green Hills, The Gulch, 12 South and the surrounding metro area. We work around your checkout windows, follow a consistent room-by-room checklist, restock the supplies you provide, and flag any issues before your next guest arrives — all backed by $1M general liability coverage.
 
-**Ready for stress-free turnovers?** [Request your free quote](/index.html#quote) or call us at [(615) 669-4072](tel:+16156694072) — tell us about your property and your typical turnover window, and we'll take it from there.
+**Ready for stress-free turnovers?** [Request your free quote](/index.html#quote) and tell us about your property and your typical turnover window.
