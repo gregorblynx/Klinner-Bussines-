@@ -335,7 +335,7 @@ Non-negotiable production rules:
 - The H1 and article title must match. The articleMarkdown must not contain an H1; use H2 and H3 headings.
 - Produce a complete, useful article. Keep the CTA separate in ctaMarkdown and link it to /index.html#quote or /index.html#contact-section.
 - Use two to six relevant internal links. Only use URLs that are visibly supported by the repository source paths.
-- Do not select or claim a real Klinner photo. Supply only an image brief, recommended dimensions, filename, and alt text. No featured image path will be published automatically.
+- Supply a concise image brief, recommended landscape dimensions, filename, and alt text. The workflow will create one generic editorial image from this brief and label it as illustrative. Never ask for a real Klinner project, before-and-after image, logo, uniform, signage, watermark, text overlay, or stock photo.
 - Every company-specific sentence must be listed in companyClaims with a supporting quote and source path. Copy one contiguous quote from the source whenever possible; do not combine unrelated excerpts. Prefer no company-specific claim beyond the CTA.
 - codexHandoff must tell the reviewer what to verify before approval, including factual claims, links, image approval, and Vercel Preview.
 - seoValue must be two or three sentences.
@@ -580,7 +580,7 @@ async function main() {
       recommendedDimensions: article.imageDimensions,
       suggestedFilename: article.suggestedImageFilename,
       altText: article.imageAltText,
-      publicationStatus: 'brief-only-awaiting-approved-real-image'
+      publicationStatus: 'pending-generated-editorial-image'
     },
     blogExcerpt: article.blogExcerpt,
     socialMediaPost: article.socialMediaPost,
