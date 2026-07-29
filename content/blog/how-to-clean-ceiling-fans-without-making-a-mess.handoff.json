@@ -48,9 +48,12 @@
   "image": {
     "brief": "Create a bright, realistic editorial image of a person using an old white pillowcase to clean one blade of a stationary ceiling fan. Show the pillowcase surrounding the blade to demonstrate how it contains dust. Include a stable step stool and a tidy residential room, but avoid logos, branded uniforms, dramatic dust clouds, unsafe reaching, or any suggestion that this is a real Klinner project.",
     "recommendedDimensions": "1200 × 630 pixels",
-    "suggestedFilename": "how-to-clean-ceiling-fans-without-making-a-mess.jpg",
+    "suggestedFilename": "ceiling-fan-cleaning-pillowcase-editorial.png",
     "altText": "Person using a pillowcase to contain dust while cleaning a ceiling fan blade",
-    "publicationStatus": "brief-only-awaiting-approved-real-image"
+    "path": "/images/blog/ceiling-fan-cleaning-pillowcase-editorial.png",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project.",
+    "publicationStatus": "generated-editorial-image-awaiting-review"
   },
   "blogExcerpt": "Learn how to contain ceiling fan dust with a pillowcase, remove stubborn residue, clean the housing and light fixture, and avoid common mistakes that spread debris around the room.",
   "socialMediaPost": "Dusting a ceiling fan should not create another cleaning job. Learn how the pillowcase method can contain loose dust, plus practical tips for wiping blades, handling sticky buildup, and protecting the room below.\n\nRead the complete ceiling fan cleaning guide.",

@@ -6,7 +6,11 @@ slug: how-to-clean-ceiling-fans-without-making-a-mess
 seo_title: "How to Clean Ceiling Fans Without Making a Mess"
 excerpt: "Learn how to contain ceiling fan dust with a pillowcase, remove stubborn residue, clean the housing and light fixture, and avoid common mistakes that spread debris around the room."
 keywords: how to clean ceiling fans without making a mess, how to clean ceiling fan blades, pillowcase ceiling fan cleaning method, how to remove dust from a ceiling fan, how to clean greasy ceiling fan blades, ceiling fan cleaning tips, dusty ceiling fan cleaning
+image: "/images/blog/ceiling-fan-cleaning-pillowcase-editorial.png"
+image_alt: "Person using a pillowcase to contain dust while cleaning a ceiling fan blade"
 ---
+
+> **Image note:** This is an illustrative AI-generated image, not a photo of a Klinner project.
 
 Ceiling fans collect dust along the tops and edges of their blades, where it can remain out of sight until the fan starts moving. Cleaning that buildup with a dry cloth may send it onto the bed, furniture, and floor below.
 
