@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "category": "educational",
+  "publicationDate": "2026-07-28",
+  "topic": {
+    "articleTitle": "How to Clean Ceiling Fans Without Making a Mess",
+    "primaryKeyword": "how to clean ceiling fans without making a mess",
+    "searchIntent": "Informational guidance for homeowners who want to remove dust from ceiling fans without scattering it around the room",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Homeowners and renters looking for a safe, practical way to clean dusty ceiling fans",
+    "seoValue": "This topic targets a specific household-cleaning question that is distinct from the existing Airbnb turnover and rental move-out articles. It also supports seasonal search interest during warm weather and creates relevant internal links to deep cleaning, recurring cleaning, and basic handyman services.",
+    "estimatedDifficulty": "Low",
+    "priority": "High"
+  },
+  "contentStrategy": "Answer the practical question immediately, then provide a step-by-step method for containing dust, cleaning different fan components, handling greasy buildup, avoiding common mistakes, and deciding when the fan needs maintenance rather than cleaning. Use conditional language for finishes and fixtures, emphasize manufacturer instructions, and connect the educational guidance to relevant service pages without adding unsupported company claims.",
+  "primaryKeyword": "how to clean ceiling fans without making a mess",
+  "secondaryKeywords": [
+    "how to clean ceiling fan blades",
+    "pillowcase ceiling fan cleaning method",
+    "how to remove dust from a ceiling fan",
+    "how to clean greasy ceiling fan blades",
+    "ceiling fan cleaning tips",
+    "dusty ceiling fan cleaning"
+  ],
+  "searchIntent": "Informational guidance for homeowners who want to remove dust from ceiling fans without scattering it around the room",
+  "seoTitle": "How to Clean Ceiling Fans Without Making a Mess",
+  "metaDescription": "Learn how to clean ceiling fan blades without spreading dust. Follow practical steps for blades, housings, light fixtures, and greasy buildup.",
+  "suggestedSlug": "how-to-clean-ceiling-fans-without-making-a-mess",
+  "h1": "How to Clean Ceiling Fans Without Making a Mess",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service page",
+      "rationale": "Ceiling fans are included among the reachable surfaces, fans, and fixtures addressed by the supported deep-cleaning page, making this the most relevant service connection."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman service",
+      "rationale": "Provides a supported next step for readers who discover a possible minor adjustment or maintenance concern while clearly instructing them to confirm whether the task fits the available scope."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning plan",
+      "rationale": "Connects the one-time fan-cleaning task with supported maintenance cleaning for reachable surfaces and commonly used rooms."
+    }
+  ],
+  "cta": "**Ready to address dust and buildup throughout your home? Klinner offers detailed cleaning for homes that need extra attention. [Request a cleaning quote](/index.html#quote) and share the rooms and priority areas you would like addressed.**",
+  "image": {
+    "brief": "Create a bright, realistic editorial image of a person using an old white pillowcase to clean one blade of a stationary ceiling fan. Show the pillowcase surrounding the blade to demonstrate how it contains dust. Include a stable step stool and a tidy residential room, but avoid logos, branded uniforms, dramatic dust clouds, unsafe reaching, or any suggestion that this is a real Klinner project.",
+    "recommendedDimensions": "1200 × 630 pixels",
+    "suggestedFilename": "ceiling-fan-cleaning-pillowcase-editorial.png",
+    "altText": "Person using a pillowcase to contain dust while cleaning a ceiling fan blade",
+    "path": "/images/blog/ceiling-fan-cleaning-pillowcase-editorial.png",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project.",
+    "publicationStatus": "generated-editorial-image-awaiting-review"
+  },
+  "blogExcerpt": "Learn how to contain ceiling fan dust with a pillowcase, remove stubborn residue, clean the housing and light fixture, and avoid common mistakes that spread debris around the room.",
+  "socialMediaPost": "Dusting a ceiling fan should not create another cleaning job. Learn how the pillowcase method can contain loose dust, plus practical tips for wiping blades, handling sticky buildup, and protecting the room below.\n\nRead the complete ceiling fan cleaning guide.",
+  "CODEX HANDOFF": "Before approval, verify the publication date is 2026-07-28 in America/Chicago and confirm the title, H1, slug, primary keyword, and search intent do not duplicate existing or scheduled content. Review every cleaning and safety statement for accuracy, including manufacturer-instruction caveats, elevated-access guidance, moisture restrictions, and the distinction between cleaning and electrical or mechanical repair. Confirm that /deep-cleaning.html, /handyman-services.html, /recurring-cleaning.html, and /index.html#quote resolve correctly and that the service descriptions remain supported by the current repository pages. Check that every company-specific sentence appears in companyClaims with an accurate source quote. Obtain editorial approval for a newly created or properly licensed image matching the brief; do not assign an existing Klinner image or publish a featured-image path automatically. Finally, inspect the rendered article, metadata, CTA, responsive layout, and all links on Vercel Preview before merging or publishing.",
+  "companyClaims": [
+    {
+      "claim": "For broader buildup across baseboards, fixtures, kitchens, and bathrooms, compare what is covered on the deep cleaning service page.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "A detailed service for kitchens, bathrooms, living areas and hard-to-reach surfaces. Detail Areas Dust reachable surfaces, fans and fixtures Wipe baseboards and doors Vacuum and mop floors Clean high-touch surfaces throughout"
+    },
+    {
+      "claim": "If you notice a possible minor adjustment or maintenance issue, review the basic handyman service and confirm whether the specific task fits the available scope.",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "Basic handyman task examples Scope depends on the task, property and availability. Share details for an accurate quote. Common Tasks Caulking and small sealant touch-ups Fixture replacements and simple installs Minor wall touch-ups Basic adjustments and small repairs"
+    },
+    {
+      "claim": "Once the fan and other neglected surfaces have been reset, a recurring cleaning plan can help maintain reachable surfaces, floors, kitchens, bathrooms, and commonly used rooms on an agreed schedule.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Recurring cleaning checklist A practical home maintenance clean for the rooms used most often. General Rooms Dust reachable surfaces Vacuum carpets and rugs Mop hard floors Empty trash and refresh common areas Kitchen & Bathrooms Clean counters, sinks and appliance exteriors Sanitize toilets, tubs, showers and vanities Polish mirrors and fixtures Wipe high-touch surfaces"
+    },
+    {
+      "claim": "Klinner offers detailed cleaning for homes that need extra attention.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "A more detailed clean for buildup, busy seasons, special occasions and homes that need extra attention."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
