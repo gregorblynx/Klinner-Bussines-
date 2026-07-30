@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "category": "local-commercial",
+  "publicationDate": "2026-07-31",
+  "topic": {
+    "articleTitle": "Pre-Listing Deep Cleaning in Nashville: A Seller and Agent Walkthrough Guide",
+    "primaryKeyword": "pre-listing deep cleaning Nashville",
+    "searchIntent": "Commercial investigation and practical planning for Nashville homeowners, real estate agents, and property managers preparing a home for listing photos, showings, or an open house",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Home sellers, real estate agents, landlords, and property managers in the Nashville metro area",
+    "seoValue": "This topic targets a locally qualified cleaning query connected to a clear property-marketing need while avoiding the existing Airbnb turnover and rental move-out topics. It can attract Nashville sellers and real estate professionals who are comparing cleaning options before listing photos, showings, or an open house.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Create a practical, non-promotional walkthrough for preparing an occupied or vacant Nashville-area home for market. Emphasize scope definition, task sequencing, room-by-room priorities, access planning, and final inspection while distinguishing cleaning from repairs and avoiding claims about sale price, buyer behavior, or guaranteed outcomes.",
+  "primaryKeyword": "pre-listing deep cleaning Nashville",
+  "secondaryKeywords": [
+    "Nashville pre-listing house cleaning",
+    "deep cleaning before selling a house",
+    "home listing cleaning checklist",
+    "real estate listing cleaning Nashville",
+    "cleaning before listing photos",
+    "open house cleaning checklist"
+  ],
+  "searchIntent": "Commercial investigation and practical planning for Nashville homeowners, real estate agents, and property managers preparing a home for listing photos, showings, or an open house",
+  "seoTitle": "Pre-Listing Deep Cleaning Nashville: Seller Guide",
+  "metaDescription": "Plan pre-listing deep cleaning in Nashville with a practical guide to scope, repairs, room priorities, listing photos, showings, and final walkthroughs.",
+  "suggestedSlug": "pre-listing-deep-cleaning-nashville",
+  "h1": "Pre-Listing Deep Cleaning in Nashville: A Seller and Agent Walkthrough Guide",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service",
+      "rationale": "Connects the article’s primary commercial intent to the confirmed Nashville deep cleaning service page."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman scope",
+      "rationale": "Helps readers separate cleaning needs from confirmed minor repair and maintenance tasks."
+    },
+    {
+      "url": "/index.html#quote",
+      "anchorText": "Request a deep cleaning quote from Klinner",
+      "rationale": "Provides a direct conversion path for readers preparing a Nashville property for listing."
+    }
+  ],
+  "cta": "Preparing a home for market in Nashville? [Request a deep cleaning quote from Klinner](/index.html#quote) and share the property size, condition, priority rooms, and listing timeline.",
+  "image": {
+    "brief": "Illustrative editorial scene of a bright, tidy home interior being reviewed before a real estate listing, with a person holding a simple clipboard near a clean kitchen and connected living area. Natural daylight, realistic residential setting, neutral décor, landscape composition, and no visible brands or text.",
+    "recommendedDimensions": "1600 × 900 px",
+    "suggestedFilename": "pre-listing-deep-cleaning-nashville-editorial.webp",
+    "altText": "Clean kitchen and living area being reviewed before a Nashville home listing",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/pre-listing-deep-cleaning-nashville-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "A practical pre-listing deep cleaning guide for Nashville sellers and real estate professionals, covering scope, room priorities, repairs, photography, showings, and the final walkthrough.",
+  "socialMediaPost": "Getting a Nashville-area home ready to list? Use this walkthrough guide to coordinate decluttering, repairs, deep cleaning, staging, photography, and showing-day upkeep without mixing responsibilities or overlooking priority areas.",
+  "CODEX HANDOFF": "Before approval, verify that the title, slug, primary keyword, and search intent do not duplicate either existing article. Confirm every company-specific sentence against the cited repository source, test /deep-cleaning.html, /handyman-services.html, and /index.html#quote, and ensure the CTA remains separate from articleMarkdown. Review the generated image for accuracy and approve its illustrative label; reject logos, uniforms, signage, watermarks, text overlays, or any implication that it depicts a real Klinner project. Finally, inspect the complete post on Vercel Preview for front matter, H1 rendering, heading hierarchy, metadata, link behavior, image dimensions, alt text, caption treatment, responsive layout, and CTA placement before publication.",
+  "companyClaims": [
+    {
+      "claim": "If the walkthrough reveals caulking, fixture, adjustment, or touch-up needs, review them separately under a basic handyman scope rather than placing them on an undefined cleaning list.",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "Caulking and small sealant touch-ups Fixture replacements and simple installs Minor wall touch-ups Basic adjustments and small repairs"
+    },
+    {
+      "claim": "When a home needs more detailed attention than routine upkeep, compare the planned scope with a deep cleaning service before requesting a quote.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep cleaning goes beyond the weekly basics, focusing on buildup, corners, baseboards and the spaces that are easy to miss."
+    },
+    {
+      "claim": "Preparing a home for market in Nashville? Request a deep cleaning quote from Klinner and share the property size, condition, priority rooms, and listing timeline.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep Cleaning in Nashville, TN A more detailed clean for buildup, busy seasons, special occasions and homes that need extra attention. Request Deep Cleaning Quote"
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
