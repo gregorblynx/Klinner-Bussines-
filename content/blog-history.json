@@ -20,6 +20,16 @@
       "publicationDate": "2026-07-27",
       "pullRequestStatus": "published",
       "source": "github-actions"
+    },
+    {
+      "title": "How to Clean Baseboards Without Damaging the Paint",
+      "slug": "how-to-clean-baseboards-without-damaging-paint",
+      "primaryKeyword": "how to clean baseboards",
+      "searchIntent": "Informational guidance for homeowners who want to remove dust, grime, and scuff marks from painted baseboards without damaging the finish",
+      "category": "educational",
+      "publicationDate": "2026-08-04",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }

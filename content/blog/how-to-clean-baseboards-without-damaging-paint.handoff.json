@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "category": "educational",
+  "publicationDate": "2026-08-04",
+  "topic": {
+    "articleTitle": "How to Clean Baseboards Without Damaging the Paint",
+    "primaryKeyword": "how to clean baseboards",
+    "searchIntent": "Informational guidance for homeowners who want to remove dust, grime, and scuff marks from painted baseboards without damaging the finish",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Homeowners and renters looking for a safe, practical method for cleaning painted baseboards",
+    "seoValue": "This topic targets a common home-care question with evergreen search potential and a clear step-by-step answer. It also supports relevant internal links to deep cleaning, recurring cleaning, and basic handyman services without overlapping with previously covered rental handoff or Airbnb turnover topics.",
+    "estimatedDifficulty": "Low",
+    "priority": "High"
+  },
+  "contentStrategy": "Answer the practical question with a surface-safe process that begins with identifying the baseboard material and paint condition. Organize the guide around preparation, dry dust removal, gentle washing, spot treatment, common mistakes, maintenance, and signs that cleaning will not solve the problem.",
+  "primaryKeyword": "how to clean baseboards",
+  "secondaryKeywords": [
+    "clean painted baseboards",
+    "how to clean white baseboards",
+    "remove scuff marks from baseboards",
+    "best way to clean baseboards",
+    "baseboard cleaning tips",
+    "clean baseboards without damaging paint"
+  ],
+  "searchIntent": "Informational guidance for homeowners who want to remove dust, grime, and scuff marks from painted baseboards without damaging the finish",
+  "seoTitle": "How to Clean Baseboards Without Damaging the Paint",
+  "metaDescription": "Learn how to clean painted baseboards safely, remove dust and scuff marks, choose gentle supplies, and avoid damaging the paint or trim.",
+  "suggestedSlug": "how-to-clean-baseboards-without-damaging-paint",
+  "h1": "How to Clean Baseboards Without Damaging the Paint",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning page",
+      "rationale": "Connects readers performing detailed trim cleaning with the repository-supported service page for broader room-by-room cleaning."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning page",
+      "rationale": "Provides a relevant next step for readers interested in keeping household surfaces maintained after a detailed reset."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman service",
+      "rationale": "Helps readers distinguish removable dirt from caulking, paint, adjustment, or minor repair needs."
+    }
+  ],
+  "cta": "If your home needs more detailed attention than a routine cleaning, [request a cleaning quote](/index.html#quote) and share your priority areas.",
+  "image": {
+    "brief": "Create a generic editorial illustration of a bright residential room showing a person gently wiping a white painted baseboard with a microfiber cloth. Include a small bowl of water, a soft brush, and a vacuum nearby; emphasize careful, low-moisture cleaning and an undamaged painted finish. No branding, logos, uniforms, signage, text overlays, watermarks, before-and-after layout, or identifiable property.",
+    "recommendedDimensions": "1600 × 900 pixels, landscape",
+    "suggestedFilename": "how-to-clean-baseboards-without-damaging-paint-editorial.webp",
+    "altText": "Person gently cleaning a white painted baseboard with a microfiber cloth",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/how-to-clean-baseboards-without-damaging-paint-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "Learn a surface-safe method for removing dust, grime, and scuff marks from painted baseboards without using excessive moisture or aggressive scrubbing.",
+  "socialMediaPost": "Dust first, keep the cloth damp rather than wet, and test every spot treatment before scrubbing. This practical guide explains how to clean painted baseboards while protecting the finish: https://www.klinnercleaning.com",
+  "CODEX HANDOFF": "Before approval, verify the publication date is 2026-08-04 in America/Chicago and confirm the title, H1, slug, primary keyword, metadata, and category are implemented correctly. Check every factual and company-specific statement against the cited repository pages; confirm that /deep-cleaning.html, /recurring-cleaning.html, /handyman-services.html, and /index.html#quote resolve correctly. Confirm articleMarkdown contains no H1 and that the CTA remains separate. Review the generated landscape image for accuracy and approve the required illustrative AI-image label; reject any branding, logo, uniform, signage, watermark, text overlay, real-project implication, or before-and-after presentation. Finally, inspect the article, metadata, image treatment, internal links, responsive layout, and CTA on Vercel Preview before merging.",
+  "companyClaims": [
+    {
+      "claim": "Klinner’s deep cleaning page describes detailed service for kitchens, bathrooms, living areas, and hard-to-reach surfaces.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "A detailed service for kitchens, bathrooms, living areas and hard-to-reach surfaces."
+    },
+    {
+      "claim": "The recurring cleaning page lists weekly, bi-weekly, and monthly maintenance options.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Choose weekly, bi-weekly or monthly cleaning based on your needs."
+    },
+    {
+      "claim": "Klinner’s basic handyman service includes caulking, minor wall touch-ups, basic adjustments, and small repairs, subject to the task and available scope.",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "Caulking and small sealant touch-ups Fixture replacements and simple installs Minor wall touch-ups Basic adjustments and small repairs"
+    },
+    {
+      "claim": "Klinner accepts cleaning quote requests that allow customers to share their needs and priority areas.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Tell Us Priorities Share rooms, concerns and areas needing extra detail."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}

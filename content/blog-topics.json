@@ -28,6 +28,20 @@
       "slug": "rental-property-move-out-cleaning-nashville",
       "status": "draft-pr",
       "createdAt": "2026-07-27"
+    },
+    {
+      "articleTitle": "How to Clean Baseboards Without Damaging the Paint",
+      "primaryKeyword": "how to clean baseboards",
+      "searchIntent": "Informational guidance for homeowners who want to remove dust, grime, and scuff marks from painted baseboards without damaging the finish",
+      "relatedService": "Deep Cleaning",
+      "targetAudience": "Homeowners and renters looking for a safe, practical method for cleaning painted baseboards",
+      "seoValue": "This topic targets a common home-care question with evergreen search potential and a clear step-by-step answer. It also supports relevant internal links to deep cleaning, recurring cleaning, and basic handyman services without overlapping with previously covered rental handoff or Airbnb turnover topics.",
+      "estimatedDifficulty": "Low",
+      "priority": "High",
+      "category": "educational",
+      "slug": "how-to-clean-baseboards-without-damaging-paint",
+      "status": "draft-pr",
+      "createdAt": "2026-08-04"
     }
   ]
 }
