@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "category": "educational",
+  "publicationDate": "2026-08-11",
+  "topic": {
+    "articleTitle": "Ceiling Fan Cleaning: How to Remove Dust Without Making a Mess",
+    "primaryKeyword": "ceiling fan cleaning",
+    "searchIntent": "Informational guidance for safely removing loose dust and sticky buildup from ceiling fans without scattering debris around the room",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Homeowners and renters looking for a practical way to clean dusty ceiling fans and maintain commonly overlooked surfaces",
+    "seoValue": "This article targets a common home-care question with a practical, step-by-step answer that can attract informational search traffic. It also creates relevant pathways to deep cleaning, recurring cleaning, and minor maintenance resources without overlapping the existing Airbnb turnover or rental move-out topics.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Answer the practical question immediately, then guide readers through preparation, loose-dust removal, heavier buildup, material-specific precautions, and cleanup. Emphasize electrical and ladder safety, product compatibility, and methods that contain dust rather than redistributing it.",
+  "primaryKeyword": "ceiling fan cleaning",
+  "secondaryKeywords": [
+    "how to clean a ceiling fan",
+    "how to clean ceiling fan blades",
+    "how to clean a ceiling fan without making a mess",
+    "pillowcase ceiling fan cleaning method",
+    "how to remove sticky dust from a ceiling fan",
+    "dusty ceiling fan cleaning tips"
+  ],
+  "searchIntent": "Informational guidance for safely removing loose dust and sticky buildup from ceiling fans without scattering debris around the room",
+  "seoTitle": "Ceiling Fan Cleaning Without Making a Mess",
+  "metaDescription": "Learn how to clean ceiling fan blades without scattering dust, treat sticky buildup carefully, protect nearby furniture, and avoid common mistakes.",
+  "suggestedSlug": "ceiling-fan-cleaning-without-making-a-mess",
+  "h1": "Ceiling Fan Cleaning: How to Remove Dust Without Making a Mess",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning checklist",
+      "rationale": "Supports readers whose ceiling-fan cleaning is part of a broader detailed home reset and aligns with the selected related service."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning checklist",
+      "rationale": "Provides a relevant next step for readers building an ongoing dust-control and room-maintenance routine."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman task examples",
+      "rationale": "Helps readers distinguish routine cleaning from a loose-blade, wobbling, or other minor maintenance concern without claiming that every issue fits the service."
+    }
+  ],
+  "cta": "**Need help with a more detailed home reset? [Request a deep cleaning quote](/index.html#quote) and share the rooms and priority areas that need attention.**",
+  "image": {
+    "brief": "Illustrative editorial scene of a stationary ceiling fan in a bright, tidy residential room, with a sturdy step ladder, folded microfiber cloths, and a clean pillowcase arranged below; realistic natural lighting, no people, branding, logos, text, or dramatic before-and-after treatment.",
+    "recommendedDimensions": "1600 × 900 px landscape",
+    "suggestedFilename": "ceiling-fan-cleaning-without-making-a-mess-editorial.webp",
+    "altText": "Stationary ceiling fan above a step ladder with microfiber cloths and a pillowcase ready for cleaning",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/ceiling-fan-cleaning-without-making-a-mess-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "Learn how to contain loose ceiling-fan dust with a pillowcase, treat sticky buildup carefully, protect nearby furniture, and avoid damaging blades or finishes.",
+  "socialMediaPost": "Dusting a ceiling fan should not create a second mess on the furniture and floor below. This practical guide explains the pillowcase method, how to approach sticky buildup, and which common cleaning mistakes to avoid. Read the new guide on the Klinner blog.",
+  "CODEX HANDOFF": "Before approval, verify the electrical-safety, ladder-safety, material-compatibility, and cleaning-product guidance for accuracy and appropriate risk framing. Confirm that the topic, primary keyword, slug, and search intent do not duplicate publication or topic history; verify that /deep-cleaning.html, /recurring-cleaning.html, /handyman-services.html, and /index.html#quote resolve correctly; and confirm the H1 matches the article title while articleMarkdown contains no H1. Review the generated image for approval, ensure it is landscape and generic with no logo, text, uniform, signage, watermark, real-project implication, or before-and-after presentation, and label it as illustrative in the implementation. Check the publication date as August 11, 2026 in America/Chicago, validate metadata and responsive formatting, and inspect the finished article on Vercel Preview on desktop and mobile before publishing.",
+  "companyClaims": [
+    {
+      "claim": "The article directs readers to Klinner's deep cleaning checklist for a broader detailed home reset.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep cleaning checklist A detailed service for kitchens, bathrooms, living areas and hard-to-reach surfaces."
+    },
+    {
+      "claim": "The article directs readers to Klinner's recurring cleaning checklist as an ongoing maintenance resource.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Recurring cleaning checklist A practical home maintenance clean for the rooms used most often."
+    },
+    {
+      "claim": "The article directs readers to Klinner's basic handyman page to compare a minor maintenance concern with the listed service scope.",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "Basic handyman task examples Scope depends on the task, property and availability. Share details for an accurate quote."
+    },
+    {
+      "claim": "The CTA invites readers to request a deep cleaning quote and provide priority areas.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Tell Us Priorities Share rooms, concerns and areas needing extra detail. 2 Get Quote We estimate based on size, condition and service needs."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
