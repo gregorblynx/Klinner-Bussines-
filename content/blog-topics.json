@@ -28,6 +28,20 @@
       "slug": "rental-property-move-out-cleaning-nashville",
       "status": "draft-pr",
       "createdAt": "2026-07-27"
+    },
+    {
+      "articleTitle": "Ceiling Fan Cleaning: How to Remove Dust Without Making a Mess",
+      "primaryKeyword": "ceiling fan cleaning",
+      "searchIntent": "Informational guidance for safely removing loose dust and sticky buildup from ceiling fans without scattering debris around the room",
+      "relatedService": "Deep Cleaning",
+      "targetAudience": "Homeowners and renters looking for a practical way to clean dusty ceiling fans and maintain commonly overlooked surfaces",
+      "seoValue": "This article targets a common home-care question with a practical, step-by-step answer that can attract informational search traffic. It also creates relevant pathways to deep cleaning, recurring cleaning, and minor maintenance resources without overlapping the existing Airbnb turnover or rental move-out topics.",
+      "estimatedDifficulty": "Medium",
+      "priority": "High",
+      "category": "educational",
+      "slug": "ceiling-fan-cleaning-without-making-a-mess",
+      "status": "draft-pr",
+      "createdAt": "2026-08-11"
     }
   ]
 }

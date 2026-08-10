@@ -20,6 +20,16 @@
       "publicationDate": "2026-07-27",
       "pullRequestStatus": "published",
       "source": "github-actions"
+    },
+    {
+      "title": "Ceiling Fan Cleaning: How to Remove Dust Without Making a Mess",
+      "slug": "ceiling-fan-cleaning-without-making-a-mess",
+      "primaryKeyword": "ceiling fan cleaning",
+      "searchIntent": "Informational guidance for safely removing loose dust and sticky buildup from ceiling fans without scattering debris around the room",
+      "category": "educational",
+      "publicationDate": "2026-08-11",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }
