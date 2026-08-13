@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "category": "local-commercial",
+  "publicationDate": "2026-08-14",
+  "topic": {
+    "articleTitle": "Pre-Listing Deep Cleaning in Nashville: A Photo-Ready Home Checklist",
+    "primaryKeyword": "pre-listing deep cleaning Nashville",
+    "searchIntent": "Commercial investigation and practical planning for Nashville homeowners and real estate professionals preparing a home for listing photos, showings, or an open house",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Nashville-area home sellers, real estate agents, landlords preparing a property for sale, and homeowners coordinating pre-listing work",
+    "seoValue": "This topic targets a locally qualified cleaning query connected to a specific milestone: preparing a home for sale. It expands local-commercial coverage beyond short-term-rental turnovers and rental move-outs while creating relevant internal links to deep cleaning, recurring cleaning, and basic handyman services.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Address pre-listing cleaning as a coordinated preparation project rather than a generic room-by-room chore list. Help sellers and agents sequence repairs, decluttering, cleaning, photography, and showings; define a practical deep-cleaning scope; and prepare a detailed quote request without making unsupported promises about sale outcomes.",
+  "primaryKeyword": "pre-listing deep cleaning Nashville",
+  "secondaryKeywords": [
+    "Nashville home listing cleaning",
+    "deep cleaning before selling a house",
+    "pre-listing cleaning checklist",
+    "cleaning before real estate photos",
+    "photo-ready home cleaning Nashville",
+    "open house cleaning checklist"
+  ],
+  "searchIntent": "Commercial investigation and practical planning for Nashville homeowners and real estate professionals preparing a home for listing photos, showings, or an open house",
+  "seoTitle": "Pre-Listing Deep Cleaning Nashville Checklist",
+  "metaDescription": "Plan pre-listing deep cleaning in Nashville with a practical checklist for repairs, kitchens, bathrooms, floors, listing photos, and final showings.",
+  "suggestedSlug": "pre-listing-deep-cleaning-nashville",
+  "h1": "Pre-Listing Deep Cleaning in Nashville: A Photo-Ready Home Checklist",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service",
+      "rationale": "Connects the article’s primary commercial intent to the confirmed deep cleaning service page."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman service",
+      "rationale": "Supports the section explaining why repairs and cleaning should be scoped separately."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning plan",
+      "rationale": "Provides a relevant next step for occupied listings that need maintenance between showings."
+    }
+  ],
+  "cta": "Klinner provides deep cleaning in Nashville for homes that need extra attention. Preparing a property for listing photos or showings? [Request a deep cleaning quote](/index.html#quote) and share the property condition, priority rooms, and listing timeline.",
+  "image": {
+    "brief": "Create an illustrative editorial scene of a bright, unbranded Nashville-area home interior being prepared for a real estate listing, with a clean kitchen opening into a staged living room, orderly counters, polished surfaces, and a small neutral cleaning caddy placed discreetly near the foreground. Use natural daylight, realistic residential details, and a wide landscape composition without people, branding, text, or project-specific elements.",
+    "recommendedDimensions": "1600 × 900 pixels",
+    "suggestedFilename": "pre-listing-deep-cleaning-nashville-editorial.webp",
+    "altText": "Clean kitchen and staged living room prepared for Nashville real estate listing photos",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/pre-listing-deep-cleaning-nashville-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "A practical pre-listing deep-cleaning checklist for Nashville homeowners and real estate professionals, covering work sequencing, room priorities, photography preparation, occupied-home upkeep, and quote details.",
+  "socialMediaPost": "Preparing a Nashville home for listing photos or showings? Use this pre-listing deep-cleaning checklist to coordinate repairs, decluttering, detailed cleaning, staging, and the final walkthrough—without leaving everything until photography day.",
+  "CODEX HANDOFF": "Before approval, verify that the title, H1, primary keyword, slug, and search intent do not duplicate or overlap the two supplied local-commercial articles. Confirm the single company-specific claim in the CTA against deep-cleaning.html and ensure no unsupported promises, timing statements, prices, service inclusions, coverage claims, or sales-outcome claims were introduced during editing. Test /deep-cleaning.html, /handyman-services.html, /recurring-cleaning.html, and /index.html#quote. Confirm the article body contains no H1 and the CTA remains separate. Review and approve the generated landscape image as illustrative, unbranded editorial artwork with no text, logo, uniform, signage, watermark, real project implication, or before-and-after treatment. Finally, inspect the complete article, metadata, links, image rendering, caption treatment, and responsive layout in Vercel Preview before publication.",
+  "companyClaims": [
+    {
+      "claim": "Klinner provides deep cleaning in Nashville for homes that need extra attention.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep Cleaning in Nashville, TN A more detailed clean for buildup, busy seasons, special occasions and homes that need extra attention."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}

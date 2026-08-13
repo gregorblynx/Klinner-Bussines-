@@ -20,6 +20,16 @@
       "publicationDate": "2026-07-27",
       "pullRequestStatus": "published",
       "source": "github-actions"
+    },
+    {
+      "title": "Pre-Listing Deep Cleaning in Nashville: A Photo-Ready Home Checklist",
+      "slug": "pre-listing-deep-cleaning-nashville",
+      "primaryKeyword": "pre-listing deep cleaning Nashville",
+      "searchIntent": "Commercial investigation and practical planning for Nashville homeowners and real estate professionals preparing a home for listing photos, showings, or an open house",
+      "category": "local-commercial",
+      "publicationDate": "2026-08-14",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }
