@@ -20,6 +20,16 @@
       "publicationDate": "2026-07-27",
       "pullRequestStatus": "published",
       "source": "github-actions"
+    },
+    {
+      "title": "Recurring House Cleaning in Nashville: How to Choose the Right Schedule",
+      "slug": "nashville-recurring-cleaning-schedule",
+      "primaryKeyword": "Nashville recurring cleaning schedule",
+      "searchIntent": "Commercial investigation and practical planning for Nashville homeowners comparing weekly, biweekly, and monthly recurring house cleaning schedules",
+      "category": "local-commercial",
+      "publicationDate": "2026-08-21",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }
