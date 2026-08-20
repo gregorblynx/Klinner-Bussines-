@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "category": "local-commercial",
+  "publicationDate": "2026-08-21",
+  "topic": {
+    "articleTitle": "Recurring House Cleaning in Nashville: How to Choose the Right Schedule",
+    "primaryKeyword": "Nashville recurring cleaning schedule",
+    "searchIntent": "Commercial investigation and practical planning for Nashville homeowners comparing weekly, biweekly, and monthly recurring house cleaning schedules",
+    "relatedService": "Recurring Cleaning",
+    "targetAudience": "Busy homeowners, families, professionals, and household decision-makers in the Nashville metro area",
+    "seoValue": "This topic targets Nashville homeowners who are considering recurring cleaning but have not decided how often they need service. It expands local-commercial coverage into a confirmed service category while addressing a distinct scheduling decision not covered by the existing Airbnb turnover or rental move-out articles.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Publish a locally relevant commercial-investigation guide that helps Nashville homeowners choose a recurring cleaning frequency based on household use, priorities, baseline condition, and maintenance habits. Keep the guidance provider-neutral and practical, then direct readers to the confirmed recurring cleaning service page and a separate quote CTA without making unsupported claims.",
+  "primaryKeyword": "Nashville recurring cleaning schedule",
+  "secondaryKeywords": [
+    "recurring house cleaning Nashville",
+    "weekly house cleaning Nashville",
+    "biweekly house cleaning Nashville",
+    "monthly house cleaning Nashville",
+    "home cleaning schedule Nashville",
+    "routine house cleaning Nashville"
+  ],
+  "searchIntent": "Commercial investigation and practical planning for Nashville homeowners comparing weekly, biweekly, and monthly recurring house cleaning schedules",
+  "seoTitle": "Nashville Recurring Cleaning Schedule Guide",
+  "metaDescription": "Compare weekly, biweekly, and monthly recurring house cleaning schedules for your Nashville home using household routines, priority rooms, and upkeep needs.",
+  "suggestedSlug": "nashville-recurring-cleaning-schedule",
+  "h1": "Recurring House Cleaning in Nashville: How to Choose the Right Schedule",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service page",
+      "rationale": "Helps readers compare a detailed initial reset with recurring maintenance when the home has visible buildup."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning service page",
+      "rationale": "Connects commercial-investigation readers with the confirmed Klinner service most closely related to the article."
+    },
+    {
+      "url": "/index.html#quote",
+      "anchorText": "Request a recurring cleaning quote",
+      "rationale": "Provides a direct conversion path from the separate CTA to the supported quote form."
+    }
+  ],
+  "cta": "Ready to discuss a cleaning schedule for your Nashville home? [Request a recurring cleaning quote](/index.html#quote).",
+  "image": {
+    "brief": "Create a generic editorial illustration of a bright, lived-in Nashville-area home interior with a tidy kitchen and adjoining living space, subtle cleaning supplies arranged neatly in the foreground, and a calm late-summer atmosphere. Use natural colors and realistic residential details; include no people, branding, logos, uniforms, signage, watermarks, text overlays, or identifiable company elements. The image is illustrative and must not appear to document a real project.",
+    "recommendedDimensions": "1600 × 900 pixels (landscape)",
+    "suggestedFilename": "nashville-recurring-cleaning-schedule-editorial.webp",
+    "altText": "Tidy kitchen and living area illustrating a recurring home cleaning schedule",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/nashville-recurring-cleaning-schedule-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "Compare weekly, biweekly, and monthly recurring house cleaning schedules using your home’s priority rooms, daily routines, baseline condition, and between-visit upkeep needs.",
+  "socialMediaPost": "How often should your home be cleaned—weekly, biweekly, or monthly? This practical Nashville guide explains how to choose a recurring cleaning schedule based on household use, priority rooms, and the upkeep you can manage between visits.",
+  "CODEX HANDOFF": "Before approval, verify the publication date is set to 2026-08-21 in America/Chicago and confirm the title, slug, primary keyword, and search intent do not duplicate or substantially overlap prior content. Check every company-specific sentence against companyClaims and the cited repository text; remove any unsupported service, timing, coverage, pricing, or process implication. Test /deep-cleaning.html, /recurring-cleaning.html, and /index.html#quote, and confirm the CTA remains separate from articleMarkdown. Review the generated image for editorial suitability, landscape dimensions, accurate alt text, an illustrative-image label, and the absence of logos, uniforms, signage, text overlays, watermarks, or any suggestion that it is a real Klinner project. Finally, inspect the complete article, metadata, internal links, responsive layout, image rendering, and CTA on Vercel Preview before merging.",
+  "companyClaims": [
+    {
+      "claim": "Review the [deep cleaning service page](/deep-cleaning.html) when comparing a detailed reset with routine maintenance.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep cleaning goes beyond the weekly basics, focusing on buildup, corners, baseboards and the spaces that are easy to miss."
+    },
+    {
+      "claim": "Review the [recurring cleaning service page](/recurring-cleaning.html) while preparing questions about ongoing home maintenance.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Recurring cleaning keeps kitchens, bathrooms, floors and everyday surfaces under control with a reliable maintenance rhythm."
+    },
+    {
+      "claim": "Ready to discuss a cleaning schedule for your Nashville home? [Request a recurring cleaning quote](/index.html#quote).",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Want your home cleaned on a schedule? Request a recurring cleaning quote for your Nashville home."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
