@@ -28,6 +28,20 @@
       "slug": "rental-property-move-out-cleaning-nashville",
       "status": "draft-pr",
       "createdAt": "2026-07-27"
+    },
+    {
+      "articleTitle": "How to Clean Ceiling Fans Without Spreading Dust Everywhere",
+      "primaryKeyword": "how to clean ceiling fans",
+      "searchIntent": "Informational guidance for homeowners who want a safe, practical way to remove dust from ceiling fan blades, housings, and light fixtures without creating a larger mess",
+      "relatedService": "Deep Cleaning",
+      "targetAudience": "Homeowners, renters, and household decision-makers looking for practical ceiling fan cleaning instructions",
+      "seoValue": "This evergreen topic targets a common home-care question that is distinct from the existing rental turnover and move-out articles. It can attract early-stage search traffic while creating relevant internal links to deep cleaning and recurring cleaning services.",
+      "estimatedDifficulty": "Medium",
+      "priority": "High",
+      "category": "educational",
+      "slug": "how-to-clean-ceiling-fans-without-spreading-dust",
+      "status": "draft-pr",
+      "createdAt": "2026-08-25"
     }
   ]
 }
