@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "category": "educational",
+  "publicationDate": "2026-08-25",
+  "topic": {
+    "articleTitle": "How to Clean Ceiling Fans Without Spreading Dust Everywhere",
+    "primaryKeyword": "how to clean ceiling fans",
+    "searchIntent": "Informational guidance for homeowners who want a safe, practical way to remove dust from ceiling fan blades, housings, and light fixtures without creating a larger mess",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Homeowners, renters, and household decision-makers looking for practical ceiling fan cleaning instructions",
+    "seoValue": "This evergreen topic targets a common home-care question that is distinct from the existing rental turnover and move-out articles. It can attract early-stage search traffic while creating relevant internal links to deep cleaning and recurring cleaning services.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Answer the practical question with a preparation checklist, two low-mess dust-removal methods, surface-specific deep-cleaning guidance, safety cautions, common mistakes, and a simple maintenance routine. Keep the advice useful for DIY readers while naturally connecting detailed and ongoing household cleaning needs to supported service pages.",
+  "primaryKeyword": "how to clean ceiling fans",
+  "secondaryKeywords": [
+    "how to clean ceiling fan blades",
+    "clean ceiling fan without making a mess",
+    "pillowcase ceiling fan cleaning method",
+    "how to remove dust from a ceiling fan",
+    "ceiling fan cleaning tips",
+    "how to deep clean a ceiling fan"
+  ],
+  "searchIntent": "Informational guidance for homeowners who want a safe, practical way to remove dust from ceiling fan blades, housings, and light fixtures without creating a larger mess",
+  "seoTitle": "How to Clean Ceiling Fans Without Spreading Dust",
+  "metaDescription": "Learn how to clean ceiling fans without sending dust across the room. Compare two low-mess methods and safely clean blades, housings, and lights.",
+  "suggestedSlug": "how-to-clean-ceiling-fans-without-spreading-dust",
+  "h1": "How to Clean Ceiling Fans Without Spreading Dust Everywhere",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service",
+      "rationale": "Connects readers dealing with detailed dusting and buildup to the supported deep cleaning service page."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "Recurring cleaning",
+      "rationale": "Offers a relevant next step for readers who want ongoing household maintenance after a detailed reset."
+    },
+    {
+      "url": "/index.html#quote",
+      "anchorText": "Request a quote",
+      "rationale": "Directs readers to the repository-supported quote form in the separate CTA."
+    }
+  ],
+  "cta": "**Ready for a deeper clean?** [Request a quote](/index.html#quote) for a detailed Nashville deep cleaning service.",
+  "image": {
+    "brief": "Illustrative editorial scene of a person safely cleaning a stationary ceiling fan blade with an old pillowcase while standing on a stable step stool in a bright, neutral living room; show a drop cloth below and realistic household cleaning supplies nearby. No branding, text, logos, uniforms, signage, watermarks, or before-and-after presentation.",
+    "recommendedDimensions": "1600 × 900 pixels, landscape",
+    "suggestedFilename": "how-to-clean-ceiling-fans-without-spreading-dust-editorial.webp",
+    "altText": "Person using a pillowcase to contain dust while cleaning a stationary ceiling fan blade",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/how-to-clean-ceiling-fans-without-spreading-dust-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "Learn two low-mess ways to remove dust from ceiling fan blades, then safely clean the housing and light without spraying liquid near electrical components.",
+  "socialMediaPost": "Dusting a ceiling fan should not create another room-cleaning project. Learn how to contain loose dust with a pillowcase or vacuum attachment, deep-clean the blades, and avoid common mistakes. #HomeCleaning #CleaningTips #HomeCare",
+  "CODEX HANDOFF": "Set the publication date to 2026-08-25 using America/Chicago. Before approval, verify all general safety and surface-care guidance, confirm that no unsupported quantitative or company claims were introduced, and check each companyClaims entry against its quoted repository source. Confirm that /deep-cleaning.html, /recurring-cleaning.html, and /index.html#quote resolve correctly. Verify that the article title and H1 match, the Markdown contains no H1, and the slug and primary keyword do not duplicate publication or topic history. Review and approve the illustrative image for safe ladder positioning, a stationary fan, no branding or text, correct landscape dimensions, filename, alt text, and the required illustrative-image label. Finally, inspect the rendered article, metadata, internal links, CTA, responsive layout, and image behavior on Vercel Preview before merging.",
+  "companyClaims": [
+    {
+      "claim": "The [deep cleaning service](/deep-cleaning.html) includes attention to reachable surfaces, fans, fixtures, and baseboards.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Dust reachable surfaces, fans and fixtures Wipe baseboards and doors"
+    },
+    {
+      "claim": "[Recurring cleaning](/recurring-cleaning.html) offers weekly, bi-weekly, or monthly options.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "How often can I schedule? Weekly, bi-weekly and monthly options are available based on route availability."
+    },
+    {
+      "claim": "Ready for a deeper clean? Request a quote for a detailed Nashville deep cleaning service.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Ready for a deeper clean? Request a quote for a detailed Nashville deep cleaning service."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
