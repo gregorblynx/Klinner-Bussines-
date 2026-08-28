@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "category": "local-commercial",
+  "publicationDate": "2026-08-28",
+  "topic": {
+    "articleTitle": "Nashville Rental Property Handyman Punch List: A Guide to Small Maintenance Tasks",
+    "primaryKeyword": "rental property handyman Nashville",
+    "searchIntent": "Commercial investigation and practical planning for Nashville landlords, short-term-rental hosts, and property managers deciding how to document, prioritize, and request help with minor property maintenance tasks",
+    "relatedService": "Basic Handyman",
+    "targetAudience": "Landlords, short-term-rental hosts, rental owners, and property managers in the Nashville metro area",
+    "seoValue": "This topic targets a locally qualified handyman query while helping rental-property decision-makers distinguish minor maintenance from work that may require a specialized contractor. It expands local-commercial coverage beyond cleaning-focused rental handoffs and connects naturally to Klinner’s confirmed Basic Handyman service.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Publish a late-summer local-commercial guide for Nashville rental-property decision-makers who need to organize small maintenance tasks before fall schedules, inspections, guest stays, or resident transitions. Differentiate the article from the existing move-out cleaning handoff guide by focusing on maintenance triage, task documentation, scope decisions, access planning, sequencing, and quote preparation rather than cleaning.",
+  "primaryKeyword": "rental property handyman Nashville",
+  "secondaryKeywords": [
+    "Nashville landlord handyman services",
+    "rental maintenance punch list",
+    "minor repairs for rental properties",
+    "rental property maintenance Nashville",
+    "handyman checklist for landlords",
+    "short-term rental maintenance Nashville"
+  ],
+  "searchIntent": "Commercial investigation and practical planning for Nashville landlords, short-term-rental hosts, and property managers deciding how to document, prioritize, and request help with minor property maintenance tasks",
+  "seoTitle": "Rental Property Handyman Nashville: Punch List Guide",
+  "metaDescription": "Build a Nashville rental maintenance punch list, document minor tasks, set priorities, coordinate access, and decide when specialized help may be needed.",
+  "suggestedSlug": "rental-property-handyman-nashville-punch-list",
+  "h1": "Nashville Rental Property Handyman Punch List: A Guide to Small Maintenance Tasks",
+  "internalLinks": [
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman services in Nashville",
+      "rationale": "Connects readers evaluating minor rental-property tasks with the confirmed Basic Handyman service page and its request process."
+    },
+    {
+      "url": "/move-out-cleaning.html",
+      "anchorText": "move-out cleaning scope",
+      "rationale": "Helps property managers coordinate a separate confirmed cleaning service when maintenance is part of a resident-departure handoff."
+    }
+  ],
+  "cta": "**Need help with a small rental-property task? [Request a quote](/index.html#quote) and share the punch list, photos, and access notes so Klinner can confirm whether the work fits its basic handyman service.**",
+  "image": {
+    "brief": "Illustrative editorial scene of a property manager reviewing a clipboard-style maintenance punch list in a tidy, unbranded rental kitchen while inspecting a loose cabinet handle and minor caulk area. Natural late-summer daylight, realistic residential setting, landscape composition, no people facing the camera, no logos, uniforms, signage, watermarks, or text overlays.",
+    "recommendedDimensions": "1600 × 900 px",
+    "suggestedFilename": "rental-property-handyman-nashville-punch-list-editorial.webp",
+    "altText": "Property manager reviewing a small maintenance punch list in a Nashville rental kitchen",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/rental-property-handyman-nashville-punch-list-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "A practical guide for Nashville landlords, hosts, and property managers building a room-by-room punch list for minor repairs, touch-ups, access planning, and maintenance quotes.",
+  "socialMediaPost": "Loose hardware, worn caulk, and small wall touch-ups are easier to manage when they are documented clearly. This new Nashville rental-property guide explains how to build, prioritize, and share a quote-ready handyman punch list.",
+  "CODEX HANDOFF": "Before approval, verify the 2026-08-28 publication date in America/Chicago and confirm that the topic, slug, primary keyword, and search intent do not duplicate either existing rental-cleaning article. Check every company-specific sentence against companyClaims and the cited repository text; confirm that no unsupported service scope, timing, coverage, guarantee, price, or location claim was introduced during editing. Test /handyman-services.html, /move-out-cleaning.html, and /index.html#quote. Confirm that article title and H1 match exactly, articleMarkdown contains no H1 and no CTA, and ctaMarkdown remains separate. Review and approve the illustrative image for accuracy, landscape presentation, accessibility, lack of branding/text, and the required illustrative label. Finally, inspect the rendered post, metadata, mobile layout, internal links, CTA, image crop, alt text, and publication date on Vercel Preview before merging.",
+  "companyClaims": [
+    {
+      "claim": "If the unit is also being prepared after a tenant departure, plan the maintenance list separately from the [move-out cleaning scope](/move-out-cleaning.html).",
+      "sourcePath": "move-out-cleaning.html",
+      "sourceQuote": "Move-Out Cleaning in Nashville, TN Leave your old place clean, polished and ready for inspection, handoff or the next resident."
+    },
+    {
+      "claim": "To compare these examples with the available request process, review [basic handyman services in Nashville](/handyman-services.html).",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "Basic Handyman Services in Nashville, TN Simple home maintenance help for minor repairs, caulking, fixture changes and small tasks that keep your property in shape."
+    },
+    {
+      "claim": "Need help with a small rental-property task? Request a quote and share the punch list, photos, and access notes so Klinner can confirm whether the work fits its basic handyman service.",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "Have a small repair or maintenance task? Tell us what you need done and we will confirm if it fits our basic handyman service. Request Free Quote"
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}

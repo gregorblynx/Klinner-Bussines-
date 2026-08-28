@@ -20,6 +20,16 @@
       "publicationDate": "2026-07-27",
       "pullRequestStatus": "published",
       "source": "github-actions"
+    },
+    {
+      "title": "Nashville Rental Property Handyman Punch List: A Guide to Small Maintenance Tasks",
+      "slug": "rental-property-handyman-nashville-punch-list",
+      "primaryKeyword": "rental property handyman Nashville",
+      "searchIntent": "Commercial investigation and practical planning for Nashville landlords, short-term-rental hosts, and property managers deciding how to document, prioritize, and request help with minor property maintenance tasks",
+      "category": "local-commercial",
+      "publicationDate": "2026-08-28",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }
