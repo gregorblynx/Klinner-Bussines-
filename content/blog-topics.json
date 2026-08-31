@@ -28,6 +28,20 @@
       "slug": "rental-property-move-out-cleaning-nashville",
       "status": "draft-pr",
       "createdAt": "2026-07-27"
+    },
+    {
+      "articleTitle": "How to Clean Ceiling Fans Without Spreading Dust",
+      "primaryKeyword": "how to clean ceiling fans",
+      "searchIntent": "Informational guidance for homeowners who want to remove dust and sticky buildup from ceiling fans without scattering debris around the room",
+      "relatedService": "Deep Cleaning",
+      "targetAudience": "Homeowners, renters, and household members responsible for routine cleaning and seasonal home care",
+      "seoValue": "This topic targets a practical how-to query that is distinct from the existing rental turnover and move-out articles. It also creates relevant pathways to deep and recurring cleaning pages while offering timely guidance for fans that have been used heavily during summer.",
+      "estimatedDifficulty": "Medium",
+      "priority": "High",
+      "category": "educational",
+      "slug": "how-to-clean-ceiling-fans-without-spreading-dust",
+      "status": "draft-pr",
+      "createdAt": "2026-09-01"
     }
   ]
 }

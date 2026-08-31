@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "category": "educational",
+  "publicationDate": "2026-09-01",
+  "topic": {
+    "articleTitle": "How to Clean Ceiling Fans Without Spreading Dust",
+    "primaryKeyword": "how to clean ceiling fans",
+    "searchIntent": "Informational guidance for homeowners who want to remove dust and sticky buildup from ceiling fans without scattering debris around the room",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Homeowners, renters, and household members responsible for routine cleaning and seasonal home care",
+    "seoValue": "This topic targets a practical how-to query that is distinct from the existing rental turnover and move-out articles. It also creates relevant pathways to deep and recurring cleaning pages while offering timely guidance for fans that have been used heavily during summer.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Answer the cleaning question directly with a low-mess pillowcase method, an alternative microfiber method, safety precautions, and material-conscious guidance for sticky buildup. Organize the article for featured-snippet potential through concise steps, supply lists, mistakes to avoid, and a maintenance checklist, while avoiding rigid cleaning-frequency claims.",
+  "primaryKeyword": "how to clean ceiling fans",
+  "secondaryKeywords": [
+    "how to clean ceiling fan blades",
+    "clean ceiling fan without making a mess",
+    "pillowcase ceiling fan cleaning method",
+    "how to remove dust from a ceiling fan",
+    "how to clean greasy ceiling fan blades",
+    "ceiling fan cleaning tips"
+  ],
+  "searchIntent": "Informational guidance for homeowners who want to remove dust and sticky buildup from ceiling fans without scattering debris around the room",
+  "seoTitle": "How to Clean Ceiling Fans Without Spreading Dust",
+  "metaDescription": "Learn how to clean ceiling fans without scattering dust. Follow safe steps for blades, fixtures, sticky buildup, and easier ongoing upkeep.",
+  "suggestedSlug": "how-to-clean-ceiling-fans-without-spreading-dust",
+  "h1": "How to Clean Ceiling Fans Without Spreading Dust",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service",
+      "rationale": "The deep cleaning page is relevant to readers addressing ceiling-fan dust as part of a larger detailed home reset, and its documented checklist includes reachable fans and fixtures."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning options",
+      "rationale": "Readers who complete a detailed reset may also be evaluating ongoing help with common surfaces, floors, kitchens, and bathrooms."
+    }
+  ],
+  "cta": "**Ready for a more detailed home reset? [Request a cleaning quote](/index.html#quote).**",
+  "image": {
+    "brief": "Illustrative editorial scene of a bright residential room where an adult safely cleans a stationary, reachable ceiling-fan blade with an old pillowcase while standing on a stable step ladder. Show a drop cloth protecting the furniture below, natural daylight, realistic home-care details, and no branding or text.",
+    "recommendedDimensions": "1600 × 900 pixels, landscape",
+    "suggestedFilename": "how-to-clean-ceiling-fans-without-spreading-dust-editorial.webp",
+    "altText": "Person using a pillowcase to capture dust while cleaning a stationary ceiling fan blade",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/how-to-clean-ceiling-fans-without-spreading-dust-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "Learn a low-mess way to clean ceiling fan blades with a pillowcase, plus safe steps for fixtures, sticky buildup, floor cleanup, and ongoing care.",
+  "socialMediaPost": "Dusting a ceiling fan should not create another mess below it. Learn how to use a pillowcase to capture debris, handle sticky buildup carefully, and clean the room from top to bottom. Read the practical guide: https://www.klinnercleaning.com/blog/how-to-clean-ceiling-fans-without-spreading-dust",
+  "CODEX HANDOFF": "Before approval, verify the publication date is 2026-09-01 in America/Chicago and confirm the title, H1, slug, primary keyword, and search intent do not duplicate existing content. Review all safety, surface-care, electrical, and ladder guidance for factual accuracy; verify that no unsupported quantitative or company claims were introduced. Confirm /deep-cleaning.html, /recurring-cleaning.html, and /index.html#quote resolve correctly and that the CTA remains separate from articleMarkdown. Approve the generated image for safe ladder use, a stationary fan, no branding or text, accurate alt text, and the required illustrative AI-generated-image label. Finally, inspect the Vercel Preview on desktop and mobile for metadata, heading hierarchy, Markdown rendering, link behavior, image crop, caption, and accessibility before publication.",
+  "companyClaims": [
+    {
+      "claim": "If this task is part of a larger whole-home reset, review the deep cleaning service and confirm ceiling fans and other priority areas when requesting a scope.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "What Is Included Deep cleaning checklist A detailed service for kitchens, bathrooms, living areas and hard-to-reach surfaces. Detail Areas Dust reachable surfaces, fans and fixtures"
+    },
+    {
+      "claim": "For help maintaining everyday surfaces after a detailed reset, compare the available recurring cleaning options.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Recurring cleaning keeps kitchens, bathrooms, floors and everyday surfaces under control with a reliable maintenance rhythm. Set Schedule Choose weekly, bi-weekly or monthly cleaning based on your needs."
+    },
+    {
+      "claim": "Ready for a more detailed home reset? Request a cleaning quote.",
+      "sourcePath": "index.html",
+      "sourceQuote": "Request Your Free Quote We'll respond within 1 hour. No commitment required."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
