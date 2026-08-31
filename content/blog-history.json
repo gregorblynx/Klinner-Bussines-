@@ -20,6 +20,16 @@
       "publicationDate": "2026-07-27",
       "pullRequestStatus": "published",
       "source": "github-actions"
+    },
+    {
+      "title": "How to Clean Ceiling Fans Without Spreading Dust",
+      "slug": "how-to-clean-ceiling-fans-without-spreading-dust",
+      "primaryKeyword": "how to clean ceiling fans",
+      "searchIntent": "Informational guidance for homeowners who want to remove dust and sticky buildup from ceiling fans without scattering debris around the room",
+      "category": "educational",
+      "publicationDate": "2026-09-01",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }
