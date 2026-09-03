@@ -1,0 +1,16 @@
+{
+  "name": "outreach",
+  "version": "1.0.0",
+  "description": "Automated email prospecting for **Klinner Cleaning & Maintenance**, built on Google Sheets + Apps Script + Gmail/Workspace. Runs entirely on Google's servers — no dependency on any local machine.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@google/clasp": "^3.4.1"
+  }
+}

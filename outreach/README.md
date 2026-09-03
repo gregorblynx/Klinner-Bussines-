@@ -1,0 +1,209 @@
+# Klinner Outreach — Operator Runbook
+
+Automated email prospecting for **Klinner Cleaning & Maintenance**, built on
+Google Sheets + Apps Script + Gmail/Workspace. Runs entirely on Google's
+servers — no dependency on any local machine.
+
+Spec: `ESPECIFICACION FINAL V1.1 — KLINNER OUTREACH` + `PATCH FINAL V1.1`.
+This delivery implements **F1 — Datos + Preview puro** only. F2 (LIVE
+sending) and F3 (automatic reply-sync triggers) are scaffolded per the
+approved architecture but are not active — see "Current phase" below.
+
+## Current phase: F1 — Preview only
+
+- `DRY_RUN = TRUE` in `Config`. This must stay `TRUE` until you have
+  completed F0 and F2's acceptance checklist.
+- **Zero real emails can be sent.** The preview pipeline only creates Gmail
+  drafts, and every LIVE send function refuses to run while `DRY_RUN=TRUE`
+  or while any F0 value is still `PENDING_F0`.
+- No triggers are installed automatically. Nothing runs on a schedule yet.
+
+## One-time setup (do this first)
+
+1. Create a new Google Sheet (or use a dedicated Klinner Outreach sheet).
+2. Extensions → Apps Script. Copy in the 18 `.gs` files from this folder
+   (or use `clasp push` if you set up clasp against this project — see
+   "clasp" below).
+3. In the Apps Script editor, run `initializeSheets` once (or use the
+   spreadsheet menu **Klinner Outreach → Initialize Klinner Outreach
+   sheets** after the first save, which calls the same function). This
+   creates all 7 sheets, the Prospects column layout, data validations,
+   the protected `S:AG` range, the 32-row Config sheet, and 4 seed
+   templates.
+4. Reload the spreadsheet. You should see a **Klinner Outreach** menu.
+5. Paste your prospect data into `Prospects`, starting at row 2, filling in
+   at minimum: `Business_Name`, `Email`, `City`, `State`, `Problem_Found`.
+   Leave every column from `Prospect_ID` through `Last_Run_ID` blank — the
+   system fills those in.
+6. Run **Klinner Outreach → Validate all rows**. This classifies every new
+   row as `READY`, `NEEDS_DATA`, `INVALID_EMAIL`, or `DUPLICATE`, and works
+   fine while `DRY_RUN=TRUE`.
+7. Run **Klinner Outreach → Preview today's queue** (or **Preview full
+   sequence for selected row** for one prospect at a time). Open Gmail →
+   Drafts and read them. Every preview draft's first line is:
+   `--- KLINNER OUTREACH PREVIEW — DO NOT SEND ---`
+
+## Manual configuration still pending (F0)
+
+Five `Config` values are intentionally left as the literal string
+`PENDING_F0`. **Do not invent values for these** — they are business
+decisions, not engineering ones:
+
+| Key | What it needs |
+|---|---|
+| `SENDER_EMAIL` | The dedicated Workspace mailbox for outreach, separate from Klinner's main business email |
+| `REPLY_TO` | Usually the same address |
+| `ADMIN_EMAIL` | Where the daily digest and failure alerts go |
+| `PHYSICAL_ADDRESS` | Required in every commercial email footer (CAN-SPAM) |
+| `UNSUBSCRIBE_LINE` | The opt-out sentence rendered in every template |
+
+While any of these five is `PENDING_F0`, `assertLiveAllowed_()` (I21)
+refuses to let any LIVE send happen — this is enforced in code, not just by
+convention. Separately, `dailyDigest` specifically checks `ADMIN_EMAIL`: if
+it's still `PENDING_F0`, the digest is computed and logged every day but
+never emailed (I22) — that's expected, not a bug, until you fill it in.
+
+Also outside this delivery's scope, per your explicit instructions: buying
+a domain, DNS/SPF/DKIM/DMARC configuration, and Workspace mailbox setup.
+Those are F0 steps for you (or whoever handles Klinner's domain) to do
+outside of this code.
+
+## Menu reference
+
+| Menu item | What it does | Origin | Blocked by DRY_RUN? |
+|---|---|---|---|
+| Initialize Klinner Outreach sheets | Creates/repairs the 7 sheets | — | No |
+| Validate all rows | Classifies NEW/blank/NEEDS_DATA rows | ADMIN | No |
+| Preview today's queue | Drafts up to `MAX_PREVIEW_PER_RUN` eligible emails | PIPELINE (draft only) | N/A — never writes Prospects |
+| Preview full sequence for selected row | Drafts all 4 steps for one prospect | PIPELINE (draft only) | N/A |
+| Delete Klinner preview drafts | Bulk-deletes all live preview drafts | — | No |
+| Send now (LIVE) | Runs `sendBatch()` — real sending | PIPELINE | **Yes — refuses while DRY_RUN=TRUE** |
+| Sync replies now | Runs `syncReplies()` manually | SYSTEM | No (but nothing to sync in F1) |
+| Stop prospect | Sets Stop_Contact + a reason | ADMIN | No |
+| Process unsubscribe for selected row | Full unsubscribe procedure (§9) | ADMIN | No |
+| Reset prospect | Clears send history, back to READY | ADMIN | No — but **refused** if the prospect is currently blocked (Stop_Contact or any DNC reason) |
+| Install / repair triggers | Installs the 4 managed triggers only | — | No — **but do not run this yet in F1**, see below |
+
+## Do NOT do yet (explicitly out of scope for this delivery)
+
+- Do not click **Install / repair triggers** yet. Nothing should run on a
+  schedule until you've reviewed F1's output and are ready for F2.
+- Do not change `DRY_RUN` to `FALSE`.
+- Do not fill in the 5 `PENDING_F0` values with placeholders "just to test"
+  — `assertLiveAllowed_()` exists specifically so that can't happen by
+  accident, but don't work around it either.
+
+## How to move to F2 (LIVE sending) — later, not now
+
+1. Complete F0: dedicated domain/mailbox, DKIM/SPF/DMARC, and fill in the
+   5 `PENDING_F0` Config values with real ones.
+2. Re-run **Validate all rows** and review the `Dashboard` sheet.
+3. Manually run **Send now (LIVE)** a few times and watch the `Log` sheet
+   and your Gmail Sent folder closely, at the `MAX_PER_DAY` cap — **5/day**
+   by default, since this is a brand-new dedicated mailbox. Raise it
+   manually in `Config` later, once deliverability/bounces/replies look
+   healthy.
+4. Only once you're confident, run **Install / repair triggers** to
+   automate `sendBatch`, `syncReplies`, `nightlyRecon`, and `dailyDigest`.
+5. Flipping `DRY_RUN` to `FALSE` requires no state cleanup — the LIVE
+   pipeline reads real, untouched `Prospects` state, because the preview
+   pipeline was architecturally incapable of writing to it (I14).
+
+### Two known items to close before going further — do not skip this
+
+**BLOCKER BEFORE FIRST LIVE EMAIL — N5.** `Mailer.gs`'s `doFollowUpSend_`
+(inside the LIVE closure, unreachable in F1) has a documented race: if a
+real inbound reply lands in a thread in the narrow window between our
+`thread.reply()` call and reading the message list back, the send is
+marked `FAILED` — which is retryable — and a later run could send a
+**second** real follow-up into the same thread. Fully described, with two
+candidate fixes, in the comment above `doFollowUpSend_` in `Mailer.gs`.
+**Resolve this before `DRY_RUN` is ever set to `FALSE`.**
+
+**BLOCKER BEFORE F3 — N4.** `Constants.gs`'s `SYSTEM_REPLY_SYNC` and
+`SYSTEM_NIGHTLY_RECON` operations have no `restrictedValues` guard on
+`Do_Not_Contact_Reason`, unlike the ADMIN operations. No current F1/F2 code
+path uses either to write `"unsubscribe"` (verified — see the comment block
+above those two entries in `Constants.gs`), so this is latent, not active.
+Any F3 work that adds a new SYSTEM-origin write touching that column must
+add the matching `restrictedValues` first.
+
+## Reading the Log sheet
+
+Every row has `Mode` (whether the system was in `DRY_RUN` or `LIVE` when
+the event happened) and `Event`. Key events to know:
+
+- `WRITE_REFUSED_DRY_RUN` — the origin-gated write guard rejected a
+  PIPELINE write while DRY_RUN=TRUE. This should never appear in normal F1
+  operation (the preview pipeline never attempts such a write) — if you see
+  it, something unexpected called a LIVE code path; check `Detail`.
+- `SKIP:needs_data` — a preview or send attempt hit a blank required merge
+  field. Fix the row's data and re-run Validate.
+- `LIVE_BLOCKED_PENDING_F0` — someone tried to run LIVE sending before F0
+  was finished.
+- `DIGEST_NOT_SENT_PENDING_F0` — expected daily noise until `ADMIN_EMAIL`
+  is filled in. The full digest text is in the `Detail` column.
+- `RESET_REFUSED` — someone tried to reset a blocked prospect. Check
+  `Detail` for which block (Stop_Contact or which DNC reason).
+
+## Running the F1 test suite
+
+Inside the Apps Script editor, run `runAllF1Tests()`. It creates temporary
+rows tagged `Source="TEST_F1_AUTOMATED"`, exercises the guards, and deletes
+everything it created (including any test Suppression rows) when it
+finishes — safe to run against a real spreadsheet, though a dedicated test
+copy is still recommended. Two tests (`T26_T27`) require manually setting
+up a real Gmail thread first — see that function's docstring in `Tests.gs`.
+
+## OAuth scopes — what each service actually needs (Codex finding #16)
+
+`appsscript.json` declares 6 scopes. This is what each one is for, mapped
+to the actual API calls in this codebase — **not yet verified against a
+real Google account**; the authoritative check happens the first time you
+authorize the project in Apps Script (it will prompt for exactly the
+scopes it needs, or fail clearly if one is missing).
+
+| Scope | Used for | Evidence in code |
+|---|---|---|
+| `.../auth/spreadsheets` | All `SpreadsheetApp` reads/writes: sheets, ranges, data validation, protected ranges. | `SpreadsheetApp.getActiveSpreadsheet`, `.getRange`, `.newDataValidation`, `.protect`, `.getUi` (`SheetRepo.gs`, `Menu.gs`) |
+| `.../auth/gmail.compose` | Creating/deleting DRAFTS: `GmailApp.createDraft`, `GmailThread.createDraftReply`, `GmailDraft.deleteDraft`. This is F1's entire Gmail footprint. | `Mailer.gs` (`previewStep`, `deletePreviewDraftIfOwned_`) |
+| `.../auth/gmail.modify` | Reading threads/messages and applying labels: `GmailApp.getThreadById`, `GmailApp.search`, `GmailThread.getMessages`, `GmailMessage.getFrom/getTo/getSubject/getPlainBody/getRawContent`, `GmailThread.addLabel`, `GmailApp.createLabel`/`getUserLabelByName`. F2/F3 only (`ReplySync.gs`, and the LIVE half of `Mailer.gs`) — inactive in F1. | `ReplySync.gs`, `Mailer.gs` (LIVE closure) |
+| `.../auth/gmail.send` | Actually sending mail: `GmailDraft.send()`, `GmailThread.reply()`. F2 only — inactive in F1 (`performLiveSend_` blocks it). | `Mailer.gs` (LIVE closure only) |
+| `.../auth/script.send_mail` | `MailApp.sendEmail()` — the daily digest. Runs in F1, but see `Digest.gs`'s `PENDING_F0` guard: it does not actually call this until `ADMIN_EMAIL` is filled in. | `Digest.gs` |
+| `.../auth/script.scriptapp` | `ScriptApp.newTrigger/getProjectTriggers/deleteTrigger` — the trigger installer. Defined, not invoked automatically in F1 (`Triggers.gs`). | `Triggers.gs` |
+
+**Not currently declared, used only for graceful-degradation logic that
+tolerates its own absence:** `Session.getEffectiveUser()` (`SheetRepo.gs`'s
+protection setup, finding #12) — this is normally covered implicitly by
+any of the above scopes in practice, but if Google prompts for an
+additional identity scope (e.g. `.../auth/userinfo.email`) the first time
+you authorize, that is expected and should be granted; the code already
+tolerates `Session.getEffectiveUser()` throwing or returning something
+without `.getEmail()`.
+
+**Two scopes (`gmail.modify`, `gmail.send`) are exercised by code that is
+provably unreachable in this F1 delivery.** They are declared now so F2
+doesn't require a re-authorization prompt later, but their real behavior —
+label creation, real search queries, real sends — is entirely unverified
+until Google-real testing (F2).
+
+## clasp (optional)
+
+This folder is a plain Apps Script project layout (`.gs` files +
+`appsscript.json`). If you use [clasp](https://github.com/google/clasp):
+
+```
+cd outreach
+clasp login
+clasp create --type sheets --title "Klinner Outreach"
+clasp push
+```
+
+`clasp create` will generate a `.clasp.json` — it is intentionally not
+included in this delivery since it's tied to a specific Google account/
+spreadsheet you create.
+
+## File map
+
+See the spec's §14 file list. Every file's header comment states its
+responsibility and, where relevant, exactly which invariant(s) it enforces.
