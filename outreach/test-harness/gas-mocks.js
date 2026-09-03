@@ -236,24 +236,39 @@ function createMockUtilities() {
       return [randomHex(8), randomHex(4), '4' + randomHex(3), randomHex(4), randomHex(12)].join('-');
     },
     formatDate: function (date, tz, pattern) {
-      // Enough of SimpleDateFormat to satisfy Schedule.gs's usage:
-      // 'yyyy-MM-dd', 'u' (ISO day 1-7 Mon-Sun), 'H' (0-23 hour), 'EEE' (weekday abbrev).
-      var d = new Date(date.getTime());
-      var pad = function (n) { return String(n).length < 2 ? '0' + n : String(n); };
-      if (pattern === 'yyyy-MM-dd') {
-        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-      }
+      // TIMEZONE AUDIT FIX: a prior version of this mock ignored the `tz`
+      // argument entirely and read the given date via raw JS Date getters
+      // (getFullYear/getMonth/getDate/getHours/getDay), which resolve
+      // according to the EXECUTING NODE PROCESS's own OS/env timezone —
+      // NOT the `tz` string passed in. Real Apps Script's V8 runtime
+      // happens to honor the project's configured timeZone for those same
+      // raw getters, so production code worked; but this mock silently
+      // validated Schedule.gs's business-day/send-window logic against
+      // whatever timezone the machine running the tests has, not
+      // necessarily 'America/Chicago' — a real risk (this repo's own dev
+      // machine happens to already be set to America/Chicago, which is
+      // exactly why this never surfaced as a visible failure). Rewritten
+      // to use Intl.DateTimeFormat with an explicit timeZone, which is
+      // environment-independent by specification (verified: resolves
+      // 'America/Chicago' correctly even when the Node process itself is
+      // forced to TZ=UTC).
+      var parts = {};
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, weekday: 'short'
+      }).formatToParts(date).forEach(function (p) { parts[p.type] = p.value; });
+      var hour24 = parts.hour === '24' ? '00' : parts.hour; // Intl quirk: midnight can format as "24" under hour12:false.
+
+      if (pattern === 'yyyy-MM-dd') return parts.year + '-' + parts.month + '-' + parts.day;
       if (pattern === 'u') {
-        var jsDay = d.getDay(); // 0=Sun..6=Sat
-        return String(jsDay === 0 ? 7 : jsDay); // 1=Mon..7=Sun
+        var weekdayToIso = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+        return String(weekdayToIso[parts.weekday]);
       }
-      if (pattern === 'H') {
-        return String(d.getHours());
-      }
-      if (pattern === 'EEE') {
-        var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        return names[d.getDay()];
-      }
+      if (pattern === 'H') return String(Number(hour24));
+      if (pattern === 'HH') return hour24;
+      if (pattern === 'mm') return parts.minute;
+      if (pattern === 'ss') return parts.second;
+      if (pattern === 'EEE') return parts.weekday;
       throw new Error('Mock Utilities.formatDate: unsupported pattern "' + pattern + '"');
     },
     sleep: function () { /* no-op in tests */ },

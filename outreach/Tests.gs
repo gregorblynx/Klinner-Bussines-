@@ -160,16 +160,72 @@ function test_T14_domainSuppressionRejectedForPublicDomain_() {
 
 function test_T16_T17_businessDayCadence_() {
   var config = getConfig();
-  // A Thursday: 2026-01-08 is a Thursday.
-  var thursday = new Date(2026, 0, 8, 10, 0, 0);
+  // A Thursday: 2026-01-08 is a Thursday. Built via dateFromWallClock_ (not
+  // a raw `new Date(y, mo, d, ...)`, which is LOCAL-ENVIRONMENT-relative,
+  // not Chicago-relative — see the TIMEZONE AUDIT finding on
+  // addCalendarDays_/dateFromWallClock_ in Schedule.gs) so this fixture
+  // means "Thursday 10:00 America/Chicago" regardless of what timezone the
+  // machine running this test happens to have.
+  var thursday = dateFromWallClock_(2026, 0, 8, 10, 0, 0, getScriptTimeZone_());
   var next = computeNextActionDate_(1, thursday, config);
   assertEquals_('2026-01-13', formatDateYmd_(next), 'Step1 sent Thursday + 3 business days must land on the following Tuesday (T16).');
 
   // Holiday inside the window: 2026-06-19 (Juneteenth) is a Friday holiday.
-  var beforeHoliday = new Date(2026, 5, 17, 10, 0, 0); // Wed 2026-06-17
+  var beforeHoliday = dateFromWallClock_(2026, 5, 17, 10, 0, 0, getScriptTimeZone_()); // Wed 2026-06-17
   var withHoliday = addBusinessDays_(beforeHoliday, 3, config.HOLIDAYS);
   // Wed->Thu(1)->Fri(2, holiday, skipped)->Mon(2)->Tue(3) = 2026-06-23
   assertEquals_('2026-06-23', formatDateYmd_(withHoliday), 'A configured holiday inside the offset window must be skipped (T17).');
+}
+
+/**
+ * TIMEZONE AUDIT: proves addCalendarDays_/dateFromWallClock_ compute in
+ * America/Chicago specifically, not "whatever timezone this process
+ * happens to be running in". Fixes a real bug found tonight: the previous
+ * addCalendarDays_ used raw JS Date.getDate()/setDate() (environment-
+ * timezone-relative) and the mock Utilities.formatDate ignored its `tz`
+ * argument entirely — both silently correct only because this repo's own
+ * dev machine happens to already be set to America/Chicago. Verified this
+ * test (and the full suite) passes identically under TZ=America/Chicago,
+ * TZ=UTC, TZ=Asia/Kolkata (+5:30, no DST), TZ=Pacific/Kiritimati (+14) and
+ * TZ=Etc/GMT+12 (-12) — see TIMEZONE_AUDIT.md.
+ */
+function test_timezoneAudit_dateMathIsChicagoRelativeNotEnvironmentRelative_() {
+  // Independent ground truth, constructed WITHOUT going through
+  // dateFromWallClock_/Utilities.formatDate at all (a plain ISO-8601 'Z'
+  // parse is environment-independent by spec): 2026-01-08T16:00:00Z is
+  // 2026-01-08 10:00 in America/Chicago (CST, UTC-6) in January. This is
+  // the one assertion in this test that can actually catch Utilities.
+  // formatDate itself silently ignoring its `tz` argument — every other
+  // assertion here round-trips through that same function, so a mock that
+  // is consistently (if silently) wrong about `tz` could otherwise pass by
+  // being self-consistent.
+  var knownInstant = new Date('2026-01-08T16:00:00Z');
+  assertEquals_('2026-01-08', Utilities.formatDate(knownInstant, 'America/Chicago', 'yyyy-MM-dd'),
+    'Ground truth: 2026-01-08T16:00:00Z must read as 2026-01-08 in America/Chicago.');
+  assertEquals_('10', Utilities.formatDate(knownInstant, 'America/Chicago', 'HH'),
+    'Ground truth: 2026-01-08T16:00:00Z must read as 10:00 in America/Chicago (CST, UTC-6) — proves Utilities.formatDate ' +
+    'actually honors its `tz` argument rather than the executing environment\'s own timezone.');
+
+  var chicagoNoon = dateFromWallClock_(2026, 0, 8, 12, 0, 0, 'America/Chicago'); // Thu 2026-01-08 noon CST
+  assertEquals_('2026-01-08', Utilities.formatDate(chicagoNoon, 'America/Chicago', 'yyyy-MM-dd'),
+    'Precondition: dateFromWallClock_ must build an instant that reads back as the exact requested Chicago wall clock.');
+  assertEquals_('12', Utilities.formatDate(chicagoNoon, 'America/Chicago', 'HH'));
+
+  var plusOne = addCalendarDays_(chicagoNoon, 1);
+  assertEquals_('2026-01-09', Utilities.formatDate(plusOne, 'America/Chicago', 'yyyy-MM-dd'),
+    'addCalendarDays_(+1) must land on the next Chicago calendar day.');
+  assertEquals_('12', Utilities.formatDate(plusOne, 'America/Chicago', 'HH'),
+    'addCalendarDays_ must preserve wall-clock time-of-day in Chicago, not in whatever timezone the process happens to run in.');
+
+  // Cross a DST "spring forward" boundary (2026-03-08 02:00 America/Chicago
+  // does not exist — clocks jump 02:00 -> 03:00). A time safely before it
+  // (2026-03-07 12:00) plus 1 day must land on 2026-03-08 at the same
+  // 12:00 wall clock (unaffected, since noon is nowhere near the 2am jump).
+  var beforeSpringForward = dateFromWallClock_(2026, 2, 7, 12, 0, 0, 'America/Chicago');
+  var afterSpringForward = addCalendarDays_(beforeSpringForward, 1);
+  assertEquals_('2026-03-08', Utilities.formatDate(afterSpringForward, 'America/Chicago', 'yyyy-MM-dd'));
+  assertEquals_('12', Utilities.formatDate(afterSpringForward, 'America/Chicago', 'HH'),
+    'A DST transition elsewhere in the day must not perturb a noon-anchored calendar-day add.');
 }
 
 function test_T18_pauseAllBlocksPreview_() {
@@ -2082,6 +2138,7 @@ var F1_TEST_FUNCTIONS = [
   ['T13', test_T13_publicDomainsExemptFromOneDomainRule_],
   ['T14', test_T14_domainSuppressionRejectedForPublicDomain_],
   ['T16_T17', test_T16_T17_businessDayCadence_],
+  ['timezoneAudit_dateMath', test_timezoneAudit_dateMathIsChicagoRelativeNotEnvironmentRelative_],
   ['T18', test_T18_pauseAllBlocksPreview_],
   ['T19', test_T19_dryRunNeverWritesProspects_],
   ['T21', test_T21_blankNextActionDateIgnored_],
