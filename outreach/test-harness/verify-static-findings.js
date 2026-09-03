@@ -116,6 +116,58 @@ check(
   /Message_ID:\s*sentMessage\.getId\(\)/.test(MAILER_SOURCE)
 );
 
+// --- N5: LIVE send concurrency/ambiguous-outcome hardening. Like finding
+// #7/#8 above, doStep1Send_/doFollowUpSend_ are LIVE-only and this project's
+// own established policy (see Tests.gs's comment on findings #7/#8) is to
+// never flip DRY_RUN=FALSE even in the local mock harness — so these are
+// verified statically, the same accepted method already used for #7/#8.
+
+// doStep1Send_'s send() failure handler must route the prospect into
+// NEEDS_REVIEW (not leave it silently retryable) — proves the ambiguous-
+// outcome fix is actually wired to the one call site that can duplicate a
+// real step-1 send.
+check(
+  'N5: doStep1Send_\'s send() failure handler writes Status: STATUS.NEEDS_REVIEW (ambiguous-outcome fix)',
+  (function () {
+    var fnStart = MAILER_SOURCE.indexOf('function doStep1Send_(');
+    var fnEnd = MAILER_SOURCE.indexOf('function doFollowUpSend_(');
+    if (fnStart === -1 || fnEnd === -1 || fnEnd <= fnStart) return false;
+    var fnBody = MAILER_SOURCE.slice(fnStart, fnEnd);
+    var catchStart = fnBody.indexOf('catch (sendError)');
+    if (catchStart === -1) return false;
+    var catchBody = fnBody.slice(catchStart);
+    return /LEDGER_STATE\.FAILED/.test(catchBody) &&
+      /Status:\s*STATUS\.NEEDS_REVIEW/.test(catchBody) &&
+      /origin:\s*ORIGIN\.PIPELINE,\s*operation:\s*OPERATION\.PIPELINE_SEND/.test(catchBody);
+  })()
+);
+
+// doFollowUpSend_'s message-count-mismatch guard (the documented N5 race)
+// must ALSO route the prospect into NEEDS_REVIEW, not just mark the ledger
+// row FAILED (which alone would still be automatically retryable).
+check(
+  'N5: doFollowUpSend_\'s message-count-mismatch guard writes Status: STATUS.NEEDS_REVIEW (closes the documented race)',
+  (function () {
+    var fnStart = MAILER_SOURCE.indexOf('function doFollowUpSend_(');
+    var fnEnd = MAILER_SOURCE.indexOf('executeLiveSendForStep_ = function');
+    if (fnStart === -1 || fnEnd === -1 || fnEnd <= fnStart) return false;
+    var fnBody = MAILER_SOURCE.slice(fnStart, fnEnd);
+    var guardStart = fnBody.indexOf('messagesAfter.length !== messagesBefore + 1');
+    if (guardStart === -1) return false;
+    var guardBody = fnBody.slice(guardStart, guardStart + 1500);
+    return /LEDGER_STATE\.FAILED/.test(guardBody) &&
+      /Status:\s*STATUS\.NEEDS_REVIEW/.test(guardBody) &&
+      /origin:\s*ORIGIN\.PIPELINE,\s*operation:\s*OPERATION\.PIPELINE_SEND/.test(guardBody);
+  })()
+);
+
+// The old, unsafe pattern (throw immediately with NO Prospects write, only
+// a bare ledger FAILED mark) must be gone from the mismatch guard.
+check(
+  'N5: the old un-guarded "throw new Error(...)" with no NEEDS_REVIEW write is gone from the mismatch guard',
+  !/Error:\s*'Unexpected message count after reply\(\)\.'\s*\}\);\s*\n\s*throw new Error/.test(MAILER_SOURCE)
+);
+
 var failed = checks.filter(function (c) { return !c.passed; });
 
 checks.forEach(function (c) {

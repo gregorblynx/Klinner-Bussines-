@@ -855,12 +855,37 @@ var executeLiveSendForStep_;
     try {
       message = draft.send();
     } catch (sendError) {
+      // N5 (Codex final audit): draft.send() throwing does NOT prove the
+      // email was never sent — there is no distributed transaction between
+      // Apps Script and Gmail, so a thrown exception here could still
+      // correspond to a real send having completed server-side. Plain
+      // LEDGER_STATE.FAILED is retryable (I13's isLiveKeyClaimedOrSent_
+      // check only excludes CLAIMED/SENT), so a later sendBatch run would
+      // call doStep1Send_ again for the SAME prospect — a real risk of a
+      // duplicate real step-1 email. Never retry blindly on an ambiguous
+      // outcome: stop the prospect into NEEDS_REVIEW (same
+      // structurally-excludes-it-from-eligibility pattern doFollowUpSend_
+      // already uses for its own getThreadById-null case below) so a human
+      // must reconcile it (check the Sent folder, or nightlyRecon's
+      // reconcileStaleLiveClaims_) before this prospect is ever touched again.
       var compensated = false;
       try { draft.deleteDraft(); compensated = true; } catch (deleteError) { compensated = false; }
-      updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.FAILED, Error: String(sendError) });
+      updateLedgerRow_(ledgerRowNum, {
+        State: LEDGER_STATE.FAILED,
+        Error: String(sendError) + ' (ambiguous outcome — routed to NEEDS_REVIEW, not left automatically retryable)'
+      });
+      try {
+        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+      } catch (writeError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
+          'doStep1Send_: ALSO failed to write NEEDS_REVIEW after an ambiguous send failure: ' + writeError +
+          ' — this prospect may remain automatically retryable. NEEDS MANUAL REVIEW.');
+      }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
         'send() failed after draft creation. compensated=' + compensated +
-        (compensated ? '' : ' — ORPHANED UNSENT DRAFT, NEEDS MANUAL REVIEW.') + ' error=' + sendError);
+        (compensated ? '' : ' — ORPHANED UNSENT DRAFT, NEEDS MANUAL REVIEW.') + ' error=' + sendError +
+        '. Ambiguous outcome — stopped into NEEDS_REVIEW rather than left automatically retryable.');
       throw sendError;
     }
 
@@ -895,36 +920,32 @@ var executeLiveSendForStep_;
    * in between). No Message_ID is invented.
    *
    * ==========================================================================
-   * BLOCKER BEFORE FIRST LIVE EMAIL — N5 (reaudit finding, intentionally NOT
-   * fixed in this F1 delivery per explicit instruction — this entire
-   * function is unreachable in F1: DRY_RUN=TRUE + 5 unresolved PENDING_F0
-   * keys both block performLiveSend_ before this code can ever run).
+   * N5 CLOSED (Codex final audit — was: BLOCKER BEFORE FIRST LIVE EMAIL).
+   * This function is still unreachable in F1 (DRY_RUN=TRUE + 5 unresolved
+   * PENDING_F0 keys both block performLiveSend_ before this code can ever
+   * run) but the race documented below is now closed via direction (a)
+   * from the original finding — see the guard immediately after this
+   * docstring.
    *
-   * Residual race: "nothing else can have appended a message in between"
-   * above assumes no inbound reply lands in the same thread in the narrow
-   * window between thread.reply() returning and the immediately-following
+   * The race: "nothing else can have appended a message in between" above
+   * assumes no inbound reply lands in the same thread in the narrow window
+   * between thread.reply() returning and the immediately-following
    * getMessages() call. If a real inbound reply DOES land in that window,
-   * messagesAfter.length will be messagesBefore + 2, not + 1, and the guard
-   * below throws — which marks the ledger row LEDGER_STATE.FAILED via the
-   * catch in executeLiveSendForStep_'s caller.
+   * messagesAfter.length will be messagesBefore + 2, not + 1.
    *
-   * FAILED is deliberately excluded from isLiveKeyClaimedOrSent_'s
-   * CLAIMED/SENT check (Ledger.gs) — that is correct for ordinary
-   * transient failures (network error, quota hiccup), which SHOULD be
-   * retryable. But it means THIS specific failure is retryable too: the
-   * Prospects row was never updated (the writeRowById_ call is after this
-   * guard), so a later sendBatch run will see the same prospect as still
-   * eligible and call doFollowUpSend_ again — sending a SECOND real
-   * follow-up email into the same thread.
-   *
-   * Must be closed before DRY_RUN is ever set to FALSE. Two directions
-   * worth evaluating (a decision, not a fix, for whoever picks this up):
-   * (a) distinguish this specific failure mode from ordinary transient
-   * ones and route it to NEEDS_REVIEW (like the getThreadById-null case
-   * above) instead of leaving it retryable, or (b) identify the sent
-   * message by a property of the reply itself (if Apps Script exposes
-   * one) rather than by array-length diffing, removing the race entirely.
-   * Do not implement either without entering F2 scope.
+   * FAILED alone is retryable (isLiveKeyClaimedOrSent_ / I13 only excludes
+   * CLAIMED/SENT) — that is correct for ordinary transient failures
+   * (network error, quota hiccup), which SHOULD be retryable. But this
+   * specific failure is ambiguous, not transient: reply() DID return
+   * successfully, so a message was almost certainly sent — we just cannot
+   * prove which one is ours. Leaving it FAILED-and-retryable would let a
+   * later sendBatch run call doFollowUpSend_ again for the SAME prospect —
+   * a real duplicate-send risk. The fix: ALSO stop the prospect into
+   * NEEDS_REVIEW (same pattern as the getThreadById-null case above),
+   * which structurally excludes it from getNextStepNumber_/canSend_/
+   * isEligibleForNextStep_ until a human reconciles it — no automatic
+   * retry is possible once this write succeeds, regardless of the ledger
+   * row's retryable FAILED state.
    * ==========================================================================
    */
   function doFollowUpSend_(prospectId, step, prospect, rendered, config) {
@@ -955,11 +976,28 @@ var executeLiveSendForStep_;
 
     var messagesAfter = repliedThread.getMessages();
     if (messagesAfter.length !== messagesBefore + 1) {
-      // Should be structurally impossible given reply() just returned
-      // successfully, but never invent a Message_ID — fail loud instead.
-      updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.FAILED, Error: 'Unexpected message count after reply().' });
-      throw new Error('doFollowUpSend_: could not reliably identify the message reply() just created ' +
-        '(expected ' + (messagesBefore + 1) + ' messages, found ' + messagesAfter.length + ').');
+      // N5: ambiguous outcome — never invent a Message_ID, and never leave
+      // this automatically retryable (see the docstring above). Stop the
+      // prospect into NEEDS_REVIEW in ADDITION to marking the ledger row
+      // FAILED, so canSend_/isEligibleForNextStep_ structurally refuse to
+      // touch it again until a human reconciles it.
+      updateLedgerRow_(ledgerRowNum, {
+        State: LEDGER_STATE.FAILED,
+        Error: 'Unexpected message count after reply() — ambiguous outcome, routed to NEEDS_REVIEW.'
+      });
+      try {
+        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+      } catch (writeError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'doFollowUpSend_: ALSO failed to write NEEDS_REVIEW after an ambiguous reply() outcome: ' + writeError +
+          ' — this prospect may remain automatically retryable. NEEDS MANUAL REVIEW.');
+      }
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'doFollowUpSend_: could not reliably identify the message reply() just created ' +
+        '(expected ' + (messagesBefore + 1) + ' messages, found ' + messagesAfter.length + '). ' +
+        'Ambiguous — may have actually sent. Stopped into NEEDS_REVIEW, not retried automatically.');
+      throw new Error('doFollowUpSend_: ambiguous outcome after reply() — stopped into NEEDS_REVIEW, see Log.');
     }
     var sentMessage = messagesAfter[messagesAfter.length - 1];
 
