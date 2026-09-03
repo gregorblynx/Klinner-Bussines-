@@ -1587,6 +1587,16 @@ function test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRo
     outcome = previewStep(p.Prospect_ID, 1);
   } finally {
     GmailApp.createDraft = originalCreateDraft;
+    // Isolation (Priority 3, Codex final audit): deleteDraft must be
+    // restored to its real implementation BEFORE this test ends — the
+    // permanently-broken override otherwise made the test framework's own
+    // teardown (cleanupTestArtifacts_, which deletes any DRAFTED row this
+    // test's Run_ID left behind) fail too, leaking a Prospects row,
+    // SendLedger rows, and Log rows into every test that ran after this
+    // one. The simulated failure is a one-time creation-time event, not a
+    // permanently broken Gmail draft — real cleanup must be able to
+    // actually delete it once the test's own assertions are done with it.
+    if (capturedDraft && originalDeleteDraft) capturedDraft.deleteDraft = originalDeleteDraft;
   }
 
   assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed.');
@@ -1645,16 +1655,6 @@ function n3_assertCreationFailureCompensatesCleanly_(emailTag, corruptDraftFn) {
     outcome = previewStep(p.Prospect_ID, 1);
   } finally {
     GmailApp.createDraft = originalCreateDraft;
-    // Isolation (Priority 3, Codex final audit): deleteDraft must be
-    // restored to its real implementation BEFORE this test ends — the
-    // permanently-broken override otherwise made the test framework's own
-    // teardown (cleanupTestArtifacts_, which deletes any DRAFTED row this
-    // test's Run_ID left behind) fail too, leaking a Prospects row,
-    // SendLedger rows, and Log rows into every test that ran after this
-    // one. The simulated failure is a one-time creation-time event, not a
-    // permanently broken Gmail draft — real cleanup must be able to
-    // actually delete it once the test's own assertions are done with it.
-    if (capturedDraft && originalDeleteDraft) capturedDraft.deleteDraft = originalDeleteDraft;
   }
 
   assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed.');
@@ -2845,12 +2845,18 @@ var F1_TEST_FUNCTIONS = [
   ['T14', test_T14_domainSuppressionRejectedForPublicDomain_],
   ['T16_T17', test_T16_T17_businessDayCadence_],
   ['timezoneAudit_dateMath', test_timezoneAudit_dateMathIsChicagoRelativeNotEnvironmentRelative_],
+  ['dstAudit_validWallClocks', test_dstAudit_validWallClocksNearTransitions_],
+  ['dstAudit_addCalendarDaysAcrossTransitions', test_dstAudit_addCalendarDaysAcrossTransitions_],
+  ['dstAudit_nonexistentAndAmbiguousPolicy', test_dstAudit_nonexistentAndAmbiguousWallClocksFollowDocumentedPolicy_],
+  ['dstAudit_sendReplyWindows', test_dstAudit_sendAndReplyWindowsCorrectAcrossTransitions_],
+  ['dstAudit_businessDayCadenceWeekend', test_dstAudit_businessDayCadenceAcrossTransitionWeekend_],
   ['T18', test_T18_pauseAllBlocksPreview_],
   ['T19', test_T19_dryRunNeverWritesProspects_],
   ['T21', test_T21_blankNextActionDateIgnored_],
   ['T23', test_T23_followUpsPrioritizedOverNewProspects_],
   ['T25', test_T25_draftRegenerationLeavesOnlyOneLiveDraft_NEEDS_LIVE_GMAIL_],
   ['T28', test_T28_liveBlockedWhilePendingF0_],
+  ['checkLiveReadiness', test_checkLiveReadinessIsReadOnlyAndMatchesAssertLiveAllowed_],
   ['T29_T30_T31_T32', test_T29_T30_T31_T32_unsubscribeAndResetGuards_],
   ['T33', test_T33_validateAllRowsPersistsUnderDryRun_],
   ['T34', test_T34_originSeparation_],
@@ -2880,10 +2886,24 @@ var F1_TEST_FUNCTIONS = [
   ['N3v3_supersedeFailureCaughtNextRun', test_N3v3_preserveTransitionSupersedeFailureIsCaughtByAmbiguityGuardNextRun_],
   ['N3v3_creationFailureCompensated', test_N3v3_creationMetadataFailureWithSuccessfulCompensationWritesNoRow_],
   ['N3v3_creationFailureRecoveryRow', test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRow_],
+  ['N3v3_orphanGap_draftGetId', test_N3v3_creationFailure_draftGetIdThrows_],
+  ['N3v3_orphanGap_getMessage', test_N3v3_creationFailure_getMessageThrows_],
+  ['N3v3_orphanGap_getThread', test_N3v3_creationFailure_getThreadThrows_],
+  ['N3v3_orphanGap_threadGetId', test_N3v3_creationFailure_threadGetIdThrows_],
+  ['N3v3_orphanGap_unrelatedEnumError', test_N3v3_unrelatedDraftEnumerationErrorFailsClosedOnLaterRun_],
+  ['N3v3_orphanGap_bothCompensationFail', test_N3v3_bothCompensationAndRecoveryRowFailStillReturnsControlledStatus_],
   ['N3v3_recipientWrapperNoFalsePositive', test_N3v3_recipientDisplayNameWrapperDoesNotFalsePositive_],
   ['finding5_previewLocking', test_finding5_previewLocksCriticalSection_],
   ['finding6_orphanCompensation', test_finding6_orphanedDraftIsCompensatedOnLedgerFailure_],
   ['finding8_liveEntryPoint', test_finding8_liveHelpersAreNotGlobalEntryPoints_],
+  ['N5_step1ThrowsDurableBlock', test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_],
+  ['N5_step1NormalExactlyOnce', test_N5_normalConfirmedStep1SendsExactlyOnce_],
+  ['N5_followUpThrowsDurableBlock', test_N5_followUpReplyThrowsDurablyBlocksLedger_],
+  ['N5_followUpMismatchDurableBlock', test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFails_],
+  ['N5_followUpNormalExactlyOnce', test_N5_normalConfirmedFollowUpRepliesExactlyOnce_],
+  ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
+  ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
+  ['N5_reconDigestNeverConvertAmbiguous', test_N5_reconAndDigestNeverConvertAmbiguousKeyToRetryable_],
   ['finding9_quotaBudget', test_finding9_quotaBudgetRespectsAllFourFactors_],
   ['finding10_canSendSequence', test_finding10_canSendEnforcesStepSequence_],
   ['finding11_brokenThreadPreview', test_finding11_previewSkipsOnBrokenThreadReference_],
