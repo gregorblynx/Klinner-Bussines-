@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "category": "local-commercial",
+  "publicationDate": "2026-09-04",
+  "topic": {
+    "articleTitle": "New Construction Move-In Cleaning in Nashville: A Pre-Unpacking Guide",
+    "primaryKeyword": "new construction move-in cleaning Nashville",
+    "searchIntent": "Commercial investigation and practical planning for Nashville-area homebuyers, real estate professionals, builders, and property managers deciding how to prepare a newly built or renovated residence for move-in",
+    "relatedService": "Move-In Cleaning",
+    "targetAudience": "Nashville-area homebuyers, real estate agents, builders, landlords, and property managers coordinating occupancy in newly built or recently renovated homes",
+    "seoValue": "This topic targets a locally qualified move-in cleaning query that is distinct from the existing Airbnb turnover and rental move-out articles. It can reach readers near a service decision while addressing the specific planning gap between construction completion, the final walkthrough, and unpacking.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Create a practical, decision-stage guide that helps readers distinguish final contractor work from move-in cleaning, assess whether a newly built or renovated home is ready to be cleaned, and prepare a room-by-room scope before furniture arrives. Emphasize sequencing, access, surface restrictions, documentation, and final inspection without implying that construction cleanup, repairs, or every detailed task is automatically included.",
+  "primaryKeyword": "new construction move-in cleaning Nashville",
+  "secondaryKeywords": [
+    "new home cleaning Nashville",
+    "move-in cleaning for new construction",
+    "Nashville move-in cleaning service",
+    "pre-move cleaning checklist",
+    "new build cleaning checklist",
+    "cleaning before unpacking",
+    "new construction home cleaning"
+  ],
+  "searchIntent": "Commercial investigation and practical planning for Nashville-area homebuyers, real estate professionals, builders, and property managers deciding how to prepare a newly built or renovated residence for move-in",
+  "seoTitle": "New Construction Move-In Cleaning Nashville Guide",
+  "metaDescription": "Plan new construction move-in cleaning in Nashville with a practical guide to timing, dust, room priorities, access, surface notes, and final inspection.",
+  "suggestedSlug": "new-construction-move-in-cleaning-nashville",
+  "h1": "New Construction Move-In Cleaning in Nashville: A Pre-Unpacking Guide",
+  "internalLinks": [
+    {
+      "url": "/move-in-cleaning.html",
+      "anchorText": "move-in cleaning checklist",
+      "rationale": "Connects readers with the confirmed service most directly related to preparing an empty home before unpacking."
+    },
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning service",
+      "rationale": "Helps readers compare a more detailed scope when widespread buildup or dust requires additional attention."
+    },
+    {
+      "url": "/handyman-services.html",
+      "anchorText": "basic handyman service",
+      "rationale": "Supports the article’s distinction between cleaning needs and separately scoped minor repairs or touch-ups."
+    },
+    {
+      "url": "/index.html#quote",
+      "anchorText": "request a move-in cleaning quote",
+      "rationale": "Provides the required conversion path for readers ready to discuss their Nashville-area property."
+    }
+  ],
+  "cta": "**Moving into a new place in Nashville? [Request a move-in cleaning quote](/index.html#quote) and start fresh from day one.**",
+  "image": {
+    "brief": "Illustrative editorial view of an empty, newly finished home interior before move-in, showing a bright kitchen and adjoining living area with light settled dust and a few cleaning supplies placed discreetly near the foreground. No people, branding, text, logos, uniforms, signage, watermarks, or project-specific details.",
+    "recommendedDimensions": "1600 × 900 pixels, landscape",
+    "suggestedFilename": "new-construction-move-in-cleaning-nashville-editorial.webp",
+    "altText": "Empty newly finished kitchen and living area awaiting move-in cleaning before unpacking",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/new-construction-move-in-cleaning-nashville-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "A practical guide to planning move-in cleaning for a newly built or renovated Nashville-area home, including project sequencing, room priorities, finish restrictions, access, and final inspection.",
+  "socialMediaPost": "Moving into a newly built or recently renovated Nashville-area home? Use this pre-unpacking guide to coordinate contractor completion, document the property, define cleaning priorities, and inspect the space before boxes and furniture arrive. https://www.klinnercleaning.com/blog/new-construction-move-in-cleaning-nashville",
+  "CODEX HANDOFF": "Before approval, verify the publication date is set to September 4, 2026 in America/Chicago and confirm the title, H1, slug, primary keyword, and search intent do not duplicate or substantially overlap existing content. Check every company-specific statement against the cited repository quote, verify that /move-in-cleaning.html, /deep-cleaning.html, /handyman-services.html, and /index.html#quote resolve correctly, and ensure the rendered article contains no H1 inside articleMarkdown. Review the generated image for editorial suitability, landscape dimensions, accurate alt text, and the required illustrative-image label; reject any image containing branding, text, logos, uniforms, signage, watermarks, or an implied real Klinner project. Finally, inspect the complete page on Vercel Preview for metadata, headings, formatting, internal links, CTA behavior, responsive layout, image rendering, and any unsupported factual or company claims before merging.",
+  "companyClaims": [
+    {
+      "claim": "The move-in cleaning checklist focuses on reachable surfaces, floors, visible trim, high-touch areas, kitchens, and bathrooms.",
+      "sourcePath": "move-in-cleaning.html",
+      "sourceQuote": "We focus on the areas that matter most before you bring your belongings inside. Home Interior Dust reachable surfaces and fixtures Vacuum and mop floors Wipe baseboards and visible trim Clean doors, handles and high-touch areas Kitchen & Bathrooms Clean counters, sinks and appliance exteriors Clean cabinet fronts and reachable shelves Sanitize showers, tubs, toilets and vanities Remove visible dust and move-in residue"
+    },
+    {
+      "claim": "The deep cleaning service is described as detailed attention to buildup, corners, baseboards, kitchen and bathroom areas, and other easy-to-miss spaces.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep cleaning goes beyond the weekly basics, focusing on buildup, corners, baseboards and the spaces that are easy to miss. Kitchen Detail Grease, counters, sinks, appliance exteriors and visible buildup. Bathroom Detail Tubs, showers, toilets, vanities, mirrors and high-touch areas."
+    },
+    {
+      "claim": "The basic handyman service covers minor repairs, simple replacements, caulking, touch-ups, and light maintenance tasks, with scope depending on the task, property, and availability.",
+      "sourcePath": "handyman-services.html",
+      "sourceQuote": "What Is Included Basic handyman task examples Scope depends on the task, property and availability. Share details for an accurate quote. Common Tasks Caulking and small sealant touch-ups Fixture replacements and simple installs Minor wall touch-ups Basic adjustments and small repairs Property Maintenance Rental turnover maintenance notes Small punch-list items Light touch-up painting Simple home upkeep tasks"
+    },
+    {
+      "claim": "Moving into a new place in Nashville? Request a move-in cleaning quote and start fresh from day one.",
+      "sourcePath": "move-in-cleaning.html",
+      "sourceQuote": "Moving into a new place in Nashville? Request a move-in cleaning quote and start fresh from day one."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}
