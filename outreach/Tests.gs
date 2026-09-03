@@ -1461,6 +1461,193 @@ function test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRo
 }
 
 /**
+ * N3 orphan-draft gap (Codex final audit, round 2): createPreviewDraft_
+ * used to read `standaloneDraft.getMessage().getThread().getId()` itself,
+ * AFTER GmailApp.createDraft() succeeded but BEFORE previewStep()'s
+ * protected metadata-capture block ever ran — a throw there escaped
+ * UNCAUGHT, past every fail-closed guard, with the draft already sitting
+ * in Gmail. Fixed by moving every post-creation read into ONE protected
+ * block. These four tests each inject a failure at a DIFFERENT one of
+ * those reads (Codex's explicit list, items 1-4) and prove each is caught
+ * cleanly, compensated via the DIRECT object reference (never an
+ * enumeration lookup — see attemptDeleteDraftDirectly_), regardless of
+ * which specific read failed.
+ */
+function n3_assertCreationFailureCompensatesCleanly_(emailTag, corruptDraftFn) {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var originalCreateDraft = GmailApp.createDraft;
+  var draftCountBefore = GmailApp.getDrafts().length;
+  GmailApp.createDraft = function (to, subject, body, opts) {
+    var draft = originalCreateDraft(to, subject, body, opts);
+    corruptDraftFn(draft);
+    return draft;
+  };
+
+  var outcome;
+  try {
+    outcome = previewStep(p.Prospect_ID, 1);
+  } finally {
+    GmailApp.createDraft = originalCreateDraft;
+  }
+
+  assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed.');
+  assertEquals_(true, outcome.compensated, 'Compensation via the direct object reference must succeed regardless of which read failed.');
+  assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'The failed draft must have been deleted — no extra draft remains.');
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(0, draftedRows.length, 'No healthy DRAFTED row must have been written.');
+
+  // Item 7: the NEXT preview must safely create a fresh draft — zero
+  // duplicate creation risk, since the failed one was fully compensated.
+  var next = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', next.status, 'Item 7: a subsequent Preview after a fully-compensated failure must safely create a new draft.');
+  var draftedRowsAfter = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRowsAfter.length, 'Item 7: exactly one DRAFTED row must exist after recovery — no duplicate.');
+}
+
+/** N3 orphan-draft gap, item 4: draft.getId() itself throws. */
+function test_N3v3_creationFailure_draftGetIdThrows_() {
+  n3_assertCreationFailureCompensatesCleanly_('n3v3draftgetid', function (draft) {
+    draft.getId = function () { throw new Error('Simulated draft.getId() failure.'); };
+  });
+}
+
+/** N3 orphan-draft gap, item 1: draft.getMessage() itself throws. */
+function test_N3v3_creationFailure_getMessageThrows_() {
+  n3_assertCreationFailureCompensatesCleanly_('n3v3getmessage', function (draft) {
+    draft.getMessage = function () { throw new Error('Simulated draft.getMessage() failure.'); };
+  });
+}
+
+/** N3 orphan-draft gap, item 2: message.getThread() itself throws. */
+function test_N3v3_creationFailure_getThreadThrows_() {
+  n3_assertCreationFailureCompensatesCleanly_('n3v3getthread', function (draft) {
+    var msg = draft.getMessage();
+    msg.getThread = function () { throw new Error('Simulated message.getThread() failure.'); };
+  });
+}
+
+/** N3 orphan-draft gap, item 3: the returned thread's own getId() throws. */
+function test_N3v3_creationFailure_threadGetIdThrows_() {
+  n3_assertCreationFailureCompensatesCleanly_('n3v3threadgetid', function (draft) {
+    var msg = draft.getMessage();
+    var originalGetThread = msg.getThread;
+    msg.getThread = function () {
+      var realThread = originalGetThread();
+      return {
+        getId: function () { throw new Error('Simulated thread.getId() failure.'); },
+        getMessages: realThread.getMessages, getLabels: realThread.getLabels, addLabel: realThread.addLabel
+      };
+    };
+  });
+}
+
+/**
+ * N3 orphan-draft gap, item 9: an UNRELATED draft elsewhere in the same
+ * Gmail account throwing on ITS OWN getId() during a later run's
+ * enumeration (resolveExistingPreviewDraft_) must fail closed — never
+ * conflated with "our tracked draft is gone" (which would wrongly
+ * authorize CREATE_NEW and risk a duplicate).
+ */
+function test_N3v3_unrelatedDraftEnumerationErrorFailsClosedOnLaterRun_() {
+  // Created BEFORE the tracked draft, and deliberately EARLIER in
+  // GmailApp.getDrafts()'s enumeration order — resolveExistingPreviewDraft_'s
+  // lookup loop must actually reach this poisoned entry before it would
+  // reach our tracked one, or the whole point of the test (an UNRELATED
+  // draft's own getId() throwing during enumeration) is never exercised.
+  var poisoned = GmailApp.createDraft('someone-else@example-corp-test.com', 'Unrelated', 'Unrelated body.');
+  poisoned.getId = function () { throw new Error('Simulated poisoned draft elsewhere in the account.'); };
+
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3enumuncertain'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  // The FIRST previewStep call never enumerates drafts at all (no existing
+  // ledger row yet — resolveExistingPreviewDraft_ short-circuits straight
+  // to CREATE_NEW), so the poisoned draft's broken getId() cannot interfere
+  // with normal creation.
+  var first = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', first.status, 'First preview must draft.');
+
+  var second;
+  try {
+    second = previewStep(p.Prospect_ID, 1);
+  } finally {
+    poisoned.deleteDraft(); // identity-based in the mock — works even with getId() broken. Test cleanup.
+  }
+
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status,
+    'Item 9: an unrelated draft throwing during enumeration must fail closed, never conflated with "our draft is gone".');
+  assertEquals_('gmail_read_error', second.reason);
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'No duplicate must have been created while the enumeration was uncertain.');
+  assertEquals_(first.draftId, draftedRows[0].values.Draft_ID, 'The original tracked draft must remain the active one, untouched.');
+}
+
+/**
+ * N3 orphan-draft gap, item 10: if compensation (the direct delete) AND
+ * the recovery-row write BOTH fail, previewStep must still return a
+ * controlled status — never throw uncaught, never crash the caller
+ * (previewQueue's forEach has no try/catch around previewStep calls).
+ * This is the documented, acknowledged residual risk (Mailer.gs
+ * docstring): a fully untracked orphan can still occur here, but the
+ * function itself must degrade gracefully, not crash.
+ */
+function test_N3v3_bothCompensationAndRecoveryRowFailStillReturnsControlledStatus_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3bothfail'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var originalCreateDraft = GmailApp.createDraft;
+  var capturedDraft = null;
+  var originalDeleteDraft = null;
+  GmailApp.createDraft = function (to, subject, body, opts) {
+    var draft = originalCreateDraft(to, subject, body, opts);
+    var msg = draft.getMessage();
+    msg.getSubject = function () { throw new Error('Simulated post-create message.getSubject() failure.'); };
+    capturedDraft = draft;
+    originalDeleteDraft = draft.deleteDraft;
+    draft.deleteDraft = function () { throw new Error('Simulated compensation delete failure.'); };
+    return draft;
+  };
+  var originalAppendLedgerRow = appendLedgerRow_;
+  var recoveryAttempted = false;
+  appendLedgerRow_ = function () { recoveryAttempted = true; throw new Error('Simulated recovery ledger row write failure.'); };
+
+  var outcome;
+  var threw = false;
+  try {
+    outcome = previewStep(p.Prospect_ID, 1);
+  } catch (e) {
+    threw = true;
+  } finally {
+    GmailApp.createDraft = originalCreateDraft;
+    appendLedgerRow_ = originalAppendLedgerRow;
+    // Test cleanup: restore the real deleteDraft and remove the now fully
+    // untracked draft ourselves, so this test leaves nothing behind for
+    // the isolation harness (Priority 3) to (silently) miss.
+    if (capturedDraft && originalDeleteDraft) {
+      capturedDraft.deleteDraft = originalDeleteDraft;
+      capturedDraft.deleteDraft();
+    }
+  }
+
+  assert_(!threw, 'previewStep must never itself throw uncaught, even when BOTH compensation and the recovery-row write fail.');
+  assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status);
+  assertEquals_(false, outcome.compensated, 'Compensation must be reported as failed.');
+  assert_(recoveryAttempted, 'A recovery-row write must have been ATTEMPTED even though it also failed.');
+}
+
+/**
  * N3 V3 — item 1D: recipient canonicalization must absorb Gmail's
  * "Name <email>" wrapper as a structural difference, not a content edit —
  * a pure display-name wrapper change around the SAME address must NOT
