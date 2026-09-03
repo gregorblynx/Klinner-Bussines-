@@ -149,83 +149,76 @@ function syncDncToStopContact_() {
  * prospects for either step to act on. Left implemented (not stubbed) so
  * F2 does not require rewriting Recon.gs.
  *
- * N5 (Codex final audit, round 2): a NEGATIVE Gmail search result does NOT
- * prove Gmail did not send — it could mean a transient search/indexing
- * delay, a query that is too narrow, or the message landing somewhere
- * search does not cover. NEVER downgrade a stale CLAIMED row into a
- * retryable state on the strength of an ABSENCE of evidence. Only a
- * POSITIVE match (exactly one) is trusted to resolve a row to SENT; every
- * other outcome — zero matches, more than one (cannot tell which is ours),
- * or the search call itself failing — durably blocks the row as AMBIGUOUS
- * instead. This is the SAME durable-ledger-blocking principle
- * doStep1Send_/doFollowUpSend_ now use for their own ambiguous outcomes
- * (Mailer.gs) — a stale claim whose real Gmail outcome cannot be proven is
- * exactly as dangerous to auto-retry as any other ambiguous send/reply.
+ * N5 (Codex re-audit, final round): a stale CLAIMED row means normal
+ * execution did NOT complete, so this step's real Gmail outcome is
+ * unknown. This function NEVER infers SENT from a Gmail search: the only
+ * query available ("in:sent to:<recipient>") matches ANY message ever
+ * sent to that address — a previous step, a manual email, an unrelated
+ * thread — so "exactly one match" is not proof that THIS step was sent.
+ * Treating it as proof produced false SENT accounting and, worse, a
+ * confident-looking terminal state built on a guess.
  *
- * Round 1 (previous audit) transitioned a zero-result stale claim to
- * LEDGER_STATE.ABANDONED — a state isLiveKeyBlocked_ (Ledger.gs) does NOT
- * treat as blocking, so a later sendBatch run could pick the same
- * idempotency key back up and send a genuine DUPLICATE if the original
- * send had actually succeeded (just invisible to this particular search).
- * That is the exact bug this rewrite closes.
+ * Policy, deliberately blunt: EVERY stale CLAIMED row becomes AMBIGUOUS
+ * (durably blocking, never auto-retried), regardless of what the search
+ * returns. The search is still run, but ONLY as diagnostic evidence
+ * recorded in the Error column for whoever reconciles the row by hand. A
+ * search failure changes nothing at all — the row stays CLAIMED, which is
+ * already blocking. If a provider-level identifier that structurally
+ * proves an exact send is ever available, THAT could justify an automatic
+ * SENT transition; a recipient-scoped text search never can.
  *
- * Search window widened from `newer_than:2d` to `newer_than:30d`: a claim
- * only becomes "stale" after CLAIM_STALE_MINUTES (default 120 = 2 hours),
- * but if reconciliation itself is delayed for any reason (a missed
- * nightlyRecon run, a persistent search error on this exact row) a real
- * sent message could otherwise scroll outside a 2-day window by the time
- * reconciliation finally succeeds — a false negative purely due to timing,
- * not a real absence. This does not change the safety property above (a
- * false negative already fails closed to AMBIGUOUS either way) but reduces
- * unnecessary AMBIGUOUS flagging for a claim that could have been cleanly
- * resolved to SENT with a wider window.
+ * Counters returned describe exactly what happened — examined, ambiguous,
+ * searchErrors, unchanged — with no "resolved" metric, because under this
+ * policy nothing is ever automatically resolved.
  */
 function reconcileStaleLiveClaims_(config) {
   var stale = findStaleLiveClaims_(config);
-  var resolved = 0;
+  var counters = { examined: 0, ambiguous: 0, searchErrors: 0, unchanged: 0 };
+
   stale.forEach(function (row) {
     var v = row.values;
-    var searchQuery = 'in:sent to:' + v.Email_Normalized + ' newer_than:30d';
-    var threads;
+    counters.examined++;
+
+    // Diagnostic only — the result NEVER decides the ledger state, it is
+    // recorded verbatim in the Error column so a human reconciling this
+    // row later starts with whatever evidence we could gather.
+    var evidence;
     try {
-      threads = GmailApp.search(searchQuery);
+      var threads = GmailApp.search('in:sent to:' + v.Email_Normalized + ' newer_than:30d');
+      evidence = threads.length + ' message(s) to this recipient found in Sent (diagnostic only — a generic ' +
+        'recipient search cannot prove THIS specific step was or was not sent)';
     } catch (searchError) {
-      // Fail closed: the row is ALREADY CLAIMED (already a blocking state
-      // per isLiveKeyBlocked_) — leave it exactly as-is, no transition at
-      // all. A search failure is not evidence of anything either way.
+      // Fail closed and change NOTHING: the row is already CLAIMED, which
+      // isLiveKeyBlocked_ already treats as blocking.
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
         'reconcileStaleLiveClaims_: GmailApp.search() failed for a stale CLAIMED row — left untouched ' +
         '(still durably blocked as CLAIMED). error=' + searchError);
-      resolved++;
+      counters.searchErrors++;
+      counters.unchanged++;
       return;
     }
 
-    if (threads.length === 1) {
-      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });
-      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step,
-        'Reconciled from stale claim: exactly one positive match found.');
-    } else {
-      var reason = threads.length === 0
-        ? 'zero matching sent messages found (absence of a search hit is not proof nothing was sent)'
-        : threads.length + ' ambiguous matching sent messages found (cannot determine which is ours)';
-      updateLedgerRow_(row.rowIndex, {
-        State: LEDGER_STATE.AMBIGUOUS,
-        Error: 'Stale CLAIMED, ' + reason + ' — durably blocked, needs manual reconciliation.'
-      });
-      try {
-        writeRowById_(v.Prospect_ID, { Status: STATUS.NEEDS_REVIEW },
-          { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_NIGHTLY_RECON });
-      } catch (writeError) {
-        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
-          'reconcileStaleLiveClaims_: the Prospects NEEDS_REVIEW write ALSO failed — secondary signal only; ' +
-          'the ledger AMBIGUOUS state (already written above) still blocks retry regardless. error=' + writeError);
-      }
-      logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
-        'Stale claim durably blocked (AMBIGUOUS) — ' + reason + '.');
+    updateLedgerRow_(row.rowIndex, {
+      State: LEDGER_STATE.AMBIGUOUS,
+      Error: 'Stale CLAIMED: normal execution did not complete, so this step\'s real outcome is unknown. ' +
+        evidence + '. Durably blocked — needs manual reconciliation.'
+    });
+    counters.ambiguous++;
+
+    try {
+      writeRowById_(v.Prospect_ID, { Status: STATUS.NEEDS_REVIEW },
+        { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_NIGHTLY_RECON });
+    } catch (writeError) {
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
+        'reconcileStaleLiveClaims_: the Prospects NEEDS_REVIEW write ALSO failed — secondary signal only; ' +
+        'the ledger AMBIGUOUS state (already written above) still blocks retry regardless. error=' + writeError);
     }
-    resolved++;
+
+    logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
+      'Stale claim durably blocked (AMBIGUOUS). ' + evidence + '.');
   });
-  return resolved;
+
+  return counters;
 }
 
 function closeFinishedSequences_(config) {
@@ -252,7 +245,7 @@ function nightlyRecon() {
   logEvent_(LOG_LEVEL.INFO, LOG_EVENT.RUN_START, '', '', '', 'nightlyRecon');
 
   var validation = validateAllRows();
-  var claimsResolved = reconcileStaleLiveClaims_(config);
+  var staleClaims = reconcileStaleLiveClaims_(config);
   var sequencesClosed = closeFinishedSequences_(config);
   var dncSynced = syncDncToStopContact_();
   var unsubscribesProcessed = sweepPendingUnsubscribes_();
@@ -260,7 +253,7 @@ function nightlyRecon() {
 
   var summary = {
     validation: validation,
-    claimsResolved: claimsResolved,
+    staleClaims: staleClaims, // { examined, ambiguous, searchErrors, unchanged } — never "resolved"; see reconcileStaleLiveClaims_.
     sequencesClosed: sequencesClosed,
     dncSynced: dncSynced,
     unsubscribesProcessed: unsubscribesProcessed
