@@ -388,31 +388,39 @@ OPERATION_PERMISSIONS[OPERATION.ADMIN_RESET] = {
 };
 
 // ============================================================================
-// BLOCKER BEFORE F3 — N4 (reaudit finding, intentionally NOT fixed in this
-// F1 delivery per explicit instruction — do not implement without F3 scope).
+// N4 — CLOSED. Was: BLOCKER BEFORE F3 (reaudit finding). Both operations
+// below now carry the SAME `restrictedValues` pattern ADMIN_VALIDATE/
+// ADMIN_STOP already had (Codex #2/#3): structurally forbidden from ever
+// setting DNC="unsubscribe" — any future write path (F3 or otherwise) that
+// tries to set Do_Not_Contact_Reason="unsubscribe" through either
+// SYSTEM_REPLY_SYNC or SYSTEM_NIGHTLY_RECON is rejected outright by
+// authorizeWrite_ (SheetRepo.gs), the same generic enforcement that already
+// protected ADMIN_VALIDATE/ADMIN_STOP — no new enforcement code needed,
+// only closing this permission-list gap.
 //
-// Neither operation below has a `restrictedValues` entry for
-// Do_Not_Contact_Reason, unlike ADMIN_VALIDATE/ADMIN_STOP (Codex #2/#3),
-// which are structurally forbidden from ever setting DNC="unsubscribe".
-// No CURRENT code path writes "unsubscribe" through either operation
-// (ReplySync.gs's BOUNCE/REPLY/manual-stop writes and Recon.gs's DNC-sync
-// write only "bounce" or leave the column untouched) — verified by
-// `grep -n "Do_Not_Contact_Reason" ReplySync.gs Recon.gs`. But the
-// asymmetry is latent: F3 work that adds a new SYSTEM-origin write path
-// touching this column MUST add matching restrictedValues here (mirroring
-// ADMIN_UNSUBSCRIBE's `{ Do_Not_Contact_Reason: [DNC_REASON.UNSUBSCRIBE] }`
-// pattern) BEFORE that path can safely reach DNC="unsubscribe" — otherwise
-// it could set the reason without the Suppression guarantee
-// applyUnsubscribeEffects_() provides. Close this before F3 ships any new
-// SYSTEM-origin write to Do_Not_Contact_Reason.
+// No CURRENT code path wrote "unsubscribe" through either operation before
+// this fix either (ReplySync.gs's BOUNCE/REPLY/manual-stop writes and
+// Recon.gs's DNC-sync write only "bounce"/"manual" or leave the column
+// untouched — verified by `grep -n "Do_Not_Contact_Reason" ReplySync.gs
+// Recon.gs`), so this closes a LATENT gap, not an active bug — but it is
+// now closed structurally rather than merely documented, so a future
+// SYSTEM-origin write path can never reach DNC="unsubscribe" without the
+// Suppression guarantee applyUnsubscribeEffects_() provides, even if
+// whoever adds it forgets this comment exists.
 // ============================================================================
 OPERATION_PERMISSIONS[OPERATION.SYSTEM_REPLY_SYNC] = {
   columns: ['Stop_Contact', 'Do_Not_Contact_Reason', 'Status', 'Next_Action_Date', 'Replied', 'Replied_At'],
-  statuses: [STATUS.REPLIED, STATUS.BOUNCED, STATUS.STOPPED]
+  statuses: [STATUS.REPLIED, STATUS.BOUNCED, STATUS.STOPPED],
+  restrictedValues: {
+    Do_Not_Contact_Reason: DNC_REASON_VALUES.filter(function (r) { return r !== DNC_REASON.UNSUBSCRIBE; })
+  }
 };
 
 OPERATION_PERMISSIONS[OPERATION.SYSTEM_NIGHTLY_RECON] = {
   columns: ['Stop_Contact', 'Do_Not_Contact_Reason', 'Status', 'Sequence_Step', 'Next_Action_Date', 'Error_Count', 'Last_Error'],
+  restrictedValues: {
+    Do_Not_Contact_Reason: DNC_REASON_VALUES.filter(function (r) { return r !== DNC_REASON.UNSUBSCRIBE; })
+  },
   statuses: [STATUS.STOPPED, STATUS.SEQUENCE_DONE, STATUS.NEEDS_REVIEW]
 };
 

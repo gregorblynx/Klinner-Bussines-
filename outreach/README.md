@@ -111,24 +111,27 @@ outside of this code.
    pipeline reads real, untouched `Prospects` state, because the preview
    pipeline was architecturally incapable of writing to it (I14).
 
-### Two known items to close before going further — do not skip this
+### Two items that used to block further progress — both now closed
 
-**BLOCKER BEFORE FIRST LIVE EMAIL — N5.** `Mailer.gs`'s `doFollowUpSend_`
-(inside the LIVE closure, unreachable in F1) has a documented race: if a
-real inbound reply lands in a thread in the narrow window between our
-`thread.reply()` call and reading the message list back, the send is
-marked `FAILED` — which is retryable — and a later run could send a
-**second** real follow-up into the same thread. Fully described, with two
-candidate fixes, in the comment above `doFollowUpSend_` in `Mailer.gs`.
-**Resolve this before `DRY_RUN` is ever set to `FALSE`.**
+**N5 (was: BLOCKER BEFORE FIRST LIVE EMAIL) — CLOSED.** `Mailer.gs`'s
+`doStep1Send_`/`doFollowUpSend_` (inside the LIVE closure, unreachable in
+F1) had ambiguous-outcome races that could leave a prospect automatically
+retryable after a send whose real outcome couldn't be proven. Both now
+stop the prospect into `NEEDS_REVIEW` on any ambiguous outcome instead of
+leaving it retryable — see `N5_AUDIT.md` for the full race model,
+verification method (static checks + `mutation-test-N5.js`, since this
+project's policy is to never flip `DRY_RUN=FALSE` even locally — same
+method already used for findings #7/#8), and one documented-but-not-fixed
+secondary finding (a reconciliation gap that is a stuck-state bug, not a
+duplicate-send risk).
 
-**BLOCKER BEFORE F3 — N4.** `Constants.gs`'s `SYSTEM_REPLY_SYNC` and
-`SYSTEM_NIGHTLY_RECON` operations have no `restrictedValues` guard on
-`Do_Not_Contact_Reason`, unlike the ADMIN operations. No current F1/F2 code
-path uses either to write `"unsubscribe"` (verified — see the comment block
-above those two entries in `Constants.gs`), so this is latent, not active.
-Any F3 work that adds a new SYSTEM-origin write touching that column must
-add the matching `restrictedValues` first.
+**N4 (was: BLOCKER BEFORE F3) — CLOSED.** `Constants.gs`'s
+`SYSTEM_REPLY_SYNC` and `SYSTEM_NIGHTLY_RECON` operations now carry the
+same `restrictedValues` guard on `Do_Not_Contact_Reason` the ADMIN
+operations already had — structurally forbidden from ever setting
+`"unsubscribe"`. No current F1/F2 code path did that anyway (this closed a
+latent gap, not an active bug) — see `test_N4_systemOperationsCannotSetUnsubscribeReason_`
+in `Tests.gs` and `test-harness/mutation-test-N4.js`.
 
 ## Reading the Log sheet
 

@@ -396,6 +396,48 @@ function test_finding1_writeBoundaryRejectsOutOfScopeColumns_() {
   });
 }
 
+/**
+ * N4 (was "BLOCKER BEFORE F3", now closed — Constants.gs): SYSTEM_REPLY_SYNC
+ * and SYSTEM_NIGHTLY_RECON must be structurally forbidden from ever setting
+ * Do_Not_Contact_Reason="unsubscribe" — same restrictedValues pattern
+ * ADMIN_VALIDATE/ADMIN_STOP already had. Proves both the negative (rejects
+ * "unsubscribe") and the positive (legitimate values these operations
+ * actually use in production code — BOUNCE, MANUAL — still work).
+ */
+function test_N4_systemOperationsCannotSetUnsubscribeReason_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n4'), Problem_Found: 'x' });
+  var p = getTestProspectByRow_(row);
+  var id = Utilities.getUuid();
+  assignNewProspectIdAndFields_(row, { Prospect_ID: id, Date_Added: new Date(), Status: STATUS.READY },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+
+  var negativeCases = [
+    { op: OPERATION.SYSTEM_REPLY_SYNC, label: 'SYSTEM_REPLY_SYNC setting Do_Not_Contact_Reason="unsubscribe"' },
+    { op: OPERATION.SYSTEM_NIGHTLY_RECON, label: 'SYSTEM_NIGHTLY_RECON setting Do_Not_Contact_Reason="unsubscribe"' }
+  ];
+  negativeCases.forEach(function (c) {
+    var threw = false;
+    try {
+      writeRowById_(id, { Do_Not_Contact_Reason: DNC_REASON.UNSUBSCRIBE }, { origin: ORIGIN.SYSTEM, operation: c.op });
+    } catch (e) { threw = true; }
+    assert_(threw, 'N4: must reject — ' + c.label);
+  });
+
+  // Positive: the values these operations actually write in production
+  // code today (ReplySync.gs) must remain unaffected by the new guard.
+  writeRowById_(id, { Do_Not_Contact_Reason: DNC_REASON.BOUNCE, Status: STATUS.BOUNCED },
+    { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_REPLY_SYNC });
+  assertEquals_(DNC_REASON.BOUNCE, getTestProspectByRow_(row).Do_Not_Contact_Reason, 'N4: SYSTEM_REPLY_SYNC must still be able to set "bounce".');
+
+  writeRowById_(id, { Do_Not_Contact_Reason: DNC_REASON.MANUAL, Status: STATUS.STOPPED },
+    { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_REPLY_SYNC });
+  assertEquals_(DNC_REASON.MANUAL, getTestProspectByRow_(row).Do_Not_Contact_Reason, 'N4: SYSTEM_REPLY_SYNC must still be able to set "manual" (checkStopLabel_).');
+
+  writeRowById_(id, { Do_Not_Contact_Reason: DNC_REASON.DUPLICATE, Status: STATUS.STOPPED },
+    { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_NIGHTLY_RECON });
+  assertEquals_(DNC_REASON.DUPLICATE, getTestProspectByRow_(row).Do_Not_Contact_Reason, 'N4: SYSTEM_NIGHTLY_RECON must still be able to set non-unsubscribe reasons.');
+}
+
 function test_T29_T30_T31_T32_unsubscribeAndResetGuards_() {
   var config = getConfig();
 
@@ -2051,6 +2093,7 @@ var F1_TEST_FUNCTIONS = [
   ['T34', test_T34_originSeparation_],
   ['T35', test_T35_digestSkipsSendWhenAdminEmailPending_],
   ['finding1_writeBoundary', test_finding1_writeBoundaryRejectsOutOfScopeColumns_],
+  ['N4_systemCannotSetUnsubscribe', test_N4_systemOperationsCannotSetUnsubscribeReason_],
   ['finding3A_stopUnsubscribe', test_finding3A_stopProspectUnsubscribeCreatesSuppression_],
   ['finding3B_reconSweep', test_finding3B_reconSweepGuaranteesSuppressionEvenIfAlreadyStopped_],
   ['N2_domainSuppressionMasking', test_N2_unsubscribeAlwaysCreatesEmailScopeRecordEvenUnderDomainSuppression_],
