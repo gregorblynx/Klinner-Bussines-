@@ -434,6 +434,25 @@ function test_T28_liveBlockedWhilePendingF0_() {
   assert_(threw, 'assertLiveAllowed_ must throw while PENDING_F0 keys remain (I21).');
 }
 
+/**
+ * F0/N5 (Codex final audit, round 2 — documentation correction):
+ * checkLiveReadiness() must be read-only (never sends, never touches
+ * Gmail, never changes DRY_RUN) and must report the SAME pending-keys
+ * list assertLiveAllowed_ itself uses — proving it cannot drift out of
+ * sync with the real gate.
+ */
+function test_checkLiveReadinessIsReadOnlyAndMatchesAssertLiveAllowed_() {
+  var draftCountBefore = GmailApp.getDrafts().length;
+  var r = checkLiveReadiness();
+
+  assertEquals_(true, r.dryRun, 'This F1 delivery must report DRY_RUN=TRUE.');
+  assertEquals_(false, r.liveConfigResolved, 'This F1 delivery must still have PENDING_F0 keys.');
+  assertEquals_(JSON.stringify(getPendingF0Keys_().slice().sort()), JSON.stringify(r.pendingF0Keys.slice().sort()),
+    'checkLiveReadiness() must report the EXACT same pending keys assertLiveAllowed_ itself checks — no separate/drifted logic.');
+  assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'checkLiveReadiness() must never touch Gmail.');
+  assertEquals_(true, getConfig().DRY_RUN === true, 'checkLiveReadiness() must never change DRY_RUN.');
+}
+
 function test_T33_validateAllRowsPersistsUnderDryRun_() {
   var config = getConfig();
   assert_(config.DRY_RUN === true, 'T33 requires DRY_RUN=TRUE.');

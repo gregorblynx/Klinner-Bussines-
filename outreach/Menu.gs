@@ -15,6 +15,7 @@ function onOpen() {
     .addItem('Preview full sequence for selected row', 'menu_previewFullSequence_')
     .addItem('Delete Klinner preview drafts', 'menu_deletePreviewDrafts_')
     .addSeparator()
+    .addItem('Check LIVE readiness (F0)', 'menu_checkLiveReadiness_')
     .addItem('Send now (LIVE)', 'menu_sendNowLive_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
@@ -87,6 +88,24 @@ function menu_deletePreviewDrafts_() {
   guardedMenuAction_(function (ui) {
     var r = deleteKlinnerPreviewDrafts();
     ui.alert('Delete Klinner preview drafts', 'Deleted: ' + r.deleted, ui.ButtonSet.OK);
+  });
+}
+
+/**
+ * F0/N5: read-only — never sends, never touches Gmail, never changes
+ * DRY_RUN. The correct way to check F0 status (see checkLiveReadiness_'s
+ * docstring in Config.gs for why Preview cannot be used for this).
+ */
+function menu_checkLiveReadiness_() {
+  guardedMenuAction_(function (ui) {
+    var r = checkLiveReadiness();
+    var lines = ['DRY_RUN: ' + (r.dryRun ? 'TRUE (safe — LIVE sending is disabled regardless of F0 status)' : 'FALSE')];
+    if (r.liveConfigResolved) {
+      lines.push('F0 config: all 5 required keys resolved.');
+    } else {
+      lines.push('F0 config: ' + r.pendingF0Keys.length + ' key(s) still PENDING_F0: ' + r.pendingF0Keys.join(', '));
+    }
+    ui.alert('Check LIVE readiness (F0)', lines.join('\n'), ui.ButtonSet.OK);
   });
 }
 

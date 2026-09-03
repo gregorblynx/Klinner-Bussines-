@@ -111,19 +111,25 @@ outside of this code.
    pipeline reads real, untouched `Prospects` state, because the preview
    pipeline was architecturally incapable of writing to it (I14).
 
-### Two items that used to block further progress — both now closed
+### Two items that used to block further progress
 
-**N5 (was: BLOCKER BEFORE FIRST LIVE EMAIL) — CLOSED.** `Mailer.gs`'s
-`doStep1Send_`/`doFollowUpSend_` (inside the LIVE closure, unreachable in
-F1) had ambiguous-outcome races that could leave a prospect automatically
-retryable after a send whose real outcome couldn't be proven. Both now
-stop the prospect into `NEEDS_REVIEW` on any ambiguous outcome instead of
-leaving it retryable — see `N5_AUDIT.md` for the full race model,
-verification method (static checks + `mutation-test-N5.js`, since this
-project's policy is to never flip `DRY_RUN=FALSE` even locally — same
-method already used for findings #7/#8), and one documented-but-not-fixed
-secondary finding (a reconciliation gap that is a stuck-state bug, not a
-duplicate-send risk).
+**N5 (BLOCKER BEFORE FIRST LIVE EMAIL) — round 2 hardening applied, NOT
+independently closed yet.** `Mailer.gs`'s `doStep1Send_`/`doFollowUpSend_`
+(inside the LIVE closure, unreachable in F1) had ambiguous-outcome races
+that could leave a prospect automatically retryable after a send whose
+real outcome couldn't be proven. Round 1's fix (a secondary Prospects
+`NEEDS_REVIEW` write) was itself found insufficient by an independent
+audit — if that second write also failed, the prospect could still be
+retried. Round 2 makes the SendLedger row itself the durable, always-
+enforced barrier (`LEDGER_STATE.AMBIGUOUS`, checked by `isLiveKeyBlocked_`
+regardless of the Prospects write's outcome) and replaced the round-1
+static-only verification with real executable tests (`test_N5_*` in
+Tests.gs) plus a behavioral mutation test. `reconcileStaleLiveClaims_`
+(Recon.gs) was also found to be a genuine duplicate-send risk (a negative
+Gmail search was treated as proof of non-delivery) and fixed the same way.
+See `N5_AUDIT.md` for the full race model and exactly what remains
+Google-real-only. This status will read "CLOSED" only once a fresh
+independent audit confirms it — not asserted here preemptively.
 
 **N4 (was: BLOCKER BEFORE F3) — CLOSED.** `Constants.gs`'s
 `SYSTEM_REPLY_SYNC` and `SYSTEM_NIGHTLY_RECON` operations now carry the

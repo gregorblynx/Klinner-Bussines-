@@ -1,5 +1,20 @@
 # Overnight autopilot report — Klinner Outreach v1.0
 
+> **SUPERSEDED, PARTIALLY.** This report's "N3 — CLOSED" and "N5 —
+> CLOSED... no automatic retry possible on an ambiguous outcome, ever"
+> claims were submitted for independent Codex audit and returned
+> **FAIL / FIX REQUIRED** — three N5 structural gaps (ambiguous-outcome
+> ledger protection depended on a Prospects write that could itself fail;
+> `reconcileStaleLiveClaims_`'s zero-search-result path was a genuine
+> duplicate-send risk, not "not a duplicate-send risk" as §11 below
+> claimed), an N3 orphan-draft gap (a post-creation Gmail read still lived
+> outside the protected fail-closed block), a test-isolation enforcement
+> gap, and a DST algorithm bug were all found and are now fixed — see
+> `AUTOPILOT_FIX_REPORT.md` for the authoritative current status. This
+> file is kept as the historical record of what round 1 actually did and
+> believed at the time; do not treat its "CLOSED"/"no automatic retry...
+> ever" language below as current.
+
 ## 1. Blocks worked
 
 One continuous session. Phases 1-4 (N3 V3, N5, N4, timezone) fully implemented, tested, and locally committed. Phases 5-9 (cloud readiness, monitoring, F0, F1 closure plan, production checklist) delivered as audits/specs, per priority order and the "don't touch code unnecessarily" instruction for the lower-priority phases.

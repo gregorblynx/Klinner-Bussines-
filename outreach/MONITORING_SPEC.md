@@ -22,7 +22,7 @@ The existing `Dashboard` sheet (`initializeDashboardSheet_`, SheetRepo.gs) alrea
 | Follow-ups Today | Same source, `Step>1` — `computeDigest_()`'s `followUpSentToday` |
 | Replies Today | `Prospects` rows: `Replied=true, Replied_At` is today — `computeDigest_()`'s `repliedToday` |
 | Errors Today | `Log` sheet rows where `Level=ERROR` and `Timestamp` is today |
-| Last Reply Sync | `Log`, latest `RUN_END` row whose `Detail` mentions `syncReplies` (ReplySync.gs logs its own run boundaries — confirm exact log call before implementing) |
+| Last Reply Sync | **Gap, confirmed (not spec'd yet)**: `syncReplies()` (ReplySync.gs) does NOT currently log any `RUN_START`/`RUN_END` boundary event at all — verified via `grep -n "logEvent_(LOG_LEVEL.INFO, LOG_EVENT.RUN_START\|RUN_END" *.gs`, which finds boundary logging only in `nightlyRecon()` and `installTriggers()`. Deriving "Last Reply Sync" from `Log` would need `syncReplies()` to add its own `RUN_START`/`RUN_END` calls first (a small, real code change, not done here) — do not implement this row against a log token that does not exist. |
 | Last Recon | `Log`, latest `RUN_END` row whose `Detail` starts with `nightlyRecon` (matches the exact string `nightlyRecon()` already logs) |
 | Last Digest | `Log`, latest `DIGEST_SENT` or `DIGEST_NOT_SENT_PENDING_F0` row |
 | Next Scheduled Run | `ScriptApp.getProjectTriggers()` (Triggers.gs already has `listManagedTriggers_()` to build on) — `getTriggerSource()`/schedule inspection; only meaningful once triggers are actually installed |

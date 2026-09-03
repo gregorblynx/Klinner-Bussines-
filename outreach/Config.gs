@@ -128,6 +128,34 @@ function assertLiveAllowed_() {
   }
 }
 
+/**
+ * F0/N5 (Codex final audit, round 2 — documentation correction): a SAFE,
+ * READ-ONLY way to check whether LIVE is currently allowed, WITHOUT ever
+ * attempting to send, WITHOUT touching Gmail, and WITHOUT changing
+ * DRY_RUN. Calls the EXACT SAME getPendingF0Keys_() that
+ * assertLiveAllowed_ (I21) itself uses — this can never drift out of sync
+ * with what actually gates a real send, because it is not a parallel
+ * re-implementation.
+ *
+ * Prior drafts of this project's own documentation incorrectly claimed
+ * that running Preview ("Preview today's queue" etc.) could be used to
+ * verify F0 configuration status — false: previewStep()/previewQueue()
+ * NEVER call assertLiveAllowed_ at all (Preview is safe by construction
+ * and simply does not need the F0 gate — see Mailer.gs's SAFETY MODEL
+ * docstring at the top of the file). This function is the actually-
+ * correct way to check F0 status before ever flipping DRY_RUN — exposed
+ * via the "Check LIVE readiness (F0)" menu item (Menu.gs).
+ */
+function checkLiveReadiness() {
+  var config = getConfig();
+  var pending = getPendingF0Keys_();
+  return {
+    dryRun: config.DRY_RUN === true,
+    pendingF0Keys: pending,
+    liveConfigResolved: pending.length === 0
+  };
+}
+
 /** Creates the Config sheet with defaults if it does not already have rows. */
 function initializeConfigSheet_() {
   var sheet = getOrCreateSheet_(SHEET_NAMES.CONFIG);
