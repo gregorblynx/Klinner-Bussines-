@@ -54,6 +54,16 @@ Both `doStep1Send_`'s ambiguous `draft.send()` failure and `doFollowUpSend_`'s d
 
 Real bug found: `addCalendarDays_` used raw environment-relative `Date` getters; the local mock's `Utilities.formatDate` ignored its `tz` argument entirely. Both silently correct only because this dev machine happens to already be set to `America/Chicago` — confirmed exploitable by forcing `TZ=Asia/Kolkata`, which shifted a business-day computation by one day. Fixed: environment-independent date math (`Utilities.formatDate` + explicit offset arithmetic) and a real `Intl.DateTimeFormat`-based mock. Verified identical (green) results under `America/Chicago`, `UTC`, and `Asia/Kolkata`. One Google-config-only item documented, not touched: the real Sheet's own file-level timezone display setting (cosmetic only — see `TIMEZONE_AUDIT.md` §5). Commit `d534771`.
 
+> **SECTION 15/19 BELOW ARE OBSOLETE ON DEPLOY ORDER — DO NOT FOLLOW.**
+> The trigger-installation ordering described in this report (and in the
+> checklist as it existed when this was written) put trigger installation
+> BEFORE the first manual LIVE send. That order is wrong and has been
+> corrected. `PRODUCTION_CHECKLIST.md` is the single authoritative source:
+> triggers are installed only AFTER a human has verified one real manual
+> send, the follow-up/reply/unsubscribe paths, and monitoring. Read the
+> sections below as a historical record of the audit work only, never as
+> deployment instructions.
+
 ## 15. Cloud/triggers readiness
 
 Audited, no code changes needed. `installTriggers()` confirmed genuinely idempotent and scoped (I19). Per-run execution time comfortably bounded by shipped defaults. One bad prospect cannot abort a `sendBatch` run. Lock/flush discipline confirmed correct. See `CLOUD_READINESS_AUDIT.md`.

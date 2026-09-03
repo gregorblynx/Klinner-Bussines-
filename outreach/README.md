@@ -97,19 +97,41 @@ outside of this code.
 
 ## How to move to F2 (LIVE sending) — later, not now
 
-1. Complete F0: dedicated domain/mailbox, DKIM/SPF/DMARC, and fill in the
-   5 `PENDING_F0` Config values with real ones.
-2. Re-run **Validate all rows** and review the `Dashboard` sheet.
-3. Manually run **Send now (LIVE)** a few times and watch the `Log` sheet
-   and your Gmail Sent folder closely, at the `MAX_PER_DAY` cap — **5/day**
-   by default, since this is a brand-new dedicated mailbox. Raise it
-   manually in `Config` later, once deliverability/bounces/replies look
-   healthy.
-4. Only once you're confident, run **Install / repair triggers** to
-   automate `sendBatch`, `syncReplies`, `nightlyRecon`, and `dailyDigest`.
-5. Flipping `DRY_RUN` to `FALSE` requires no state cleanup — the LIVE
-   pipeline reads real, untouched `Prospects` state, because the preview
-   pipeline was architecturally incapable of writing to it (I14).
+The order below is not a suggestion — it is the sequence, and triggers
+come **last**. Automating `sendBatch` before a human has watched exactly
+one real send succeed end-to-end defeats the entire point of a controlled
+rollout. `PRODUCTION_CHECKLIST.md` is the authoritative, stage-by-stage
+version of this; the summary here must never contradict it.
+
+1. **Validate the current Google state under `DRY_RUN=TRUE`** — Validate
+   all rows, review the `Dashboard`, confirm no unexpected `Log` errors.
+2. **Complete F0**: dedicated domain/mailbox, DKIM/SPF/DMARC, and fill in
+   the 5 `PENDING_F0` Config values with real ones.
+3. **Assert the LIVE gate explicitly**: run **Check LIVE readiness (F0)**
+   from the menu (`checkLiveReadiness()`). It is read-only — it never
+   sends, never touches Gmail, never changes `DRY_RUN` — and it calls the
+   exact same `getPendingF0Keys_()` that `assertLiveAllowed_`/I21 uses, so
+   it cannot drift from the real gate. Running Preview proves NOTHING
+   about F0: `previewStep`/`previewQueue` never call `assertLiveAllowed_`.
+4. **First LIVE send, fully manual, with triggers still ABSENT**: flip
+   `DRY_RUN` to `FALSE`, keep `MAX_PER_DAY` at its low default (**5/day**,
+   set deliberately low for a brand-new dedicated mailbox), then run
+   **Send now (LIVE)** for a single low-risk prospect and watch the `Log`
+   sheet and your Gmail Sent folder. Confirm `SendLedger` shows `SENT`
+   with a real `Message_ID`/`Thread_ID` and no `AMBIGUOUS` row.
+5. **Controlled follow-up / reply / unsubscribe tests**, still manual:
+   reply to your own test send, confirm `syncReplies` classifies it,
+   confirm a step-2 follow-up threads into the SAME conversation, confirm
+   the unsubscribe path creates its `Suppression` row.
+6. **Monitoring minimum** in place (see `MONITORING_SPEC.md`).
+7. **Only now: Install / repair triggers** to automate `sendBatch`,
+   `syncReplies`, `nightlyRecon`, and `dailyDigest`.
+8. **Cloud observation** for 24h (72h if anything ambiguous appeared)
+   before raising `MAX_PER_DAY` toward steady-state volume.
+
+Flipping `DRY_RUN` to `FALSE` requires no state cleanup — the LIVE
+pipeline reads real, untouched `Prospects` state, because the preview
+pipeline was architecturally incapable of writing to it (I14).
 
 ### Two items that used to block further progress
 
