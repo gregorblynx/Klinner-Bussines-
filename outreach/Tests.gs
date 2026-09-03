@@ -228,6 +228,137 @@ function test_timezoneAudit_dateMathIsChicagoRelativeNotEnvironmentRelative_() {
     'A DST transition elsewhere in the day must not perturb a noon-anchored calendar-day add.');
 }
 
+/**
+ * DST audit (Codex final audit, round 2): dateFromWallClock_'s previous
+ * single-shot offset lookup was wrong for any wall clock close enough to a
+ * DST transition that the neutral (literal-UTC) instant and the true
+ * target instant fall on OPPOSITE sides of the transition moment.
+ * Confirmed wrong before this fix: 2026-03-08 03:30 resolved to 04:30;
+ * 2026-11-01 02:30 resolved to 01:30. Both are now covered directly,
+ * alongside normal winter/summer dates and the two genuinely undefined
+ * cases (a nonexistent spring-forward gap, an ambiguous fall-back
+ * overlap), each with its explicitly documented policy.
+ */
+function test_dstAudit_validWallClocksNearTransitions_() {
+  // Normal winter date (CST, UTC-6), far from any transition.
+  var winter = dateFromWallClock_(2026, 0, 15, 14, 0, 0, 'America/Chicago');
+  assertEquals_('14', Utilities.formatDate(winter, 'America/Chicago', 'HH'));
+  assertEquals_('2026-01-15T20:00:00.000Z', winter.toISOString(), 'January 14:00 Chicago must be CST (UTC-6) = 20:00Z.');
+
+  // Normal summer date (CDT, UTC-5), far from any transition.
+  var summer = dateFromWallClock_(2026, 6, 15, 14, 0, 0, 'America/Chicago');
+  assertEquals_('14', Utilities.formatDate(summer, 'America/Chicago', 'HH'));
+  assertEquals_('2026-07-15T19:00:00.000Z', summer.toISOString(), 'July 14:00 Chicago must be CDT (UTC-5) = 19:00Z.');
+
+  // Spring-forward transition (2026-03-08, 02:00 CST -> 03:00 CDT): the
+  // exact wall clock Codex confirmed was wrong (resolved to 04:30 before
+  // this fix).
+  var springValid = dateFromWallClock_(2026, 2, 8, 3, 30, 0, 'America/Chicago');
+  assertEquals_('03', Utilities.formatDate(springValid, 'America/Chicago', 'HH'), 'MUST resolve 03:30, not 04:30.');
+  assertEquals_('30', Utilities.formatDate(springValid, 'America/Chicago', 'mm'));
+  assertEquals_('2026-03-08T08:30:00.000Z', springValid.toISOString(), 'Must be CDT (UTC-5): 08:30Z.');
+
+  // Fall-back transition (2026-11-01, 02:00 CDT -> 01:00 CST): the exact
+  // wall clock Codex confirmed was wrong (resolved to 01:30 before this
+  // fix). 02:30 is AFTER the fall-back completes — valid, unambiguous CST.
+  var fallValid = dateFromWallClock_(2026, 10, 1, 2, 30, 0, 'America/Chicago');
+  assertEquals_('02', Utilities.formatDate(fallValid, 'America/Chicago', 'HH'), 'MUST resolve 02:30, not 01:30.');
+  assertEquals_('30', Utilities.formatDate(fallValid, 'America/Chicago', 'mm'));
+  assertEquals_('2026-11-01T08:30:00.000Z', fallValid.toISOString(), 'Must be CST (UTC-6): 08:30Z.');
+}
+
+/** DST audit: addCalendarDays_ across both real transition dates. */
+function test_dstAudit_addCalendarDaysAcrossTransitions_() {
+  // Spring: 2026-03-07 09:00 (CST) + 1 day must land on 2026-03-08 09:00,
+  // now CDT — same wall clock, different absolute UTC offset.
+  var beforeSpring = dateFromWallClock_(2026, 2, 7, 9, 0, 0, 'America/Chicago');
+  var afterSpring = addCalendarDays_(beforeSpring, 1);
+  assertEquals_('2026-03-08', Utilities.formatDate(afterSpring, 'America/Chicago', 'yyyy-MM-dd'));
+  assertEquals_('09', Utilities.formatDate(afterSpring, 'America/Chicago', 'HH'), 'Wall-clock hour must be preserved across spring-forward.');
+
+  // Fall: 2026-10-31 09:00 (CDT) + 1 day must land on 2026-11-01 09:00, now CST.
+  var beforeFall = dateFromWallClock_(2026, 9, 31, 9, 0, 0, 'America/Chicago');
+  var afterFall = addCalendarDays_(beforeFall, 1);
+  assertEquals_('2026-11-01', Utilities.formatDate(afterFall, 'America/Chicago', 'yyyy-MM-dd'));
+  assertEquals_('09', Utilities.formatDate(afterFall, 'America/Chicago', 'HH'), 'Wall-clock hour must be preserved across fall-back.');
+}
+
+/**
+ * DST audit: the two genuinely UNDEFINED wall clocks, each resolved per
+ * dateFromWallClock_'s explicitly documented policy (never silently
+ * invented — see its docstring).
+ */
+function test_dstAudit_nonexistentAndAmbiguousWallClocksFollowDocumentedPolicy_() {
+  // NONEXISTENT: 2026-03-08 02:30 never occurs (clocks jump 02:00 -> 03:00).
+  // Policy: resolve to the LATER equivalent (skip forward past the gap) -> 03:30.
+  var gap = dateFromWallClock_(2026, 2, 8, 2, 30, 0, 'America/Chicago');
+  assertEquals_('03', Utilities.formatDate(gap, 'America/Chicago', 'HH'), 'Nonexistent wall clock must resolve to the later (post-gap) equivalent per documented policy.');
+  assertEquals_('30', Utilities.formatDate(gap, 'America/Chicago', 'mm'));
+
+  // AMBIGUOUS: 2026-11-01 01:30 occurs twice (once CDT, once CST). Policy:
+  // resolve to the EARLIER (pre-transition, CDT) occurrence -> UTC-5.
+  var ambiguous = dateFromWallClock_(2026, 10, 1, 1, 30, 0, 'America/Chicago');
+  assertEquals_('01', Utilities.formatDate(ambiguous, 'America/Chicago', 'HH'));
+  assertEquals_('30', Utilities.formatDate(ambiguous, 'America/Chicago', 'mm'));
+  assertEquals_('2026-11-01T06:30:00.000Z', ambiguous.toISOString(),
+    'Ambiguous wall clock must resolve to the EARLIER (CDT, UTC-5) occurrence per documented policy — 06:30Z, not 07:30Z (CST).');
+}
+
+/**
+ * DST audit: production send/reply windows (09:00-17:00 send, 07:00-21:00
+ * reply) must remain correct on both sides of a DST transition — these
+ * operate on `new Date()` (always a real, already-unambiguous instant),
+ * never a human-constructed wall clock, so they were never actually
+ * exposed to the dateFromWallClock_ bug — this is regression coverage
+ * proving that remains true, not a fix.
+ */
+function test_dstAudit_sendAndReplyWindowsCorrectAcrossTransitions_() {
+  var config = getConfig();
+
+  var winterMorning = dateFromWallClock_(2026, 0, 15, 8, 59, 0, 'America/Chicago'); // Thu, just before window
+  assert_(!isWithinSendWindow_(winterMorning, config), 'Winter 08:59 must be outside the 09:00-17:00 send window.');
+  var winterOpen = dateFromWallClock_(2026, 0, 15, 9, 0, 0, 'America/Chicago');
+  assert_(isWithinSendWindow_(winterOpen, config), 'Winter 09:00 must be inside the send window.');
+  var winterClose = dateFromWallClock_(2026, 0, 15, 17, 0, 0, 'America/Chicago');
+  assert_(!isWithinSendWindow_(winterClose, config), 'Winter 17:00 must be outside the send window (exclusive end).');
+
+  var summerOpen = dateFromWallClock_(2026, 6, 15, 9, 0, 0, 'America/Chicago');
+  assert_(isWithinSendWindow_(summerOpen, config), 'Summer (CDT) 09:00 must be inside the send window.');
+  var summerClose = dateFromWallClock_(2026, 6, 15, 17, 0, 0, 'America/Chicago');
+  assert_(!isWithinSendWindow_(summerClose, config), 'Summer (CDT) 17:00 must be outside the send window.');
+
+  // The Monday immediately after the spring-forward Sunday (2026-03-08) —
+  // a business day, already fully in CDT.
+  var springAfterOpen = dateFromWallClock_(2026, 2, 9, 9, 0, 0, 'America/Chicago');
+  assert_(isWithinSendWindow_(springAfterOpen, config), 'Monday after spring-forward, 09:00 (already CDT) must be inside the send window.');
+
+  var replyOpen = dateFromWallClock_(2026, 0, 15, 7, 0, 0, 'America/Chicago');
+  assert_(isWithinReplySyncWindow_(replyOpen, config), 'Reply-sync window must open at 07:00 (winter).');
+  var replyBefore = dateFromWallClock_(2026, 0, 15, 6, 59, 0, 'America/Chicago');
+  assert_(!isWithinReplySyncWindow_(replyBefore, config), 'Reply-sync window must be closed at 06:59 (winter).');
+  var replyOpenSummer = dateFromWallClock_(2026, 6, 15, 7, 0, 0, 'America/Chicago');
+  assert_(isWithinReplySyncWindow_(replyOpenSummer, config), 'Reply-sync window must open at 07:00 (summer, CDT) too.');
+}
+
+/**
+ * DST audit: weekend/business-day cadence must remain correct across the
+ * transition weekend (spring-forward 2026-03-08 is itself a Sunday).
+ */
+function test_dstAudit_businessDayCadenceAcrossTransitionWeekend_() {
+  var config = getConfig();
+  // Friday 2026-03-06, 3 business days later must land on Wednesday
+  // 2026-03-11 — spanning the spring-forward weekend in between.
+  var friday = dateFromWallClock_(2026, 2, 6, 10, 0, 0, 'America/Chicago');
+  var result = addBusinessDays_(friday, 3, config.HOLIDAYS || []);
+  assertEquals_('2026-03-11', formatDateYmd_(result), 'Fri + 3 business days across the spring-forward weekend must land on the following Wednesday.');
+
+  // Same check across the fall-back weekend: Friday 2026-10-30 + 3
+  // business days must land on Wednesday 2026-11-04.
+  var fridayFall = dateFromWallClock_(2026, 9, 30, 10, 0, 0, 'America/Chicago');
+  var resultFall = addBusinessDays_(fridayFall, 3, config.HOLIDAYS || []);
+  assertEquals_('2026-11-04', formatDateYmd_(resultFall), 'Fri + 3 business days across the fall-back weekend must land on the following Wednesday.');
+}
+
 function test_T18_pauseAllBlocksPreview_() {
   var sheet = getSheet_(SHEET_NAMES.CONFIG);
   var lastRow = sheet.getLastRow();
