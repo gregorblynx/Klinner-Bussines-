@@ -148,24 +148,80 @@ function syncDncToStopContact_() {
  * true no-ops: there are no Mode=LIVE CLAIMED rows and no IN_SEQUENCE
  * prospects for either step to act on. Left implemented (not stubbed) so
  * F2 does not require rewriting Recon.gs.
+ *
+ * N5 (Codex final audit, round 2): a NEGATIVE Gmail search result does NOT
+ * prove Gmail did not send — it could mean a transient search/indexing
+ * delay, a query that is too narrow, or the message landing somewhere
+ * search does not cover. NEVER downgrade a stale CLAIMED row into a
+ * retryable state on the strength of an ABSENCE of evidence. Only a
+ * POSITIVE match (exactly one) is trusted to resolve a row to SENT; every
+ * other outcome — zero matches, more than one (cannot tell which is ours),
+ * or the search call itself failing — durably blocks the row as AMBIGUOUS
+ * instead. This is the SAME durable-ledger-blocking principle
+ * doStep1Send_/doFollowUpSend_ now use for their own ambiguous outcomes
+ * (Mailer.gs) — a stale claim whose real Gmail outcome cannot be proven is
+ * exactly as dangerous to auto-retry as any other ambiguous send/reply.
+ *
+ * Round 1 (previous audit) transitioned a zero-result stale claim to
+ * LEDGER_STATE.ABANDONED — a state isLiveKeyBlocked_ (Ledger.gs) does NOT
+ * treat as blocking, so a later sendBatch run could pick the same
+ * idempotency key back up and send a genuine DUPLICATE if the original
+ * send had actually succeeded (just invisible to this particular search).
+ * That is the exact bug this rewrite closes.
+ *
+ * Search window widened from `newer_than:2d` to `newer_than:30d`: a claim
+ * only becomes "stale" after CLAIM_STALE_MINUTES (default 120 = 2 hours),
+ * but if reconciliation itself is delayed for any reason (a missed
+ * nightlyRecon run, a persistent search error on this exact row) a real
+ * sent message could otherwise scroll outside a 2-day window by the time
+ * reconciliation finally succeeds — a false negative purely due to timing,
+ * not a real absence. This does not change the safety property above (a
+ * false negative already fails closed to AMBIGUOUS either way) but reduces
+ * unnecessary AMBIGUOUS flagging for a claim that could have been cleanly
+ * resolved to SENT with a wider window.
  */
 function reconcileStaleLiveClaims_(config) {
   var stale = findStaleLiveClaims_(config);
   var resolved = 0;
   stale.forEach(function (row) {
     var v = row.values;
-    var searchQuery = 'in:sent to:' + v.Email_Normalized + ' newer_than:2d';
-    var threads = GmailApp.search(searchQuery);
+    var searchQuery = 'in:sent to:' + v.Email_Normalized + ' newer_than:30d';
+    var threads;
+    try {
+      threads = GmailApp.search(searchQuery);
+    } catch (searchError) {
+      // Fail closed: the row is ALREADY CLAIMED (already a blocking state
+      // per isLiveKeyBlocked_) — leave it exactly as-is, no transition at
+      // all. A search failure is not evidence of anything either way.
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
+        'reconcileStaleLiveClaims_: GmailApp.search() failed for a stale CLAIMED row — left untouched ' +
+        '(still durably blocked as CLAIMED). error=' + searchError);
+      resolved++;
+      return;
+    }
+
     if (threads.length === 1) {
       updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });
-      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step, 'Reconciled from orphan claim.');
-    } else if (threads.length === 0) {
-      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.ABANDONED });
-      logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step, 'Orphan claim abandoned — no matching sent mail found.');
+      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step,
+        'Reconciled from stale claim: exactly one positive match found.');
     } else {
-      writeRowById_(v.Prospect_ID, { Status: STATUS.NEEDS_REVIEW },
-        { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_NIGHTLY_RECON });
-      logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step, 'Ambiguous orphan claim — NEEDS_REVIEW.');
+      var reason = threads.length === 0
+        ? 'zero matching sent messages found (absence of a search hit is not proof nothing was sent)'
+        : threads.length + ' ambiguous matching sent messages found (cannot determine which is ours)';
+      updateLedgerRow_(row.rowIndex, {
+        State: LEDGER_STATE.AMBIGUOUS,
+        Error: 'Stale CLAIMED, ' + reason + ' — durably blocked, needs manual reconciliation.'
+      });
+      try {
+        writeRowById_(v.Prospect_ID, { Status: STATUS.NEEDS_REVIEW },
+          { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_NIGHTLY_RECON });
+      } catch (writeError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
+          'reconcileStaleLiveClaims_: the Prospects NEEDS_REVIEW write ALSO failed — secondary signal only; ' +
+          'the ledger AMBIGUOUS state (already written above) still blocks retry regardless. error=' + writeError);
+      }
+      logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, v.Prospect_ID, v.Email_Normalized, v.Step,
+        'Stale claim durably blocked (AMBIGUOUS) — ' + reason + '.');
     }
     resolved++;
   });

@@ -55,17 +55,31 @@ function updateLedgerRow_(rowIndex, fields) {
 }
 
 /**
- * I13: a step is "claimed or sent" for LIVE purposes ONLY if a Mode=LIVE
- * row exists with State CLAIMED or SENT for that idempotency key.
- * DRY_RUN rows never participate in this check.
+ * I13 (extended by N5): a step is BLOCKED from any new LIVE send/reply
+ * attempt if a Mode=LIVE row exists in ANY of these states for that
+ * idempotency key:
+ *   - CLAIMED: a send/reply attempt is in flight or died mid-flight
+ *     (Apps Script execution killed before completion) — never safe to
+ *     assume it didn't happen.
+ *   - SENT: confirmed success — obviously never resend.
+ *   - AMBIGUOUS (N5): the Gmail operation that may have sent/replied threw
+ *     or returned an unverifiable outcome — we cannot prove it did NOT
+ *     act, so retry is exactly as dangerous as retrying a live SENT.
+ * FAILED is deliberately excluded — it means we KNOW nothing was sent
+ * (e.g. the ledger CLAIM write itself failed, or a genuinely ordinary
+ * transient error that occurred BEFORE the Gmail call was even attempted),
+ * so it SHOULD be retryable. DRY_RUN rows never participate in this check.
+ *
+ * Renamed from isLiveKeyClaimedOrSent_ (N5, Codex final audit) — the old
+ * name no longer described what the function actually guards.
  */
-function isLiveKeyClaimedOrSent_(prospectId, step) {
+function isLiveKeyBlocked_(prospectId, step) {
   var key = getIdempotencyKey_(prospectId, step);
   var rows = readAllLedgerRows_();
   for (var i = 0; i < rows.length; i++) {
     var v = rows[i].values;
     if (v.Idempotency_Key === key && v.Mode === LEDGER_MODE.LIVE &&
-        (v.State === LEDGER_STATE.CLAIMED || v.State === LEDGER_STATE.SENT)) {
+        (v.State === LEDGER_STATE.CLAIMED || v.State === LEDGER_STATE.SENT || v.State === LEDGER_STATE.AMBIGUOUS)) {
       return true;
     }
   }

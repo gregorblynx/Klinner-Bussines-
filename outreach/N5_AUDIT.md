@@ -1,62 +1,53 @@
 # N5 — LIVE send concurrency audit (blocker before first LIVE email)
 
-Status: **core duplicate-send races closed**. One secondary (non-duplicate-send) reconciliation gap found and documented but not yet fixed — see §5.
+Status: **round 2 hardening applied and tested locally — NOT independently verified as closed.** Round 1's "CLOSED" claim (below the fold, superseded) was itself found insufficient by an independent Codex audit, which confirmed three structural gaps. All three are now fixed and covered by real executable tests (not just static checks), but per that same audit's explicit instruction, this document does not claim "N5 CLOSED" again until a fresh independent audit confirms it.
 
-## 1. Race model
+## 1. What round 1 got wrong (Codex final audit findings)
 
-Traced the full LIVE path: `sendBatch()` → `sendStep1()`/`sendFollowUp()` → `executeLiveSendForStep_` (the single guarded entry point, Mailer.gs) → `performLiveSend_` (DRY_RUN/PENDING_F0 gate) → lock → `canSend_` (StateMachine.gs) → `isLiveKeyClaimedOrSent_` (Ledger.gs, I13) → `computeLiveSendBudget_` → `doStep1Send_`/`doFollowUpSend_` → Gmail → `updateLedgerRow_`/`writeRowById_`.
+Round 1's design wrote `LEDGER_STATE.FAILED` on an ambiguous Gmail outcome (a `draft.send()` or `GmailThread.reply()` call that threw, or an unverifiable message-count result) and relied ENTIRELY on a second, independent write — `Prospects.Status = NEEDS_REVIEW` — to keep the prospect from being retried. Codex identified why this was not sufficient:
 
-Scenarios modeled:
+- **A.** If that second Prospects write itself failed (a real possibility — same class of Sheets API failure as the Gmail call itself), `FAILED` alone is retryable (`isLiveKeyClaimedOrSent_`/I13 only excluded `CLAIMED`/`SENT`) and the prospect could still show its pre-send `Status`. A later run could genuinely send twice.
+- **B.** Same structural gap on the follow-up (`GmailThread.reply()`) path.
+- **C.** `reconcileStaleLiveClaims_`'s stale-claim reconciliation transitioned a zero-Gmail-search-result claim to `LEDGER_STATE.ABANDONED` — a state `isLiveKeyClaimedOrSent_` did **not** treat as blocking. A negative search result does not prove Gmail never sent (search delay, too-narrow query, message elsewhere) — this was a real, additional path to a duplicate send, previously (incorrectly) assessed in this document as "not a duplicate-send risk." That assessment was wrong; Codex's audit is the correct one.
 
-| # | Scenario | Outcome before tonight | Outcome now |
-|---|---|---|---|
-| 1-3 | Two concurrent trigger executions, same prospect/step | `LockService.getScriptLock()` serializes the whole decision+send critical section (lock acquired before `canSend_`, released only in the `finally`); the second execution re-reads the ledger under the SAME lock and sees `isLiveKeyClaimedOrSent_()===true` → `SKIPPED_ALREADY_CLAIMED`. | Unchanged — already safe. Analogous mechanism (LockService around Preview's supersede→create→append) is exercised by `finding5_previewLocking` locally; the LIVE lock itself cannot be exercised locally without flipping DRY_RUN (see §2). |
-| 4 | `draft.send()` throws (step 1) — genuinely ambiguous: may or may not have actually sent server-side | Marked `LEDGER_STATE.FAILED` (retryable — I13 only excludes CLAIMED/SENT) → a later `sendBatch` run calls `doStep1Send_` again → **real duplicate-send risk**. | **Fixed.** Also writes `Status: NEEDS_REVIEW` to Prospects (`writeRowById_`, origin=PIPELINE), which structurally excludes the prospect from `getNextStepNumber_`/`canSend_`/`isEligibleForNextStep_` — no automatic retry possible regardless of the ledger row's retryable state. |
-| 5 | Ledger claim written, then the actual Gmail call never runs (Apps Script execution killed — 6-minute limit, quota, crash) | Ledger row stuck at `CLAIMED` forever. `isLiveKeyClaimedOrSent_` treats `CLAIMED` as claimed → blocks retry (safe, no duplicate) but the prospect is frozen until reconciled. | Unchanged behavior (safe by construction — no duplicate risk); the existing `reconcileStaleLiveClaims_`/`nightlyRecon` backstop (F2, not yet exercised) is meant to resolve this. See §5 for a gap found in that backstop. |
-| 6 | `GmailThread.reply()` succeeds but the process dies before `updateLedgerRow_(...SENT...)` | Same as #5 — CLAIMED row, safe (blocks retry), needs reconciliation. | Unchanged. |
-| 7 | Retry after an ambiguous timeout | Previously: retried blindly (the actual bug this whole phase closes for #4/#8). | **Fixed** for the two identified ambiguous-outcome call sites (step 1 send, follow-up reply/message-count race) — see #4 and #8. |
-| 8 | Concurrent follow-up in the same thread (an inbound reply lands in the window between `thread.reply()` returning and `getMessages()`) | This is the ORIGINAL documented N5 finding: `messagesAfter.length !== messagesBefore + 1` → marked `FAILED` (retryable) and thrown, but Prospects row never touched → next `sendBatch` run calls `doFollowUpSend_` again → **real duplicate follow-up send**. | **Fixed** — see §3. |
-| 9 | Duplicate sends generally | N/A | Both concrete code paths that could double-send now stop the prospect into `NEEDS_REVIEW` on any ambiguous outcome, never retry blindly. |
+**The non-negotiable principle Codex stated, now the design rule for this whole area:** after invoking a Gmail operation that could have sent, if the outcome is uncertain, the idempotency key must become durably blocked **in the ledger itself** — never merely via a second write to Prospects, which can independently fail.
 
-## 2. Why no runtime test exercises the LIVE path
+## 2. Round 2 design
 
-`executeLiveSendForStep_` is wrapped by `performLiveSend_`, which throws immediately when `DRY_RUN=TRUE` — the ONLY way to run `doStep1Send_`/`doFollowUpSend_` at all, even locally, is to flip the mock Config's `DRY_RUN` cell to `FALSE` for the duration of a test. This project has an existing, deliberate policy against that (see `Tests.gs`'s own comment above the finding #3B/#4/#5/#6/#9/#10/#11/#12/#13/#14 test block: *"Findings #7 and #8's LIVE-only branches cannot be exercised here without flipping DRY_RUN=FALSE, which this delivery must not do — they are covered instead by a static source check in test-harness/verify-static-findings.js."*). Tonight's hard-stop list ("NO cambiar DRY_RUN a FALSE") is consistent with, and reinforces, that existing convention.
-
-N5's fixes are therefore verified the same way findings #7/#8 already were: **static source-pattern checks** in `test-harness/verify-static-findings.js`, plus a dedicated `test-harness/mutation-test-N5.js` that mutates an in-memory copy of `Mailer.gs`'s source back to the old buggy pattern and proves each check catches it. This is not a substitute for real LIVE testing once F2 is authorized — it only proves the fix pattern is present and the bug pattern is absent.
-
-## 3. Design implemented
-
-**Direction (a)** from the original code comment (the only one of the two evaluated directions that doesn't require F2/real-Gmail-behavior verification to implement safely): on any ambiguous send outcome, in addition to marking the `SendLedger` row `FAILED`, ALSO write `Status: STATUS.NEEDS_REVIEW` to the Prospects row (`origin: PIPELINE, operation: PIPELINE_SEND` — already an explicitly permitted status/column for that operation in `OPERATION_PERMISSIONS`, Constants.gs). `getNextStepNumber_` only returns non-null for `Status IN (READY, IN_SEQUENCE)`, so `NEEDS_REVIEW` structurally removes the prospect from `canSend_`/`isEligibleForNextStep_` eligibility — no code path can automatically retry it, regardless of the ledger row's own retryable `FAILED` state. This is the exact same pattern `doFollowUpSend_` already used for its `getThreadById()`-returns-null case; both fixes just extend it to the two other ambiguous-outcome sites.
+Added `LEDGER_STATE.AMBIGUOUS` (Constants.gs) — included in the ledger-blocking check (renamed `isLiveKeyClaimedOrSent_` → `isLiveKeyBlocked_`, Ledger.gs) alongside `CLAIMED`/`SENT`. On every ambiguous outcome, the ledger row is written to `AMBIGUOUS` (a durably blocking state) — the Prospects `NEEDS_REVIEW` write remains, but now purely as a **secondary, operational** signal for dashboards/human review; its success or failure has zero bearing on whether a retry is possible.
 
 Applied to:
-- `doStep1Send_`'s `catch (sendError)` block (Mailer.gs) — `draft.send()` throwing.
-- `doFollowUpSend_`'s `messagesAfter.length !== messagesBefore + 1` guard (Mailer.gs) — the originally documented race.
+- `doStep1Send_`'s `catch (sendError)` — `draft.send()` throwing.
+- `doFollowUpSend_`'s `catch (replyError)` — `thread.reply()` throwing (a gap round 1 did not even address — only the message-count-mismatch case was handled before).
+- `doFollowUpSend_`'s `messagesAfter.length !== messagesBefore + 1` guard.
+- `reconcileStaleLiveClaims_` (Recon.gs) — zero-result AND multi-result stale-claim outcomes now both resolve to `AMBIGUOUS`, never `ABANDONED`. Search window widened `newer_than:2d` → `newer_than:30d` (reduces false-ambiguous flagging from delayed reconciliation; does not change the safety property — a false negative already failed closed to `AMBIGUOUS` either way). A `GmailApp.search()` failure now leaves the row completely untouched (still `CLAIMED`, already blocking) rather than attempting any transition.
 
-Direction (b) (identify the sent message by a property of the reply itself, removing the array-length-diff race entirely) was evaluated and rejected for tonight: it requires knowing exactly what GmailThread.reply()'s real return value exposes beyond what's already documented/tested, which is Google-real-verification territory, explicitly out of scope tonight.
+## 3. Why this closes gap A/B specifically (Prospects write failing)
 
-## 4. What AT-MOST-ONCE actually means here
+Because the ledger write is no longer conditioned on, or ordered after, the Prospects write — it happens first (or independently), and a failure in the Prospects write is caught and logged separately without affecting the already-written ledger state. Proven directly by `test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_` and `test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFails_` (Tests.gs), which deliberately break `writeRowById_` globally for the duration of the test and confirm the ledger row still reaches `AMBIGUOUS` and a second execution is still blocked.
 
-Not a database transaction — Apps Script/Gmail offer no such thing. The guarantee is: **every code path that cannot prove a send did or did not happen stops retrying automatically**, converting an ambiguous outcome into a human-reviewable one (`NEEDS_REVIEW`) rather than a blindly-retried one. Combined with the pre-existing, unchanged idempotency-key/lock/claim machinery (which already fully closes the "two concurrent executions" class of race), this is the practical, honest AT-MOST-ONCE bar for this architecture.
+## 4. Real executable tests (round 2 — static checks alone were rejected as insufficient)
 
-## 5. Found but NOT fixed tonight (documented, not a duplicate-send risk)
+Codex explicitly required real tests, not static source-pattern checks, for N5 — the ONE deliberate, well-audited exception to this project's "never flip `DRY_RUN=FALSE` locally" policy. `withLiveModeEnabledForTest_` (Tests.gs) resolves all 5 `PENDING_F0` keys, sets `DRY_RUN=FALSE`, and widens the send/reply window to "always open" (so tests are never flaky depending on real wall-clock time), restoring every value in `finally`. New mock capability: `GmailDraft.send()` (creates a real resolvable sent thread, indexes it for search) and a real (if minimal) `GmailApp.search()` implementation (gas-mocks.js).
 
-`reconcileStaleLiveClaims_` (Recon.gs, F2 scope, not yet exercised) has two real gaps:
+14 real tests (`test_N5_*`), covering: step-1 send() throwing (with and without the Prospects write also failing), a second execution never re-sending, follow-up reply() throwing, the message-count mismatch (with and without the Prospects write also failing), a second execution never re-replying, the normal confirmed paths (exactly one send / exactly one reply), a confirmed `SENT` key remaining blocked, stale-claim reconciliation with zero search results / a search error / exactly one match, and confirming neither `nightlyRecon` nor `dailyDigest` ever converts an `AMBIGUOUS` key back to retryable.
 
-1. When it finds exactly one matching sent thread for a stale `CLAIMED` row (`threads.length === 1`), it updates the `SendLedger` row to `SENT` but **never calls `writeRowById_`** to update the Prospects row (Status/Sequence_Step/Thread_ID/Last_Message_ID/Next_Action_Date/StepN_Sent_At) the way `doStep1Send_`/`doFollowUpSend_` do on a normal success. The prospect would remain stuck showing its pre-send state (e.g. `READY`) forever.
-2. Its Gmail search (`'in:sent to:' + email + ' newer_than:2d'`) is not scoped by `Thread_ID` for a follow-up claim, even though the ledger row already records the correct `Thread_ID` at claim time — a more precise, thread-scoped reconciliation is possible and would reduce false "ambiguous" classifications.
+## 5. Mutation coverage
 
-**Why not fixed tonight:** neither gap is a duplicate-send risk — `isLiveKeyClaimedOrSent_` (I13) already independently blocks a resend once the ledger row reaches `SENT`, regardless of whether the Prospects row was updated. It is a data-integrity/stuck-state bug (the prospect never advances), not a safety bug. Fixing and testing it properly needs new local mock capability (a `draft.send()`/`GmailApp.search()` simulation) that didn't exist before tonight and would consume budget better spent (per the stated priority order) on N4 and the remaining phases. Left as a clearly documented follow-up, consistent with this project's own convention of flagging unverified/unfinished items explicitly rather than silently leaving them.
+`test-harness/mutation-test-N5.js` rewritten as a BEHAVIORAL (runtime-suite) mutation test — 4 mutations: AMBIGUOUS removed from the ledger-blocking check; the follow-up reply-throw handler downgraded back to `FAILED`; the Recon zero-result branch reverted to `ABANDONED`; and (the deepest one) the ledger CLAIM itself moved from before the risky Gmail call to after it succeeds, reproducing "no ledger protection exists while a Gmail operation that could have sent is in flight." All 4 independently caught by their intended test, none by accident overlap alone.
 
-## 6. Files changed
+## 6. What AT-MOST-ONCE means here
 
-`Mailer.gs` (the two fixes), `test-harness/verify-static-findings.js` (3 new N5 checks), `test-harness/mutation-test-N5.js` (new).
+Not a database transaction — Apps Script/Gmail offer no such thing. The guarantee: every code path that cannot prove a Gmail send/reply did or did not happen durably blocks that idempotency key **in the ledger**, the one place proven (by test) to hold regardless of any other write's success or failure. Combined with the pre-existing claim-before-attempt ordering and lock/idempotency-key machinery (unchanged, already correct), this is the practical, honest AT-MOST-ONCE bar for this architecture.
 
-## 7. Validation
+## 7. Files changed (round 2)
 
-`node test-harness/verify-static-findings.js` → 16/16 (13 pre-existing + 3 new N5 checks).
-`node test-harness/mutation-test-N5.js` → PASS (2/2 mutations caught).
-Full local suite (`run-f1-tests.js`) unaffected — 55/55 (LIVE code is untouched by any of it, structurally unreachable under DRY_RUN=TRUE).
+`Constants.gs` (AMBIGUOUS state), `Ledger.gs` (rename + AMBIGUOUS in the blocking check), `Mailer.gs` (both ambiguous-outcome sites), `Recon.gs` (stale-claim reconciliation rewrite), `test-harness/gas-mocks.js` (`draft.send()`, `search()`), `Tests.gs` (14 new tests + `withLiveModeEnabledForTest_`), `test-harness/mutation-test-N5.js` (rewritten), `test-harness/verify-static-findings.js` (round-1 checks replaced with a minimal structural sanity check — real tests now carry the actual proof).
 
-## 8. Google-real verification still required before first LIVE email
+## 8. Validation
 
-None of this can be proven against real Gmail concurrency without F2 scope (real trigger installation, real LIVE sends, a real second concurrent execution). That remains a Google-real gate, not something this session can close — see PRODUCTION_CHECKLIST.md.
+Full local suite, static verifier, and every mutation suite (N7, ghost-row, N3, N4, N5, timezone) — all green, confirmed identically under `TZ=America/Chicago`, `TZ=UTC`, `TZ=Asia/Kolkata`. Exact counts in `AUTOPILOT_FIX_REPORT.md`.
+
+## 9. Still Google-real only
+
+Real concurrent Apps Script executions, real Gmail send/reply timing, and real `GmailApp.search()` behavior (indexing delay, query semantics) cannot be proven from this environment. The local mocks now model the HAPPY and the explicitly-specified failure paths faithfully, but this remains a code-level/logical proof, not a live-Gmail one — see `PRODUCTION_CHECKLIST.md`.

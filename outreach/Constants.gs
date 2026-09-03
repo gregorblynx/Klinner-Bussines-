@@ -162,13 +162,35 @@ var OUTCOME_VALUES = ['', 'interested', 'not interested', 'meeting', 'client'];
 
 /** SendLedger enums. */
 var LEDGER_MODE = { LIVE: 'LIVE', DRY_RUN: 'DRY_RUN' };
+/**
+ * N5 (Codex final audit): AMBIGUOUS is the durable, non-retryable state for
+ * a LIVE idempotency key after a Gmail operation that MAY have succeeded
+ * (draft.send() or GmailThread.reply() threw, or returned in a way that
+ * cannot be reliably confirmed) throws or returns an unverifiable outcome.
+ * Unlike FAILED (an ordinary, safely-retryable transient failure — network
+ * blip, quota hiccup — where we KNOW nothing was sent), AMBIGUOUS means we
+ * cannot prove Gmail did NOT act. It is included in isLiveKeyBlocked_'s
+ * check (Ledger.gs) alongside CLAIMED/SENT, so retry is blocked at the
+ * ledger level — the one place that must hold regardless of whether a
+ * secondary Prospects write (Status=NEEDS_REVIEW) succeeds or fails.
+ * Never automatically transitioned away from AMBIGUOUS by any code path —
+ * only a human, reconciling manually, may resolve it.
+ */
 var LEDGER_STATE = {
   CLAIMED: 'CLAIMED',
   SENT: 'SENT',
   DRAFTED: 'DRAFTED',
   SUPERSEDED: 'SUPERSEDED',
   FAILED: 'FAILED',
-  ABANDONED: 'ABANDONED'
+  // N5 (Codex final audit, round 2): no longer written by any code path —
+  // reconcileStaleLiveClaims_ (Recon.gs) used to transition a zero-result
+  // stale claim to ABANDONED, a state isLiveKeyBlocked_ does NOT block on,
+  // which could authorize a genuine duplicate send if the original send
+  // had actually succeeded but was simply invisible to that search. Kept
+  // defined (not deleted) only so the enum remains a stable reference for
+  // any historical row a value like this could already exist in.
+  ABANDONED: 'ABANDONED',
+  AMBIGUOUS: 'AMBIGUOUS'
 };
 
 /**

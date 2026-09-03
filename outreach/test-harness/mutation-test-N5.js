@@ -1,110 +1,199 @@
 'use strict';
 /**
- * N5 (LIVE send concurrency / ambiguous-outcome hardening) mutation test.
+ * N5 (Codex final audit, round 2) BEHAVIORAL mutation test — replaces the
+ * round-1 static-only version. The round-2 audit explicitly required real
+ * executable tests for N5 (test_N5_* in Tests.gs); this mutation test
+ * proves those tests actually catch regressions in the durable-ledger-
+ * blocking design, not just that certain source patterns are present.
  *
- * doStep1Send_/doFollowUpSend_ are LIVE-only and this project's own
- * established policy (see Tests.gs's comment on findings #7/#8, and the
- * matching static checks in verify-static-findings.js) is to never flip
- * DRY_RUN=FALSE even in the local mock harness — so there is no runtime
- * suite to mutation-test against here. Instead this reproduces the SAME
- * static-check logic verify-static-findings.js uses, against a
- * deliberately mutated in-memory copy of Mailer.gs's source, proving the
- * checks actually catch the two regressions they exist to catch:
+ * Four mutations, each targeting a distinct structural property Codex's
+ * final audit named explicitly:
  *
- *   A. doStep1Send_'s send()-failure catch reverted to the old
- *      bare-FAILED-no-NEEDS_REVIEW behavior (retryable, duplicate-send risk).
- *   B. doFollowUpSend_'s message-count-mismatch guard reverted to the old
- *      throw-with-no-NEEDS_REVIEW-write behavior (the originally documented
- *      N5 blocker).
+ *   A. Remove AMBIGUOUS from isLiveKeyBlocked_'s blocking check (Ledger.gs)
+ *      — the ledger-level guard itself disabled.
+ *   B. doFollowUpSend_'s reply()-throw handler downgraded from AMBIGUOUS
+ *      back to FAILED (round-1 bug reintroduced for this specific site).
+ *   C. reconcileStaleLiveClaims_'s zero-search-result branch reverted to
+ *      the dangerous ABANDONED-as-retryable state (Recon.gs).
+ *   D. doStep1Send_'s ledger CLAIM moved from BEFORE the risky Gmail call
+ *      to AFTER it succeeds — reproducing "no ledger protection exists
+ *      while a Gmail operation that could have sent is in flight or
+ *      throws", the deeper architectural property the whole durable-
+ *      blocking design depends on.
  *
  * Run: node test-harness/mutation-test-N5.js
  */
 
+var vm = require('vm');
 var fs = require('fs');
 var path = require('path');
+var mocks = require('./gas-mocks');
 
 var OUTREACH_DIR = path.join(__dirname, '..');
-var ORIGINAL_SOURCE = fs.readFileSync(path.join(OUTREACH_DIR, 'Mailer.gs'), 'utf8');
+var LOAD_ORDER = [
+  'Constants.gs', 'Config.gs', 'Log.gs', 'SheetRepo.gs', 'Schedule.gs', 'Suppression.gs',
+  'Templates.gs', 'Validate.gs', 'StateMachine.gs', 'Ledger.gs', 'ReplySync.gs', 'Recon.gs',
+  'Mailer.gs', 'Digest.gs', 'Menu.gs', 'Triggers.gs', 'Tests.gs'
+];
 
-function checkStep1NeedsReview(source) {
-  var fnStart = source.indexOf('function doStep1Send_(');
-  var fnEnd = source.indexOf('function doFollowUpSend_(');
-  if (fnStart === -1 || fnEnd === -1 || fnEnd <= fnStart) return false;
-  var fnBody = source.slice(fnStart, fnEnd);
-  var catchStart = fnBody.indexOf('catch (sendError)');
-  if (catchStart === -1) return false;
-  var catchBody = fnBody.slice(catchStart);
-  return /LEDGER_STATE\.FAILED/.test(catchBody) &&
-    /Status:\s*STATUS\.NEEDS_REVIEW/.test(catchBody) &&
-    /origin:\s*ORIGIN\.PIPELINE,\s*operation:\s*OPERATION\.PIPELINE_SEND/.test(catchBody);
-}
-
-function checkFollowUpNeedsReview(source) {
-  var fnStart = source.indexOf('function doFollowUpSend_(');
-  var fnEnd = source.indexOf('executeLiveSendForStep_ = function');
-  if (fnStart === -1 || fnEnd === -1 || fnEnd <= fnStart) return false;
-  var fnBody = source.slice(fnStart, fnEnd);
-  var guardStart = fnBody.indexOf('messagesAfter.length !== messagesBefore + 1');
-  if (guardStart === -1) return false;
-  var guardBody = fnBody.slice(guardStart, guardStart + 1500);
-  return /LEDGER_STATE\.FAILED/.test(guardBody) &&
-    /Status:\s*STATUS\.NEEDS_REVIEW/.test(guardBody) &&
-    /origin:\s*ORIGIN\.PIPELINE,\s*operation:\s*OPERATION\.PIPELINE_SEND/.test(guardBody);
+function runSuite(mutators) {
+  var sandbox = mocks.buildSandbox();
+  var context = vm.createContext(sandbox);
+  LOAD_ORDER.forEach(function (filename) {
+    var source = fs.readFileSync(path.join(OUTREACH_DIR, filename), 'utf8');
+    if (mutators && mutators[filename]) source = mutators[filename](source);
+    new vm.Script(source, { filename: filename }).runInContext(context);
+  });
+  var originalLog = console.log;
+  console.log = function () {};
+  context.initializeSheets();
+  var result = context.runAllF1Tests();
+  console.log = originalLog;
+  return result;
 }
 
 function replaceOrThrow(source, label, oldStr, newStr) {
-  if (source.indexOf(oldStr) === -1) throw new Error('Mutation ' + label + ': expected text not found — Mailer.gs may have changed shape.');
+  if (source.indexOf(oldStr) === -1) throw new Error('Mutation ' + label + ': expected text not found — source may have changed shape.');
   return source.replace(oldStr, newStr);
 }
 
-// --- Mutation A: revert doStep1Send_'s catch to the old bare-FAILED behavior. ---
-var STEP1_CATCH_OLD_STYLE_MARKER = "      try {\n        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },\n          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });\n      } catch (writeError) {\n        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,\n          'doStep1Send_: ALSO failed to write NEEDS_REVIEW after an ambiguous send failure: ' + writeError +\n          ' — this prospect may remain automatically retryable. NEEDS MANUAL REVIEW.');\n      }\n";
-function mutationA_removeStep1NeedsReview(source) {
-  return replaceOrThrow(source, 'A', STEP1_CATCH_OLD_STYLE_MARKER, '      // MUTATION A: NEEDS_REVIEW write removed — reverts to the old retryable-on-ambiguous-failure bug.\n');
+// --- Mutation A: remove AMBIGUOUS from isLiveKeyBlocked_'s check (Ledger.gs). ---
+function mutationA_removeAmbiguousFromBlockingCheck(source) {
+  return replaceOrThrow(source, 'A',
+    "    if (v.Idempotency_Key === key && v.Mode === LEDGER_MODE.LIVE &&\n" +
+    "        (v.State === LEDGER_STATE.CLAIMED || v.State === LEDGER_STATE.SENT || v.State === LEDGER_STATE.AMBIGUOUS)) {",
+    "    if (v.Idempotency_Key === key && v.Mode === LEDGER_MODE.LIVE &&\n" +
+    "        (v.State === LEDGER_STATE.CLAIMED || v.State === LEDGER_STATE.SENT /* MUTATION A: AMBIGUOUS removed */)) {");
 }
 
-// --- Mutation B: revert doFollowUpSend_'s mismatch guard to the old throw-only behavior. ---
-var FOLLOWUP_GUARD_NEEDS_REVIEW_MARKER = "      try {\n        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },\n          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });\n      } catch (writeError) {\n        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,\n          'doFollowUpSend_: ALSO failed to write NEEDS_REVIEW after an ambiguous reply() outcome: ' + writeError +\n          ' — this prospect may remain automatically retryable. NEEDS MANUAL REVIEW.');\n      }\n";
-function mutationB_removeFollowUpNeedsReview(source) {
-  return replaceOrThrow(source, 'B', FOLLOWUP_GUARD_NEEDS_REVIEW_MARKER, '      // MUTATION B: NEEDS_REVIEW write removed — reverts to the original documented N5 blocker.\n');
+// --- Mutation B: doFollowUpSend_'s reply()-throw handler downgraded to FAILED (Mailer.gs). ---
+function mutationB_followUpReplyThrowDowngradedToFailed(source) {
+  return replaceOrThrow(source, 'B',
+    "      updateLedgerRow_(ledgerRowNum, {\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: String(replyError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'\n" +
+    "      });",
+    "      updateLedgerRow_(ledgerRowNum, {\n" +
+    "        State: LEDGER_STATE.FAILED, // MUTATION B: downgraded — no longer blocks isLiveKeyBlocked_.\n" +
+    "        Error: String(replyError)\n" +
+    "      });");
+}
+
+// --- Mutation C: reconcileStaleLiveClaims_'s zero-result branch reverted to ABANDONED (Recon.gs). ---
+function mutationC_reconZeroResultBackToAbandoned(source) {
+  return replaceOrThrow(source, 'C',
+    "    if (threads.length === 1) {\n" +
+    "      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });\n" +
+    "      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step,\n" +
+    "        'Reconciled from stale claim: exactly one positive match found.');\n" +
+    "    } else {\n" +
+    "      var reason = threads.length === 0\n" +
+    "        ? 'zero matching sent messages found (absence of a search hit is not proof nothing was sent)'\n" +
+    "        : threads.length + ' ambiguous matching sent messages found (cannot determine which is ours)';\n" +
+    "      updateLedgerRow_(row.rowIndex, {\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: 'Stale CLAIMED, ' + reason + ' — durably blocked, needs manual reconciliation.'\n" +
+    "      });",
+    "    if (threads.length === 1) {\n" +
+    "      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });\n" +
+    "      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step,\n" +
+    "        'Reconciled from stale claim: exactly one positive match found.');\n" +
+    "    } else if (threads.length === 0) {\n" +
+    "      // MUTATION C: reverted to the dangerous round-1 bug — a negative\n" +
+    "      // search authorizes ABANDONED, which isLiveKeyBlocked_ does NOT block on.\n" +
+    "      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.ABANDONED });\n" +
+    "    } else {\n" +
+    "      var reason = threads.length + ' ambiguous matching sent messages found (cannot determine which is ours)';\n" +
+    "      updateLedgerRow_(row.rowIndex, {\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: 'Stale CLAIMED, ' + reason + ' — durably blocked, needs manual reconciliation.'\n" +
+    "      });");
+}
+
+// --- Mutation D: doStep1Send_'s ledger CLAIM moved to AFTER send() succeeds (Mailer.gs). ---
+function mutationD_claimMovedAfterSend(source) {
+  var s = source;
+  s = replaceOrThrow(s, 'D1',
+    "  function doStep1Send_(prospectId, prospect, rendered, config) {\n" +
+    "    var ledgerRowNum = appendLedgerRow_({\n" +
+    "      Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,\n" +
+    "      Step: 1, Idempotency_Key: getIdempotencyKey_(prospectId, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,\n" +
+    "      Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''\n" +
+    "    });\n",
+    "  function doStep1Send_(prospectId, prospect, rendered, config) {\n" +
+    "    // MUTATION D: claim removed from here — no ledger protection exists\n" +
+    "    // while send() is in flight or if it throws.\n" +
+    "    var ledgerRowNum = null;\n");
+  s = replaceOrThrow(s, 'D2',
+    "      var compensated = false;\n" +
+    "      try { draft.deleteDraft(); compensated = true; } catch (deleteError) { compensated = false; }\n" +
+    "      updateLedgerRow_(ledgerRowNum, {\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: String(sendError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'\n" +
+    "      });",
+    "      var compensated = false;\n" +
+    "      try { draft.deleteDraft(); compensated = true; } catch (deleteError) { compensated = false; }\n" +
+    "      if (ledgerRowNum) updateLedgerRow_(ledgerRowNum, { // MUTATION D: no-op — ledgerRowNum is null.\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: String(sendError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'\n" +
+    "      });");
+  s = replaceOrThrow(s, 'D3',
+    "    updateLedgerRow_(ledgerRowNum, {\n" +
+    "      State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: new Date()\n" +
+    "    });",
+    "    if (ledgerRowNum) {\n" +
+    "      updateLedgerRow_(ledgerRowNum, {\n" +
+    "        State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: new Date()\n" +
+    "      });\n" +
+    "    } else {\n" +
+    "      appendLedgerRow_({ // MUTATION D: claimed only NOW, after send() already succeeded.\n" +
+    "        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,\n" +
+    "        Step: 1, Idempotency_Key: getIdempotencyKey_(prospectId, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.SENT,\n" +
+    "        Thread_ID: thread.getId(), Message_ID: message.getId(), Draft_ID: '', Confirmed_At: new Date(), Error: ''\n" +
+    "      });\n" +
+    "    }");
+  return s;
 }
 
 var MUTATIONS = [
-  { label: 'A (doStep1Send_ NEEDS_REVIEW removed)', mutate: mutationA_removeStep1NeedsReview, check: checkStep1NeedsReview },
-  { label: 'B (doFollowUpSend_ NEEDS_REVIEW removed)', mutate: mutationB_removeFollowUpNeedsReview, check: checkFollowUpNeedsReview }
+  { label: 'A (AMBIGUOUS removed from isLiveKeyBlocked_)', file: 'Ledger.gs', mutate: mutationA_removeAmbiguousFromBlockingCheck, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
+  { label: 'B (follow-up reply-throw downgraded to FAILED)', file: 'Mailer.gs', mutate: mutationB_followUpReplyThrowDowngradedToFailed, mustBeCaughtBy: 'N5_followUpThrowsDurableBlock' },
+  { label: 'C (recon zero-result reverted to ABANDONED)', file: 'Recon.gs', mutate: mutationC_reconZeroResultBackToAbandoned, mustBeCaughtBy: 'N5_reconZeroSearchNeverRetryable' },
+  { label: 'D (claim moved to after send() succeeds)', file: 'Mailer.gs', mutate: mutationD_claimMovedAfterSend, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' }
 ];
 
 var allPassed = true;
-console.log('=== N5 mutation test (LIVE send ambiguous-outcome hardening, static) ===\n');
+console.log('=== N5 behavioral mutation test (durable ledger blocking) ===\n');
 
-var baselineA = checkStep1NeedsReview(ORIGINAL_SOURCE);
-var baselineB = checkFollowUpNeedsReview(ORIGINAL_SOURCE);
-console.log('Baseline: step1 check=' + baselineA + ', followUp check=' + baselineB);
-if (!baselineA || !baselineB) { console.log('FAIL — baseline checks are not both green.'); allPassed = false; }
+var baseline = runSuite(null);
+console.log('Baseline (no mutation): ' + baseline.passed + '/' + baseline.total);
+if (baseline.passed !== baseline.total) { console.log('FAIL — baseline suite is not green.'); allPassed = false; }
 
 MUTATIONS.forEach(function (m) {
-  var mutatedSource;
+  var mutated;
   try {
-    mutatedSource = m.mutate(ORIGINAL_SOURCE);
+    var mutators = {};
+    mutators[m.file] = m.mutate;
+    mutated = runSuite(mutators);
   } catch (e) {
     console.log('Mutation ' + m.label + ': THREW — ' + e.message);
     allPassed = false;
     return;
   }
-  var result = m.check(mutatedSource);
-  console.log('Mutation ' + m.label + ': check result=' + result + (result ? ' — *** NOT CAUGHT ***' : ' — caught (check correctly fails).'));
-  if (result) {
-    console.log('FAIL — this mutation must make its corresponding check fail.');
+  var failed = mutated.results.filter(function (r) { return !r.passed; }).map(function (r) { return r.name; });
+  console.log('Mutation ' + m.label + ': ' + mutated.passed + '/' + mutated.total +
+    (failed.length ? ' — caught by: ' + failed.join(', ') : ' — *** NOT CAUGHT ***'));
+  if (failed.indexOf(m.mustBeCaughtBy) === -1) {
+    console.log('FAIL — ' + m.mustBeCaughtBy + ' must catch this mutation.');
     allPassed = false;
   } else {
-    console.log('PASS — mutation caught.');
+    console.log('PASS — ' + m.mustBeCaughtBy + ' caught the regression.');
   }
 });
 
-var restoredA = checkStep1NeedsReview(ORIGINAL_SOURCE);
-var restoredB = checkFollowUpNeedsReview(ORIGINAL_SOURCE);
-console.log('Restored (unmutated, re-checked): step1=' + restoredA + ', followUp=' + restoredB);
-if (!restoredA || !restoredB) { console.log('FAIL — original source no longer passes its own checks.'); allPassed = false; }
+var restored = runSuite(null);
+console.log('Restored (unmutated): ' + restored.passed + '/' + restored.total);
+if (restored.passed !== restored.total) { console.log('FAIL — restoring the original source did not return the suite to green.'); allPassed = false; }
 
-console.log('\n' + (allPassed ? 'N5 MUTATION TEST: PASS' : 'N5 MUTATION TEST: FAIL'));
+console.log('\n' + (allPassed ? 'N5 BEHAVIORAL MUTATION TEST: PASS' : 'N5 BEHAVIORAL MUTATION TEST: FAIL'));
 if (!allPassed) process.exitCode = 1;

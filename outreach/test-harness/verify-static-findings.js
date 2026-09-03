@@ -116,56 +116,28 @@ check(
   /Message_ID:\s*sentMessage\.getId\(\)/.test(MAILER_SOURCE)
 );
 
-// --- N5: LIVE send concurrency/ambiguous-outcome hardening. Like finding
-// #7/#8 above, doStep1Send_/doFollowUpSend_ are LIVE-only and this project's
-// own established policy (see Tests.gs's comment on findings #7/#8) is to
-// never flip DRY_RUN=FALSE even in the local mock harness — so these are
-// verified statically, the same accepted method already used for #7/#8.
-
-// doStep1Send_'s send() failure handler must route the prospect into
-// NEEDS_REVIEW (not leave it silently retryable) — proves the ambiguous-
-// outcome fix is actually wired to the one call site that can duplicate a
-// real step-1 send.
+// --- N5: LIVE send concurrency/ambiguous-outcome hardening.
+// Round 1 verified this statically (findings #7/#8's established method,
+// since this project's policy was to never flip DRY_RUN=FALSE even
+// locally). Round 2 (Codex final audit) explicitly required REAL
+// executable tests instead — static checks alone were found insufficient
+// (they can't prove the durable-ledger-blocking property actually holds
+// across a second execution). See test_N5_* in Tests.gs and
+// mutation-test-N5.js for the real, behavioral coverage. Kept here only as
+// a minimal structural sanity check that both ambiguous-outcome sites
+// still reference the durable AMBIGUOUS state at all (round 1's precise
+// FAILED-pattern checks are gone — they'd need updating every time the
+// surrounding code shape changes, exactly the fragility real tests avoid).
 check(
-  'N5: doStep1Send_\'s send() failure handler writes Status: STATUS.NEEDS_REVIEW (ambiguous-outcome fix)',
+  'N5: both doStep1Send_ and doFollowUpSend_ reference LEDGER_STATE.AMBIGUOUS (durable ledger blocking, not just a Prospects write)',
   (function () {
     var fnStart = MAILER_SOURCE.indexOf('function doStep1Send_(');
-    var fnEnd = MAILER_SOURCE.indexOf('function doFollowUpSend_(');
-    if (fnStart === -1 || fnEnd === -1 || fnEnd <= fnStart) return false;
-    var fnBody = MAILER_SOURCE.slice(fnStart, fnEnd);
-    var catchStart = fnBody.indexOf('catch (sendError)');
-    if (catchStart === -1) return false;
-    var catchBody = fnBody.slice(catchStart);
-    return /LEDGER_STATE\.FAILED/.test(catchBody) &&
-      /Status:\s*STATUS\.NEEDS_REVIEW/.test(catchBody) &&
-      /origin:\s*ORIGIN\.PIPELINE,\s*operation:\s*OPERATION\.PIPELINE_SEND/.test(catchBody);
-  })()
-);
-
-// doFollowUpSend_'s message-count-mismatch guard (the documented N5 race)
-// must ALSO route the prospect into NEEDS_REVIEW, not just mark the ledger
-// row FAILED (which alone would still be automatically retryable).
-check(
-  'N5: doFollowUpSend_\'s message-count-mismatch guard writes Status: STATUS.NEEDS_REVIEW (closes the documented race)',
-  (function () {
-    var fnStart = MAILER_SOURCE.indexOf('function doFollowUpSend_(');
     var fnEnd = MAILER_SOURCE.indexOf('executeLiveSendForStep_ = function');
     if (fnStart === -1 || fnEnd === -1 || fnEnd <= fnStart) return false;
-    var fnBody = MAILER_SOURCE.slice(fnStart, fnEnd);
-    var guardStart = fnBody.indexOf('messagesAfter.length !== messagesBefore + 1');
-    if (guardStart === -1) return false;
-    var guardBody = fnBody.slice(guardStart, guardStart + 1500);
-    return /LEDGER_STATE\.FAILED/.test(guardBody) &&
-      /Status:\s*STATUS\.NEEDS_REVIEW/.test(guardBody) &&
-      /origin:\s*ORIGIN\.PIPELINE,\s*operation:\s*OPERATION\.PIPELINE_SEND/.test(guardBody);
+    var liveClosureBody = MAILER_SOURCE.slice(fnStart, fnEnd);
+    var occurrences = liveClosureBody.split('LEDGER_STATE.AMBIGUOUS').length - 1;
+    return occurrences >= 2; // doStep1Send_'s catch + doFollowUpSend_'s reply-throw + mismatch guard (>=2, normally 3).
   })()
-);
-
-// The old, unsafe pattern (throw immediately with NO Prospects write, only
-// a bare ledger FAILED mark) must be gone from the mismatch guard.
-check(
-  'N5: the old un-guarded "throw new Error(...)" with no NEEDS_REVIEW write is gone from the mismatch guard',
-  !/Error:\s*'Unexpected message count after reply\(\)\.'\s*\}\);\s*\n\s*throw new Error/.test(MAILER_SOURCE)
 );
 
 var failed = checks.filter(function (c) { return !c.passed; });

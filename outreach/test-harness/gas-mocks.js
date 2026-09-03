@@ -300,6 +300,7 @@ function createMockGmailApp() {
   var threadCounter = 0;
   var labels = {};
   var threads = {}; // id -> thread mock, for _seedLiveThread / getThreadById
+  var sentIndex = []; // {recipientEmail, thread} — backs search(), populated by draft.send()
 
   function makeMessage(from, to, subject, body) {
     messageCounter++;
@@ -328,7 +329,32 @@ function createMockGmailApp() {
         var idx = drafts.indexOf(draft);
         if (idx !== -1) drafts.splice(idx, 1);
       },
-      getMessage: function () { return message; }
+      getMessage: function () { return message; },
+      /**
+       * N5 (Codex final audit, round 2 — real executable tests): real
+       * GmailDraft.send() sends the draft and returns the resulting
+       * GmailMessage. Consumes the draft (removed from the drafts list —
+       * a sent draft is no longer a draft) and creates a real, resolvable
+       * thread (getThreadById can find it afterward) with exactly one
+       * message. Also indexes it so GmailApp.search('in:sent to:...')
+       * can find it — real reconciliation-path testing needs this.
+       */
+      send: function () {
+        var idx = drafts.indexOf(draft);
+        if (idx !== -1) drafts.splice(idx, 1);
+        threadCounter++;
+        var threadId = 'sent-thread-' + threadCounter;
+        var sentThread = {
+          getId: function () { return threadId; },
+          getMessages: function () { return [message]; },
+          getLabels: function () { return []; },
+          addLabel: function () {}
+        };
+        message._ownerThread = sentThread;
+        threads[threadId] = sentThread;
+        sentIndex.push({ recipientEmail: String(to || '').toLowerCase(), thread: sentThread });
+        return message;
+      }
     };
     message._ownerThread = thread || { getId: function () { return 'thread-for-' + id; } };
     message.getThread = function () { return message._ownerThread; };
@@ -339,6 +365,7 @@ function createMockGmailApp() {
   return {
     _drafts: drafts,
     _threads: threads,
+    _sentIndex: sentIndex,
     createDraft: function (to, subject, body) {
       return makeDraft(to, subject, body, null);
     },
@@ -353,7 +380,21 @@ function createMockGmailApp() {
     getThreadById: function (id) {
       return threads[id] || null;
     },
-    search: function () { return []; },
+    /**
+     * N5: real (if minimal) query support — parses `to:<email>` out of the
+     * query string (the only clause reconcileStaleLiveClaims_ actually
+     * uses) and returns every sent thread recorded for that recipient by
+     * draft.send() above. `newer_than:` is deliberately NOT enforced (this
+     * mock has no notion of "now" independent of what a test seeds) —
+     * tests control what's in the index directly, which is a stronger,
+     * more explicit form of control than simulating a date filter would be.
+     */
+    search: function (query) {
+      var m = /to:(\S+)/.exec(String(query || ''));
+      if (!m) return [];
+      var email = m[1].toLowerCase();
+      return sentIndex.filter(function (s) { return s.recipientEmail === email; }).map(function (s) { return s.thread; });
+    },
     /**
      * Test-only helper: seeds a fake existing LIVE thread with one prior
      * outbound message, so tests can exercise thread.reply()/

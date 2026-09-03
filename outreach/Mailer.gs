@@ -855,37 +855,52 @@ var executeLiveSendForStep_;
     try {
       message = draft.send();
     } catch (sendError) {
-      // N5 (Codex final audit): draft.send() throwing does NOT prove the
-      // email was never sent — there is no distributed transaction between
-      // Apps Script and Gmail, so a thrown exception here could still
-      // correspond to a real send having completed server-side. Plain
-      // LEDGER_STATE.FAILED is retryable (I13's isLiveKeyClaimedOrSent_
-      // check only excludes CLAIMED/SENT), so a later sendBatch run would
-      // call doStep1Send_ again for the SAME prospect — a real risk of a
-      // duplicate real step-1 email. Never retry blindly on an ambiguous
-      // outcome: stop the prospect into NEEDS_REVIEW (same
-      // structurally-excludes-it-from-eligibility pattern doFollowUpSend_
-      // already uses for its own getThreadById-null case below) so a human
-      // must reconcile it (check the Sent folder, or nightlyRecon's
-      // reconcileStaleLiveClaims_) before this prospect is ever touched again.
+      // N5 (Codex final audit, round 2 — durable ledger blocking): draft.send()
+      // throwing does NOT prove the email was never sent — there is no
+      // distributed transaction between Apps Script and Gmail, so a thrown
+      // exception here could still correspond to a real send having
+      // completed server-side.
+      //
+      // THE PRINCIPLE: after invoking a Gmail operation that could have
+      // sent, if the outcome is uncertain, the idempotency key must become
+      // DURABLY BLOCKED — in the ledger itself, not merely via a second
+      // write to Prospects. The ledger row is ALREADY State=CLAIMED at
+      // this point (appended above, before send() was even called), and
+      // CLAIMED is already one of the states isLiveKeyBlocked_ treats as
+      // blocking — so simply NOT downgrading it away from a blocking state
+      // would already be safe. We go further and mark it AMBIGUOUS
+      // explicitly (still blocking, per Ledger.gs) purely for audit
+      // clarity: a human reading SendLedger can tell "send() was invoked
+      // and its outcome is unknown" apart from "still in flight" or a
+      // stale abandoned claim. The OLD code marked this FAILED — a state
+      // isLiveKeyBlocked_ deliberately does NOT block on, because FAILED
+      // means "we KNOW nothing was sent" — which is false here. Marking
+      // this row FAILED, as the old code did, silently discarded the
+      // blocking protection CLAIMED already provided.
+      //
+      // The Prospects NEEDS_REVIEW write below is a SECONDARY, OPERATIONAL
+      // signal only (for dashboards/human review) — its success or failure
+      // has NO bearing on whether a retry is possible: the ledger AMBIGUOUS
+      // state alone is what executeLiveSendForStep_'s isLiveKeyBlocked_
+      // check enforces, unconditionally, on every future attempt.
       var compensated = false;
       try { draft.deleteDraft(); compensated = true; } catch (deleteError) { compensated = false; }
       updateLedgerRow_(ledgerRowNum, {
-        State: LEDGER_STATE.FAILED,
-        Error: String(sendError) + ' (ambiguous outcome — routed to NEEDS_REVIEW, not left automatically retryable)'
+        State: LEDGER_STATE.AMBIGUOUS,
+        Error: String(sendError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'
       });
       try {
         writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
           { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
       } catch (writeError) {
         logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
-          'doStep1Send_: ALSO failed to write NEEDS_REVIEW after an ambiguous send failure: ' + writeError +
-          ' — this prospect may remain automatically retryable. NEEDS MANUAL REVIEW.');
+          'doStep1Send_: the Prospects NEEDS_REVIEW write ALSO failed after an ambiguous send failure: ' + writeError +
+          ' — this is a SECONDARY signal only; the ledger AMBIGUOUS state (already written above) still blocks retry regardless. NEEDS MANUAL REVIEW.');
       }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
         'send() failed after draft creation. compensated=' + compensated +
         (compensated ? '' : ' — ORPHANED UNSENT DRAFT, NEEDS MANUAL REVIEW.') + ' error=' + sendError +
-        '. Ambiguous outcome — stopped into NEEDS_REVIEW rather than left automatically retryable.');
+        '. Ambiguous outcome — durably blocked in SendLedger (AMBIGUOUS), never automatically retryable.');
       throw sendError;
     }
 
@@ -920,32 +935,36 @@ var executeLiveSendForStep_;
    * in between). No Message_ID is invented.
    *
    * ==========================================================================
-   * N5 CLOSED (Codex final audit — was: BLOCKER BEFORE FIRST LIVE EMAIL).
-   * This function is still unreachable in F1 (DRY_RUN=TRUE + 5 unresolved
-   * PENDING_F0 keys both block performLiveSend_ before this code can ever
-   * run) but the race documented below is now closed via direction (a)
-   * from the original finding — see the guard immediately after this
-   * docstring.
+   * N5 CLOSED, round 2 (Codex final audit — was: BLOCKER BEFORE FIRST LIVE
+   * EMAIL). This function is still unreachable in F1 (DRY_RUN=TRUE + 5
+   * unresolved PENDING_F0 keys both block performLiveSend_ before this
+   * code can ever run) but every ambiguous outcome below now durably
+   * blocks the ledger row itself (LEDGER_STATE.AMBIGUOUS — see
+   * Constants.gs/Ledger.gs), not merely a secondary Prospects write.
    *
-   * The race: "nothing else can have appended a message in between" above
-   * assumes no inbound reply lands in the same thread in the narrow window
-   * between thread.reply() returning and the immediately-following
-   * getMessages() call. If a real inbound reply DOES land in that window,
-   * messagesAfter.length will be messagesBefore + 2, not + 1.
+   * TWO ambiguous outcomes are handled identically, both ending in
+   * AMBIGUOUS:
+   *   1. thread.reply() itself THROWS — we don't know if Gmail published
+   *      the reply before/during/after the throw.
+   *   2. thread.reply() RETURNS but the message-count guard below trips
+   *      ("nothing else can have appended a message in between" assumes no
+   *      inbound reply lands in the narrow window between reply()
+   *      returning and the immediately-following getMessages() call — if
+   *      one does, messagesAfter.length is off by more than 1). reply()
+   *      DID return successfully here, so a message was almost certainly
+   *      sent — we just cannot prove which one is ours.
    *
-   * FAILED alone is retryable (isLiveKeyClaimedOrSent_ / I13 only excludes
-   * CLAIMED/SENT) — that is correct for ordinary transient failures
-   * (network error, quota hiccup), which SHOULD be retryable. But this
-   * specific failure is ambiguous, not transient: reply() DID return
-   * successfully, so a message was almost certainly sent — we just cannot
-   * prove which one is ours. Leaving it FAILED-and-retryable would let a
-   * later sendBatch run call doFollowUpSend_ again for the SAME prospect —
-   * a real duplicate-send risk. The fix: ALSO stop the prospect into
-   * NEEDS_REVIEW (same pattern as the getThreadById-null case above),
-   * which structurally excludes it from getNextStepNumber_/canSend_/
-   * isEligibleForNextStep_ until a human reconciles it — no automatic
-   * retry is possible once this write succeeds, regardless of the ledger
-   * row's retryable FAILED state.
+   * Round 1 (previous audit) marked both cases LEDGER_STATE.FAILED, which
+   * isLiveKeyBlocked_ (Ledger.gs) does NOT treat as blocking — FAILED
+   * means "we KNOW nothing was sent", which is false for an ambiguous
+   * outcome. Round 1 then relied ENTIRELY on a second write
+   * (Prospects.Status=NEEDS_REVIEW) to prevent a retry — if THAT write
+   * also failed (Sheets API error, quota, anything), the prospect could
+   * stay eligible and a later sendBatch run could send a SECOND real
+   * follow-up. Round 2 closes this at the source: the ledger row is marked
+   * AMBIGUOUS (a durably blocking state, enforced by isLiveKeyBlocked_
+   * regardless of what happens to Prospects), and the Prospects
+   * NEEDS_REVIEW write is now purely a secondary, operational signal.
    * ==========================================================================
    */
   function doFollowUpSend_(prospectId, step, prospect, rendered, config) {
@@ -970,34 +989,46 @@ var executeLiveSendForStep_;
     try {
       repliedThread = thread.reply(rendered.body); // Returns GmailThread, not GmailMessage — see docstring.
     } catch (replyError) {
-      updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.FAILED, Error: String(replyError) });
-      throw replyError;
-    }
-
-    var messagesAfter = repliedThread.getMessages();
-    if (messagesAfter.length !== messagesBefore + 1) {
-      // N5: ambiguous outcome — never invent a Message_ID, and never leave
-      // this automatically retryable (see the docstring above). Stop the
-      // prospect into NEEDS_REVIEW in ADDITION to marking the ledger row
-      // FAILED, so canSend_/isEligibleForNextStep_ structurally refuse to
-      // touch it again until a human reconciles it.
+      // N5: reply() itself threw — durably block first (ledger), Prospects
+      // NEEDS_REVIEW second, purely as an operational signal. See docstring.
       updateLedgerRow_(ledgerRowNum, {
-        State: LEDGER_STATE.FAILED,
-        Error: 'Unexpected message count after reply() — ambiguous outcome, routed to NEEDS_REVIEW.'
+        State: LEDGER_STATE.AMBIGUOUS,
+        Error: String(replyError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'
       });
       try {
         writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
           { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
       } catch (writeError) {
         logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-          'doFollowUpSend_: ALSO failed to write NEEDS_REVIEW after an ambiguous reply() outcome: ' + writeError +
-          ' — this prospect may remain automatically retryable. NEEDS MANUAL REVIEW.');
+          'doFollowUpSend_: the Prospects NEEDS_REVIEW write ALSO failed after reply() threw: ' + writeError +
+          ' — this is a SECONDARY signal only; the ledger AMBIGUOUS state (already written above) still blocks retry regardless. NEEDS MANUAL REVIEW.');
+      }
+      throw replyError;
+    }
+
+    var messagesAfter = repliedThread.getMessages();
+    if (messagesAfter.length !== messagesBefore + 1) {
+      // N5: ambiguous outcome — never invent a Message_ID, and never leave
+      // this automatically retryable. Durably block the ledger row itself
+      // FIRST (AMBIGUOUS, not FAILED — see docstring); Prospects
+      // NEEDS_REVIEW is a secondary, operational signal only.
+      updateLedgerRow_(ledgerRowNum, {
+        State: LEDGER_STATE.AMBIGUOUS,
+        Error: 'Unexpected message count after reply() — ambiguous outcome, durably blocked in the ledger.'
+      });
+      try {
+        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+      } catch (writeError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'doFollowUpSend_: the Prospects NEEDS_REVIEW write ALSO failed after an ambiguous reply() outcome: ' + writeError +
+          ' — this is a SECONDARY signal only; the ledger AMBIGUOUS state (already written above) still blocks retry regardless. NEEDS MANUAL REVIEW.');
       }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
         'doFollowUpSend_: could not reliably identify the message reply() just created ' +
         '(expected ' + (messagesBefore + 1) + ' messages, found ' + messagesAfter.length + '). ' +
-        'Ambiguous — may have actually sent. Stopped into NEEDS_REVIEW, not retried automatically.');
-      throw new Error('doFollowUpSend_: ambiguous outcome after reply() — stopped into NEEDS_REVIEW, see Log.');
+        'Ambiguous — may have actually sent. Durably blocked in SendLedger (AMBIGUOUS), not retried automatically.');
+      throw new Error('doFollowUpSend_: ambiguous outcome after reply() — durably blocked in SendLedger, see Log.');
     }
     var sentMessage = messagesAfter[messagesAfter.length - 1];
 
@@ -1055,7 +1086,11 @@ var executeLiveSendForStep_;
           logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SKIP, prospectId, prospect.Email_Normalized, step, 'SKIP:not_eligible (canSend_)');
           return { status: 'SKIPPED_NOT_ELIGIBLE' };
         }
-        if (isLiveKeyClaimedOrSent_(prospectId, step)) {
+        if (isLiveKeyBlocked_(prospectId, step)) {
+          // N5: blocks on CLAIMED, SENT, or AMBIGUOUS (Ledger.gs) — this is
+          // the ONE check that must hold regardless of canSend_'s result
+          // above (a stuck Prospects write could leave canSend_ returning
+          // true even for an ambiguous key; the ledger is the real gate).
           return { status: 'SKIPPED_ALREADY_CLAIMED' };
         }
 
