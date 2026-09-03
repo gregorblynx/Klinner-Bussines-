@@ -1,8 +1,8 @@
 'use strict';
 /**
  * N3 V3 (Codex final audit — durable Gmail preview ownership, hardened)
- * mutation test. Proves SIX independent protections are load-bearing, each
- * caught by a distinct, narrow test:
+ * mutation test. Proves SEVEN independent protections are load-bearing,
+ * each caught by a distinct, narrow test:
  *
  *   A. Removing the durable-preserve branch in resolveExistingPreviewDraft_
  *      must break N3_caso2_messageIdRotates.
@@ -20,6 +20,10 @@
  *   F. Disabling previewStep's fail-closed creation-metadata guard (so a
  *      "healthy" DRAFTED row with a blank fingerprint can be written
  *      again) must break the creation-failure tests.
+ *   G. (round 2) Reintroducing the orphan-draft gap — a post-creation
+ *      Gmail read moved back OUTSIDE previewStep()'s unified protected
+ *      block — must break the getThread()-failure test (the exception
+ *      would otherwise escape uncaught).
  *
  * Run: node test-harness/mutation-test-N3.js
  */
@@ -190,13 +194,25 @@ function mutationF_disableCreationFailClosedGuard(source) {
     'if (false) { // MUTATION F: fail-closed guard disabled — old best-effort-silent behavior.');
 }
 
+// --- Mutation G (round 2, orphan-draft gap): reintroduce the unprotected
+// post-creation getThread().getId() read into createPreviewDraft_ itself,
+// escaping previewStep()'s unified fail-closed block entirely. ---
+function mutationG_reintroduceOrphanDraftGap(source) {
+  var s = replaceOrThrow(source, 'G1',
+    "  return { skipped: false, draft: standaloneDraft, usedThreadId: null }; // Resolved by previewStep(), fail-closed.",
+    "  // MUTATION G: read reintroduced HERE — outside previewStep()'s protected block.\n" +
+    "  return { skipped: false, draft: standaloneDraft, usedThreadId: standaloneDraft.getMessage().getThread().getId() };");
+  return s;
+}
+
 var MUTATIONS = [
   { label: 'A (remove durable-preserve guard)', file: 'Mailer.gs', mutate: mutationA_removeDurablePreserveGuard, mustBeCaughtBy: 'N3_caso2_messageIdRotates' },
   { label: 'B (neuter fingerprint comparison)', file: 'Mailer.gs', mutate: mutationB_neuterFingerprintComparison, mustBeCaughtBy: 'N3_caso3_messageIdStable' },
   { label: 'C (permissive getId() fallback)', file: 'Mailer.gs', mutate: mutationC_permissiveGetIdFallback, mustBeCaughtBy: 'N3_caso8_messageIdError' },
   { label: 'D (blank fingerprint = unedited)', file: 'Mailer.gs', mutate: mutationD_blankFingerprintTreatedAsUnedited, mustBeCaughtBy: 'N3v3_legacyRosaKnownEdit' },
   { label: 'E (partial-transition safety removed)', file: 'Ledger.gs', mutate: mutationE_revertPartialFailureOrdering, mustBeCaughtBy: 'N3v3_appendFailureLeavesOldRowIntact' },
-  { label: 'F (healthy DRAFTED with blank fingerprint allowed)', file: 'Mailer.gs', mutate: mutationF_disableCreationFailClosedGuard, mustBeCaughtBy: 'N3v3_creationFailureCompensated' }
+  { label: 'F (healthy DRAFTED with blank fingerprint allowed)', file: 'Mailer.gs', mutate: mutationF_disableCreationFailClosedGuard, mustBeCaughtBy: 'N3v3_creationFailureCompensated' },
+  { label: 'G (orphan-draft gap reintroduced)', file: 'Mailer.gs', mutate: mutationG_reintroduceOrphanDraftGap, mustBeCaughtBy: 'N3v3_orphanGap_getThread' }
 ];
 
 var allPassed = true;

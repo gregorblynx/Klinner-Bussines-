@@ -295,36 +295,55 @@ function verifyPreviewDraftOwnership_(draft, ledgerEntryValues) {
 }
 
 /**
- * N3 V3 (blocker N3-3): raw, no-ownership-check delete-by-id, used ONLY
- * for compensating a draft previewStep() JUST created in this same
- * synchronous execution (before any ledger row exists, before any human
- * could possibly have touched it — there is nothing yet to distinguish it
- * from). NOT a general-purpose deletion helper; every other caller in this
- * file must go through deletePreviewDraftIfOwned_'s ownership check.
- * @return {boolean} true only when the caller can be CONFIDENT no dangling
- *   Gmail resource remains — either it was actually deleted, or Gmail
- *   enumeration succeeded and confirmed it was already gone. false means
- *   genuine uncertainty (enumeration itself failed, or the delete call
- *   threw) — the draft may still physically exist.
+ * N3 V3 (Codex final audit, round 2 — blocker: enumeration is not safe):
+ * every "find this Draft_ID inside a GmailApp.getDrafts() array" loop in
+ * this file used to compare `drafts[i].getId() === draftId` UNGUARDED.
+ * Codex found that if ANY draft in the list — not necessarily the one
+ * being searched for — throws on its OWN .getId() call, the entire loop
+ * throws uncaught, escaping whatever fail-closed block the caller thought
+ * was protecting it (previewStep()'s creation-metadata block, for
+ * instance, never even gets a chance to run its compensation logic).
+ * This is now the ONE place that enumeration happens; every caller below
+ * goes through it, and NEVER conflates "could not safely enumerate" with
+ * "confirmed not found" — those require opposite handling (fail-closed vs.
+ * safe-to-treat-as-gone).
+ * @return {{found: boolean, uncertain: boolean, draft: (Object|undefined)}}
  */
-function attemptDeleteDraftById_(draftId) {
-  var drafts;
+function findDraftInListSafely_(drafts, draftId) {
   try {
-    drafts = GmailApp.getDrafts();
+    for (var i = 0; i < drafts.length; i++) {
+      if (drafts[i].getId() === draftId) return { found: true, uncertain: false, draft: drafts[i] };
+    }
+    return { found: false, uncertain: false };
+  } catch (e) {
+    return { found: false, uncertain: true };
+  }
+}
+
+/**
+ * N3 V3: deletes a draft the caller already holds a DIRECT OBJECT
+ * REFERENCE to (not looked up by ID) — used ONLY for compensating a draft
+ * previewStep() JUST created in this same synchronous execution, before
+ * any ledger row exists and before any human could possibly have touched
+ * it. Preferred over an ID-based lookup+enumeration wherever a direct
+ * reference is already in hand (Codex's explicit guidance: "use the
+ * direct draft object for deletion where safer if available") — it
+ * removes the enumeration failure surface entirely for this call site, on
+ * top of findDraftInListSafely_ already closing it for the callers below
+ * that have no choice but to look up by ID (a fresh execution reading
+ * Draft_ID back out of the ledger, with no live object reference).
+ * @return {boolean} true only when the caller can be CONFIDENT no dangling
+ *   Gmail resource remains (the delete call itself succeeded). false means
+ *   genuine uncertainty (the delete call threw) — the draft may still
+ *   physically exist.
+ */
+function attemptDeleteDraftDirectly_(draftObj) {
+  try {
+    draftObj.deleteDraft();
+    return true;
   } catch (e) {
     return false;
   }
-  for (var i = 0; i < drafts.length; i++) {
-    if (drafts[i].getId() === draftId) {
-      try {
-        drafts[i].deleteDraft();
-        return true;
-      } catch (e) {
-        return false;
-      }
-    }
-  }
-  return true; // Enumeration succeeded and confirmed absence — nothing to compensate.
 }
 
 /**
@@ -346,11 +365,14 @@ function deletePreviewDraftIfOwned_(draftId, ledgerEntryValues) {
       ledgerEntryValues.Step, 'deletePreviewDraftIfOwned_: GmailApp.getDrafts() failed: ' + e + '. Fail-closed: nothing deleted.');
     return { deleted: false, reason: 'gmail_read_error' };
   }
-  var match = null;
-  for (var i = 0; i < drafts.length; i++) {
-    if (drafts[i].getId() === draftId) { match = drafts[i]; break; }
+  var findResult = findDraftInListSafely_(drafts, draftId);
+  if (findResult.uncertain) {
+    logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, ledgerEntryValues.Prospect_ID, ledgerEntryValues.Email_Normalized,
+      ledgerEntryValues.Step, 'deletePreviewDraftIfOwned_: could not safely enumerate drafts (a listed draft threw on getId()). Fail-closed: nothing deleted.');
+    return { deleted: false, reason: 'gmail_read_error' };
   }
-  if (!match) return { deleted: false, reason: 'not_found' }; // Enumeration succeeded and confirmed absence — not an error.
+  if (!findResult.found) return { deleted: false, reason: 'not_found' }; // Enumeration succeeded and confirmed absence — not an error.
+  var match = findResult.draft;
 
   var verification = verifyPreviewDraftOwnership_(match, ledgerEntryValues);
   if (verification.fatal) {
@@ -459,10 +481,18 @@ function resolveExistingPreviewDraft_(prospectId, step) {
     return { action: 'BLOCKED_NEEDS_REVIEW', reason: 'gmail_read_error' };
   }
 
-  var match = null;
-  for (var i = 0; i < drafts.length; i++) {
-    if (drafts[i].getId() === existing.values.Draft_ID) { match = drafts[i]; break; }
+  var findResult = findDraftInListSafely_(drafts, existing.values.Draft_ID);
+  if (findResult.uncertain) {
+    // N3 V3 round 2: an unrelated draft in the list threw on getId() during
+    // enumeration — never conflate this with "not found" (CASO 7), which
+    // would wrongly authorize CREATE_NEW. Fail closed, same as any other
+    // Gmail read error (CASO 8).
+    logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, existing.values.Email_Normalized, step,
+      'resolveExistingPreviewDraft_: could not safely enumerate drafts (a listed draft threw on getId()). ' +
+      'Fail-closed: left untouched, no new draft created.');
+    return { action: 'BLOCKED_NEEDS_REVIEW', reason: 'gmail_read_error' };
   }
+  var match = findResult.found ? findResult.draft : null;
 
   // CASO 4 short-circuit: already durably preserved. Never re-evaluate
   // content, never append another ledger row — only exit is Draft_ID gone.
@@ -541,7 +571,27 @@ function resolveExistingPreviewDraft_(prospectId, step) {
  * a BROKEN Thread_ID are different situations and must be handled
  * differently: a genuinely broken reference must not be silently
  * downgraded into what looks like a fresh first-contact draft.
- * @return {{skipped: boolean, status: (string|undefined), draft: (Object|undefined), usedThreadId: (string|undefined)}}
+ *
+ * N3 V3 (Codex final audit, round 2 — orphan draft gap): this function used
+ * to also read `standaloneDraft.getMessage().getThread().getId()` right
+ * here, AFTER GmailApp.createDraft() had already succeeded but BEFORE
+ * returning to previewStep()'s protected metadata-capture block. If that
+ * read threw, the draft already existed in Gmail while the exception
+ * propagated straight out of createPreviewDraft_() UNCAUGHT — past
+ * previewStep()'s fail-closed block entirely (it never got a chance to
+ * run), and past previewQueue()'s forEach loop too (no try/catch there),
+ * aborting the whole batch with a fully untracked orphan draft. Every read
+ * of the just-created draft's own metadata must happen inside ONE
+ * protected block — so this function now does the MINIMUM possible after
+ * GmailApp.createDraft() succeeds: nothing. `usedThreadId` is left
+ * unresolved (null) for the standalone case; previewStep() resolves it
+ * itself, inside its own fail-closed block, from the SAME message object
+ * it already fetches for Message_ID/fingerprint purposes — one extra field
+ * read, zero extra risk surface, since it reuses a read that was already
+ * happening under protection anyway. (The reply-draft branch below has no
+ * such gap: usedThreadId there is `liveThreadId`, already known before any
+ * Gmail call — never derived from a post-creation read.)
+ * @return {{skipped: boolean, status: (string|undefined), draft: (Object|undefined), usedThreadId: (string|null|undefined)}}
  */
 function createPreviewDraft_(prospectId, step, prospect, rendered, config) {
   var liveThreadId = prospect.Thread_ID; // LIVE-only column; always blank until F2 sends step 1.
@@ -555,7 +605,7 @@ function createPreviewDraft_(prospectId, step, prospect, rendered, config) {
       return { skipped: true, status: 'SKIPPED_THREAD_NOT_FOUND' };
     }
     var draft = thread.createDraftReply(buildPreviewBody_(rendered.body));
-    return { skipped: false, draft: draft, usedThreadId: liveThreadId };
+    return { skipped: false, draft: draft, usedThreadId: liveThreadId }; // Already known — no post-creation Gmail read.
   }
 
   var subject = previewSubjectPrefix_(step) +
@@ -563,7 +613,7 @@ function createPreviewDraft_(prospectId, step, prospect, rendered, config) {
   var standaloneDraft = GmailApp.createDraft(prospect.Email, subject, buildPreviewBody_(rendered.body), {
     name: config.SENDER_NAME
   });
-  return { skipped: false, draft: standaloneDraft, usedThreadId: standaloneDraft.getMessage().getThread().getId() };
+  return { skipped: false, draft: standaloneDraft, usedThreadId: null }; // Resolved by previewStep(), fail-closed.
 }
 
 /**
@@ -652,11 +702,18 @@ function previewStep(prospectId, step) {
     var draftId = '';
     var draftMessageId = '';
     var draftFingerprint = '';
+    var usedThreadId = draftResult.usedThreadId || '';
     var creationError = null;
     try {
       draftId = draftResult.draft.getId();
       var createdMessage = draftResult.draft.getMessage();
       draftMessageId = createdMessage.getId();
+      // N3 V3 round 2: resolved HERE, inside the protected block, for the
+      // standalone-draft case (createPreviewDraft_ deliberately no longer
+      // reads this itself — see its docstring). Reply-draft case already
+      // has usedThreadId populated (liveThreadId, known before any Gmail
+      // call), so this only runs when it's genuinely still unresolved.
+      if (!usedThreadId) usedThreadId = createdMessage.getThread().getId();
       var createdTo = createdMessage.getTo ? createdMessage.getTo() : prospect.Email;
       var createdSubject = createdMessage.getSubject ? createdMessage.getSubject() : '';
       var createdBody = createdMessage.getPlainBody ? createdMessage.getPlainBody() : createdMessage.getBody();
@@ -670,22 +727,27 @@ function previewStep(prospectId, step) {
       // Fail closed: never write a "healthy" DRAFTED row with a blank
       // fingerprint from a metadata-capture failure. We created this draft
       // ourselves, synchronously, in this same execution — no human could
-      // have touched it yet — so a raw best-effort delete by whatever
-      // Draft_ID we DO have is safe (not an ownership check; there is
-      // nothing to distinguish it from yet).
-      var compensated = draftId ? attemptDeleteDraftById_(draftId) : false;
+      // have touched it yet — so deleting it via the DIRECT OBJECT
+      // REFERENCE we already hold (attemptDeleteDraftDirectly_) is safe
+      // (not an ownership check; there is nothing to distinguish it from
+      // yet) AND avoids the enumeration failure surface entirely (Codex
+      // round 2: a Draft_ID lookup through GmailApp.getDrafts() could
+      // itself throw on an UNRELATED draft's getId() — see
+      // findDraftInListSafely_ — a risk that simply does not exist when
+      // deleting the object we already have in hand).
+      var compensated = attemptDeleteDraftDirectly_(draftResult.draft);
       if (!compensated && draftId) {
-        // Could not confirm the draft is gone (delete failed, or
-        // enumeration itself failed) — it may still physically exist.
-        // Record what we DO know as a recovery row (blank fingerprint) so
-        // the legacy-blank-fingerprint policy above durably preserves it
-        // on the very next run instead of a future previewStep() silently
-        // creating a second draft alongside an untracked orphan.
+        // Could not confirm the draft is gone (the delete call itself
+        // threw) — it may still physically exist. Record what we DO know
+        // as a recovery row (blank fingerprint) so the legacy-blank-
+        // fingerprint policy above durably preserves it on the very next
+        // run instead of a future previewStep() silently creating a
+        // second draft alongside an untracked orphan.
         try {
           appendLedgerRow_({
             Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,
             Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.DRY_RUN,
-            State: LEDGER_STATE.DRAFTED, Thread_ID: draftResult.usedThreadId || '', Message_ID: draftMessageId, Draft_ID: draftId,
+            State: LEDGER_STATE.DRAFTED, Thread_ID: usedThreadId || '', Message_ID: draftMessageId, Draft_ID: draftId,
             Confirmed_At: new Date(),
             Error: 'CREATION_METADATA_CAPTURE_FAILED: ' + creationError + ' — recorded as a recovery row; ' +
               'treated as legacy/needs-review by resolveExistingPreviewDraft_, never auto-deleted or duplicated.',
@@ -694,7 +756,7 @@ function previewStep(prospectId, step) {
         } catch (recoveryLedgerError) {
           logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
             'Draft metadata capture failed AND the recovery ledger row also failed to write: ' + recoveryLedgerError +
-            '. Draft_ID=' + draftId + ' is a fully untracked orphan — NEEDS MANUAL REVIEW.');
+            '. Draft_ID=' + (draftId || 'UNKNOWN') + ' is a fully untracked orphan — NEEDS MANUAL REVIEW.');
         }
       } else if (!compensated) {
         logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
@@ -710,7 +772,7 @@ function previewStep(prospectId, step) {
     var ledgerEntry = {
       Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,
       Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.DRY_RUN,
-      State: LEDGER_STATE.DRAFTED, Thread_ID: draftResult.usedThreadId, Message_ID: draftMessageId, Draft_ID: draftId,
+      State: LEDGER_STATE.DRAFTED, Thread_ID: usedThreadId, Message_ID: draftMessageId, Draft_ID: draftId,
       Confirmed_At: new Date(), Error: '', Draft_Fingerprint: draftFingerprint, Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
     };
 
