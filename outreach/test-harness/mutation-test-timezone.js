@@ -1,19 +1,27 @@
 'use strict';
 /**
- * Timezone-independence mutation test. Proves two fixes found by tonight's
- * timezone audit are load-bearing:
+ * Timezone-independence mutation test. Proves three fixes found by
+ * tonight's timezone audits are load-bearing:
  *
  *   A. addCalendarDays_ (Schedule.gs) reverted to the old raw
  *      Date.getDate()/setDate() implementation (environment-timezone-
  *      relative instead of America/Chicago-relative).
  *   B. The mock Utilities.formatDate (gas-mocks.js) reverted to ignoring
  *      its `tz` argument and using raw JS Date getters instead.
+ *   C. (Round 2, Codex final audit) dateFromWallClock_ (Schedule.gs)
+ *      reverted to the old single-shot offset lookup (no fixed-point
+ *      iteration) — wrong for any wall clock close enough to a DST
+ *      transition that the neutral instant and the true target instant
+ *      fall on opposite sides of the transition moment. Confirmed
+ *      concretely: 2026-03-08 03:30 used to resolve to 04:30; 2026-11-01
+ *      02:30 used to resolve to 01:30.
  *
- * Both mutations are run with process.env.TZ forced to Asia/Kolkata
+ * Mutations A and B are run with process.env.TZ forced to Asia/Kolkata
  * (UTC+5:30, no DST) — an offset large enough to cross a day boundary for
  * the T16 fixture — so this test is deliberately NOT dependent on the
- * timezone of whatever machine happens to run it (unlike the bug it
- * proves is fixed).
+ * timezone of whatever machine happens to run it. Mutation C is a DST
+ * transition bug, not a host-timezone bug, so it reproduces identically
+ * regardless of host TZ — run under the host's own default (no override).
  *
  * Run: node test-harness/mutation-test-timezone.js
  */
@@ -96,6 +104,42 @@ function mutationB_mockIgnoresTz(mocksSource) {
   return mocksSource.slice(0, start) + oldBlock + mocksSource.slice(end + 6);
 }
 
+// --- Mutation C: revert dateFromWallClock_ to the old single-shot (non-iterative) DST-broken lookup. ---
+var NEW_DATE_FROM_WALL_CLOCK =
+  "function dateFromWallClock_(y, mo, d, hh, mi, ss, tz) {\n" +
+  "  var neutral = new Date(Date.UTC(y, mo, d, hh, mi, ss));\n" +
+  "  var candidate = neutral;\n" +
+  "  var previous = null;\n" +
+  "  var MAX_ITERATIONS = 6; // Defensive only — real IANA zones converge or oscillate within 3.\n" +
+  "  for (var i = 0; i < MAX_ITERATIONS; i++) {\n" +
+  "    var offsetMinutes = timezoneOffsetMinutes_(candidate, tz);\n" +
+  "    var next = new Date(neutral.getTime() - offsetMinutes * 60000);\n" +
+  "    if (next.getTime() === candidate.getTime()) return next; // Converged: valid, unambiguous (or ambiguous-resolved) wall clock.\n" +
+  "    if (previous !== null && next.getTime() === previous.getTime()) {\n" +
+  "      // Oscillating between exactly two candidates: the wall clock does\n" +
+  "      // not exist (DST gap). Policy: resolve to the LATER of the two.\n" +
+  "      return next.getTime() > candidate.getTime() ? next : candidate;\n" +
+  "    }\n" +
+  "    previous = candidate;\n" +
+  "    candidate = next;\n" +
+  "  }\n" +
+  "  // Unreachable for any real IANA timezone (see MAX_ITERATIONS comment) —\n" +
+  "  // fail loud rather than silently return an unverified guess.\n" +
+  "  throw new Error('dateFromWallClock_: offset resolution did not converge for ' +\n" +
+  "    y + '-' + (mo + 1) + '-' + d + ' ' + hh + ':' + mi + ':' + ss + ' in ' + tz);\n" +
+  "}";
+var OLD_DATE_FROM_WALL_CLOCK =
+  "function dateFromWallClock_(y, mo, d, hh, mi, ss, tz) {\n" +
+  "  // MUTATION C: old single-shot lookup — offset computed ONCE at the\n" +
+  "  // neutral (literal-UTC) instant, wrong near a DST transition.\n" +
+  "  var neutral = new Date(Date.UTC(y, mo, d, hh, mi, ss));\n" +
+  "  var offsetMinutes = timezoneOffsetMinutes_(neutral, tz);\n" +
+  "  return new Date(neutral.getTime() - offsetMinutes * 60000);\n" +
+  "}";
+function mutationC_revertToSingleShotDstBroken(source) {
+  return replaceOrThrow(source, 'C', NEW_DATE_FROM_WALL_CLOCK, OLD_DATE_FROM_WALL_CLOCK);
+}
+
 var allPassed = true;
 console.log('=== Timezone-independence mutation test ===\n');
 
@@ -175,6 +219,32 @@ try {
 } finally {
   if (originalTz === undefined) delete process.env.TZ; else process.env.TZ = originalTz;
 }
+
+// Mutation C (Schedule.gs) — DST bug, not a host-timezone bug: run under
+// whatever TZ this process already has (no override needed or wanted).
+var mutatedC;
+try {
+  mutatedC = runSuite({ 'Schedule.gs': mutationC_revertToSingleShotDstBroken });
+} catch (e) {
+  console.log('Mutation C: THREW — ' + e.message);
+  allPassed = false;
+  mutatedC = null;
+}
+if (mutatedC) {
+  var failedC = mutatedC.results.filter(function (r) { return !r.passed; }).map(function (r) { return r.name; });
+  console.log('Mutation C (dateFromWallClock_ reverted to single-shot): ' + mutatedC.passed + '/' + mutatedC.total +
+    (failedC.length ? ' — caught by: ' + failedC.join(', ') : ' — *** NOT CAUGHT ***'));
+  if (failedC.indexOf('dstAudit_validWallClocks') === -1) {
+    console.log('FAIL — dstAudit_validWallClocks must catch this mutation.');
+    allPassed = false;
+  } else {
+    console.log('PASS — caught the regression.');
+  }
+}
+
+var restoredC = runSuite(null);
+console.log('Restored (unmutated, host TZ): ' + restoredC.passed + '/' + restoredC.total);
+if (restoredC.passed !== restoredC.total) { console.log('FAIL — restoring the original source did not return the suite to green.'); allPassed = false; }
 
 console.log('\n' + (allPassed ? 'TIMEZONE MUTATION TEST: PASS' : 'TIMEZONE MUTATION TEST: FAIL'));
 if (!allPassed) process.exitCode = 1;

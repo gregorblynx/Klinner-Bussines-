@@ -65,11 +65,78 @@ function timezoneOffsetMinutes_(date, tz) {
  * addCalendarDays_ — the same class of bug applies just as much to a raw
  * `new Date(y, mo, d, hh, mi, ss)` fixture, which is LOCAL-environment-
  * relative, not Chicago-relative).
+ *
+ * DST FIX (Codex final audit, round 2): a single-shot version of this
+ * function — compute the offset ONCE, at the neutral (literal UTC) instant,
+ * and apply it — is WRONG for any wall clock close enough to a DST
+ * transition that the neutral instant and the true target instant fall on
+ * OPPOSITE sides of the transition moment (which is common: the gap
+ * between them is the offset itself, ~5-6 hours for America/Chicago, and
+ * the transition window is exactly ±1 hour around 2am). Confirmed
+ * examples that were wrong under the single-shot version:
+ *   - 2026-03-08 03:30 (valid, just after spring-forward) used to resolve
+ *     to 04:30 — the neutral instant (03:30Z) falls BEFORE the transition
+ *     instant (08:00Z = 2am CDT), so the offset looked up there is still
+ *     CST, one hour off from the CDT that actually applies at 03:30 local.
+ *   - 2026-11-01 02:30 (valid, just after fall-back) used to resolve to
+ *     01:30 — the equivalent error in the other direction.
+ *
+ * FIX: fixed-point iteration. Re-derive the offset at the CURRENT
+ * candidate instant (not the original neutral one) and repeat until the
+ * candidate stops changing. Any real IANA timezone has at most two
+ * distinct offsets in play near a single transition, so this converges in
+ * 1-3 iterations for a valid wall clock.
+ *
+ * EXPLICIT POLICY for the two DST edge cases (never silently invented):
+ *   - NONEXISTENT wall clock (a "spring forward" gap, e.g. 2026-03-08
+ *     02:30 — clocks jump 02:00 straight to 03:00, so 02:xx never occurs):
+ *     the iteration OSCILLATES between exactly two candidates forever
+ *     instead of converging. Detected explicitly (compared against the
+ *     previous iteration's result) and resolved by taking the LATER of
+ *     the two — i.e. the wall clock is treated as if the clock had kept
+ *     running through the gap ("skip forward"), the same default
+ *     convention most standard timezone libraries (Java's
+ *     ZonedDateTime, Python's zoneinfo) use for a nonexistent local time.
+ *   - AMBIGUOUS wall clock (a "fall back" overlap, e.g. 2026-11-01 01:30 —
+ *     occurs once in CDT, once in CST): the iteration converges cleanly
+ *     (no oscillation — both offsets are independently self-consistent
+ *     fixed points), landing on whichever offset applied at the NEUTRAL
+ *     instant first — which is always the EARLIER (pre-transition, CDT)
+ *     occurrence for a fall-back overlap. This is a real, documented,
+ *     deterministic choice, not an accident: ambiguity has no single
+ *     universally-"correct" resolution, so this codebase picks the
+ *     earlier occurrence and states so here.
+ *   - Neither policy is exercised by any current production call site:
+ *     `addCalendarDays_` only ever starts from a REAL previously-recorded
+ *     instant (never a human-typed edge time), and the only direct
+ *     production callers of wall-clock construction (isWithinSendWindow_
+ *     etc.) always operate on `new Date()` — an already-real instant, never
+ *     user-constructed — so 09:00-17:00 send hours and the 07:00 reply
+ *     window are entirely unaffected by either policy. Both are exercised
+ *     here only for the algorithm's own correctness and by explicit DST
+ *     edge-case tests (Tests.gs).
  */
 function dateFromWallClock_(y, mo, d, hh, mi, ss, tz) {
   var neutral = new Date(Date.UTC(y, mo, d, hh, mi, ss));
-  var offsetMinutes = timezoneOffsetMinutes_(neutral, tz);
-  return new Date(neutral.getTime() - offsetMinutes * 60000);
+  var candidate = neutral;
+  var previous = null;
+  var MAX_ITERATIONS = 6; // Defensive only — real IANA zones converge or oscillate within 3.
+  for (var i = 0; i < MAX_ITERATIONS; i++) {
+    var offsetMinutes = timezoneOffsetMinutes_(candidate, tz);
+    var next = new Date(neutral.getTime() - offsetMinutes * 60000);
+    if (next.getTime() === candidate.getTime()) return next; // Converged: valid, unambiguous (or ambiguous-resolved) wall clock.
+    if (previous !== null && next.getTime() === previous.getTime()) {
+      // Oscillating between exactly two candidates: the wall clock does
+      // not exist (DST gap). Policy: resolve to the LATER of the two.
+      return next.getTime() > candidate.getTime() ? next : candidate;
+    }
+    previous = candidate;
+    candidate = next;
+  }
+  // Unreachable for any real IANA timezone (see MAX_ITERATIONS comment) —
+  // fail loud rather than silently return an unverified guess.
+  throw new Error('dateFromWallClock_: offset resolution did not converge for ' +
+    y + '-' + (mo + 1) + '-' + d + ' ' + hh + ':' + mi + ':' + ss + ' in ' + tz);
 }
 
 /**
@@ -90,12 +157,10 @@ function dateFromWallClock_(y, mo, d, hh, mi, ss, tz) {
  * environment-independent by specification — so correctness no longer
  * depends on which runtime/machine loaded this file.
  *
- * Residual (inherent to "same wall-clock time N days later", not specific
- * to the bug above): a DST transition crossed by the `days` shift makes
- * that phrase itself ambiguous (an hour either does not exist or occurs
- * twice). Resolved here the same way most calendar libraries do — using
- * the TARGET date's own UTC offset — a separate, much narrower, twice-a-
- * year edge case, not the environment-dependency bug being fixed.
+ * DST transitions crossed by the `days` shift: delegated entirely to
+ * dateFromWallClock_'s fixed-point resolution and its explicitly documented
+ * policy for nonexistent/ambiguous wall clocks — see that function's
+ * docstring. This function itself does no DST reasoning of its own.
  */
 function addCalendarDays_(date, days) {
   var tz = getScriptTimeZone_();
