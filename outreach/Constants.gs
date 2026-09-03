@@ -171,6 +171,36 @@ var LEDGER_STATE = {
   ABANDONED: 'ABANDONED'
 };
 
+/**
+ * N3 V2 (Google-real reaudit, round 3 — durable human-edit protection):
+ * three columns appended at the END of the layout (never inserted between
+ * existing ones, so every pre-existing column index is untouched):
+ *
+ *   Draft_Fingerprint       SHA-256 hex digest over (recipient, subject,
+ *                           canonical body) at the time this row's draft
+ *                           content was last known-good — see
+ *                           computeDraftFingerprint_ in Mailer.gs. Used to
+ *                           detect ANY human edit (recipient, subject, or
+ *                           body), independent of Message_ID.
+ *   Human_Edit_Preserved    boolean. TRUE only on the ACTIVE row of a
+ *                           draft that has been durably recognized as
+ *                           human-edited. Once TRUE, resolveExistingPreviewDraft_
+ *                           never re-evaluates content again for that key —
+ *                           it short-circuits straight to preserving the
+ *                           draft, every future run, until the Draft_ID
+ *                           itself genuinely stops resolving in Gmail.
+ *   Human_Edit_Detected_At  timestamp of the run that first detected the
+ *                           edit and transitioned the row into the
+ *                           preserved state. Blank on every other row.
+ *
+ * Appending (not inserting) means initializeSendLedgerSheet_'s existing
+ * idempotency check (sheetHasExpectedHeader_ on cell A1 = 'Run_ID') still
+ * correctly recognizes an already-initialized real sheet — see
+ * repairSendLedgerColumns_ in SheetRepo.gs for the one-time, additive,
+ * non-destructive migration a pre-existing real Sheet needs before this
+ * fix's ledger writes will include these columns. NOT run against Google
+ * as part of this delivery — see README.md.
+ */
 var SEND_LEDGER_COLUMNS = {
   Run_ID: 1,
   Claimed_At: 2,
@@ -184,7 +214,10 @@ var SEND_LEDGER_COLUMNS = {
   Message_ID: 10,
   Draft_ID: 11,
   Confirmed_At: 12,
-  Error: 13
+  Error: 13,
+  Draft_Fingerprint: 14,
+  Human_Edit_Preserved: 15,
+  Human_Edit_Detected_At: 16
 };
 var SEND_LEDGER_COLUMN_ORDER = (function () {
   var names = [];

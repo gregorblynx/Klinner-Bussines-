@@ -21,9 +21,11 @@ approved architecture but are not active — see "Current phase" below.
 ## One-time setup (do this first)
 
 1. Create a new Google Sheet (or use a dedicated Klinner Outreach sheet).
-2. Extensions → Apps Script. Copy in the 18 `.gs` files from this folder
-   (or use `clasp push` if you set up clasp against this project — see
-   "clasp" below).
+2. Extensions → Apps Script. Copy in the 16 productive `.gs` files from
+   this folder plus `appsscript.json` (17 deployable files total) — or use
+   `clasp push` if you set up clasp against this project — see "clasp"
+   below. `Tests.gs` and everything under `test-harness/` are **not**
+   part of this list — see "Running the F1 test suite".
 3. In the Apps Script editor, run `initializeSheets` once (or use the
    spreadsheet menu **Klinner Outreach → Initialize Klinner Outreach
    sheets** after the first save, which calls the same function). This
@@ -148,29 +150,93 @@ the event happened) and `Event`. Key events to know:
 
 ## Running the F1 test suite
 
-Inside the Apps Script editor, run `runAllF1Tests()`. It creates temporary
-rows tagged `Source="TEST_F1_AUTOMATED"`, exercises the guards, and deletes
-everything it created (including any test Suppression rows) when it
-finishes — safe to run against a real spreadsheet, though a dedicated test
-copy is still recommended. Two tests (`T26_T27`) require manually setting
-up a real Gmail thread first — see that function's docstring in `Tests.gs`.
+`Tests.gs` is **local-only, by design** — `.claspignore` deliberately
+excludes it (and all of `test-harness/`) from `clasp push`, so it never
+reaches the real Apps Script project and can never run against the real
+Sheet. Some of its fixtures (the 1000-row ghost-row scenario in
+particular) write and restore large ranges of Prospects, which is exactly
+the kind of thing that must never be exercised against real data — keeping
+test code out of the deployed project is the structural guarantee for
+that, not fixture-level care alone.
+
+Run the suite locally instead, against the mocked Sheets/Gmail services in
+`test-harness/`:
+
+```
+cd outreach
+node test-harness/run-f1-tests.js
+node test-harness/verify-static-findings.js
+node test-harness/mutation-test-N7.js
+node test-harness/mutation-test-ghost-rows.js
+node test-harness/mutation-test-N3.js
+```
+
+`Tests.gs` is never added to `.claspignore`'s allow-list, under any
+circumstance, temporary or otherwise — there is no supported procedure for
+deploying it. `runAllF1Tests()` is never run against the real Google
+Sheet. `test-harness/` never reaches Google either. Test fixtures
+(including the 1000-row ghost-row scenario, which writes and restores
+large ranges of Prospects) never execute against real data — the
+guarantee is structural (the code is simply not present in the deployed
+project), not a matter of the fixtures being careful.
+
+`T26_T27` (the two tests that need a real prior LIVE thread — see their
+docstring in `Tests.gs`) are consequently **not run against Google at
+all** in this workflow. Google-real verification for F1 happens
+exclusively through the controlled, documented F1 plan — the menu actions
+and production functions listed above (`Validate all rows`, `Preview
+today's queue`, etc.) — never by deploying test fixtures.
+
+## SendLedger schema migration (N3 durable human-edit protection)
+
+`SendLedger` gained 3 columns appended at the end of the layout — `N:
+Draft_Fingerprint`, `O: Human_Edit_Preserved`, `P: Human_Edit_Detected_At`
+(see `SEND_LEDGER_COLUMNS` in `Constants.gs`). They exist so previewStep()
+can durably recognize a Gmail draft a human has edited (recipient,
+subject, or body) and never silently delete/regenerate it — see
+`resolveExistingPreviewDraft_` and `verifyPreviewDraftOwnership_` in
+`Mailer.gs` for the full design.
+
+Because the columns were **appended, not inserted**, every pre-existing
+column (A:M) keeps its exact index — nothing about `Run_ID` through
+`Error` changed. A brand-new SendLedger sheet gets the correct 16-column
+header automatically from `initializeSendLedgerSheet_()`. The real
+"Klinner Outreach — F1 Test" Sheet's SendLedger was already initialized
+with the old 13-column header before this fix existed, and
+`initializeSendLedgerSheet_()` deliberately never rewrites an
+already-initialized sheet's header (it must never risk clearing real
+ledger history) — so that Sheet needs a one-time, additive-only repair
+before this fix's ledger writes will include the new columns:
+
+```
+repairSendLedgerColumns()
+```
+
+Run it once from the Apps Script editor's "Select function to run"
+dropdown, the same way `repairConfigValueColumnFormat()` was run earlier.
+It only ever writes header cells `N1:P1`; it never touches columns A-M,
+never touches any data row, and is idempotent (a no-op if the headers are
+already present). **Not run against Google as part of this delivery** —
+do this before repeating `Preview today's queue` or any other preview
+action against the real Sheet.
 
 ## OAuth scopes — what each service actually needs (Codex finding #16)
 
-`appsscript.json` declares 6 scopes. This is what each one is for, mapped
-to the actual API calls in this codebase — **not yet verified against a
-real Google account**; the authoritative check happens the first time you
-authorize the project in Apps Script (it will prompt for exactly the
-scopes it needs, or fail clearly if one is missing).
+`appsscript.json` declares **7 scopes**. This is what each one is for,
+mapped to the actual API calls in this codebase — **not yet verified
+against a real Google account**; the authoritative check happens the
+first time you authorize the project in Apps Script (it will prompt for
+exactly the scopes it needs, or fail clearly if one is missing).
 
-| Scope | Used for | Evidence in code |
-|---|---|---|
-| `.../auth/spreadsheets` | All `SpreadsheetApp` reads/writes: sheets, ranges, data validation, protected ranges. | `SpreadsheetApp.getActiveSpreadsheet`, `.getRange`, `.newDataValidation`, `.protect`, `.getUi` (`SheetRepo.gs`, `Menu.gs`) |
-| `.../auth/gmail.compose` | Creating/deleting DRAFTS: `GmailApp.createDraft`, `GmailThread.createDraftReply`, `GmailDraft.deleteDraft`. This is F1's entire Gmail footprint. | `Mailer.gs` (`previewStep`, `deletePreviewDraftIfOwned_`) |
-| `.../auth/gmail.modify` | Reading threads/messages and applying labels: `GmailApp.getThreadById`, `GmailApp.search`, `GmailThread.getMessages`, `GmailMessage.getFrom/getTo/getSubject/getPlainBody/getRawContent`, `GmailThread.addLabel`, `GmailApp.createLabel`/`getUserLabelByName`. F2/F3 only (`ReplySync.gs`, and the LIVE half of `Mailer.gs`) — inactive in F1. | `ReplySync.gs`, `Mailer.gs` (LIVE closure) |
-| `.../auth/gmail.send` | Actually sending mail: `GmailDraft.send()`, `GmailThread.reply()`. F2 only — inactive in F1 (`performLiveSend_` blocks it). | `Mailer.gs` (LIVE closure only) |
-| `.../auth/script.send_mail` | `MailApp.sendEmail()` — the daily digest. Runs in F1, but see `Digest.gs`'s `PENDING_F0` guard: it does not actually call this until `ADMIN_EMAIL` is filled in. | `Digest.gs` |
-| `.../auth/script.scriptapp` | `ScriptApp.newTrigger/getProjectTriggers/deleteTrigger` — the trigger installer. Defined, not invoked automatically in F1 (`Triggers.gs`). | `Triggers.gs` |
+| # | Scope | Used for | Evidence in code |
+|---|---|---|---|
+| 1 | `.../auth/spreadsheets` | All `SpreadsheetApp` reads/writes: sheets, ranges, data validation, protected ranges. | `SpreadsheetApp.getActiveSpreadsheet`, `.getRange`, `.newDataValidation`, `.protect` (`SheetRepo.gs`) |
+| 2 | `.../auth/gmail.compose` | Creating/deleting DRAFTS: `GmailApp.createDraft`, `GmailThread.createDraftReply`, `GmailDraft.deleteDraft`. This is F1's entire Gmail footprint. | `Mailer.gs` (`previewStep`, `deletePreviewDraftIfOwned_`) |
+| 3 | `.../auth/gmail.modify` | Reading threads/messages and applying labels: `GmailApp.getThreadById`, `GmailApp.search`, `GmailThread.getMessages`, `GmailMessage.getFrom/getTo/getSubject/getPlainBody/getRawContent`, `GmailThread.addLabel`, `GmailApp.createLabel`/`getUserLabelByName`. F2/F3 only (`ReplySync.gs`, and the LIVE half of `Mailer.gs`) — inactive in F1. | `ReplySync.gs`, `Mailer.gs` (LIVE closure) |
+| 4 | `.../auth/gmail.send` | Actually sending mail: `GmailDraft.send()`, `GmailThread.reply()`. F2 only — inactive in F1 (`performLiveSend_` blocks it). | `Mailer.gs` (LIVE closure only) |
+| 5 | `.../auth/script.send_mail` | `MailApp.sendEmail()` — the daily digest. Runs in F1, but see `Digest.gs`'s `PENDING_F0` guard: it does not actually call this until `ADMIN_EMAIL` is filled in. | `Digest.gs` |
+| 6 | `.../auth/script.scriptapp` | `ScriptApp.newTrigger/getProjectTriggers/deleteTrigger` — the trigger installer. Defined, not invoked automatically in F1 (`Triggers.gs`). | `Triggers.gs` |
+| 7 | `.../auth/script.container.ui` | `SpreadsheetApp.getUi()` — the entire `Klinner Outreach` menu, and every `alert()`/`prompt()` dialog it drives. Without this scope the menu cannot be built. | `Menu.gs` |
 
 **Not currently declared, used only for graceful-degradation logic that
 tolerates its own absence:** `Session.getEffectiveUser()` (`SheetRepo.gs`'s
@@ -202,6 +268,40 @@ clasp push
 `clasp create` will generate a `.clasp.json` — it is intentionally not
 included in this delivery since it's tied to a specific Google account/
 spreadsheet you create.
+
+### Verifying a push actually removed a file remotely
+
+If you ever change `.claspignore`'s allow-list (for example, narrowing it
+further) and push, `clasp push` reporting **"Pushed 17 files"** confirms
+what was *sent* — it does not by itself confirm anything was *removed* on
+the Google side. If clasp instead reports **"Script is already up to
+date"**, that specifically proves nothing changed remotely — it is not
+evidence that a file you intended to remove is actually gone; it may
+simply mean the push never happened.
+
+After any push meant to remove a file from the deployed project (e.g.
+confirming `Tests.gs` is genuinely absent), verify remotely using one of
+these two methods:
+
+**A. Apps Script editor** — open the project, **hard-refresh the page**
+(a stale tab can still show a file that was already removed server-side),
+and confirm the file no longer appears in the file list.
+
+**B. A clean, isolated `clasp pull`** — in a **temporary directory outside
+this repo**, never inside it:
+```
+mkdir -p /tmp/klinner-outreach-verify && cd /tmp/klinner-outreach-verify
+clasp clone <scriptId>
+ls
+```
+Confirm the file is absent from the pulled listing, then delete the temp
+directory. **Never run `clasp pull` inside `/Users/apple/Projects/klinner-deploy/outreach`**
+for this check — pulling into the canonical local source directory risks
+overwriting local files with remote state, which is a separate, unrelated
+risk this check must not introduce.
+
+If verification shows the file is still present remotely, stop — do not
+proceed with any Google-real testing until it is confirmed removed.
 
 ## File map
 

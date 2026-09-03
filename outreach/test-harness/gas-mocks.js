@@ -13,25 +13,40 @@
 function createInMemorySheet(name) {
   return {
     name: name,
-    data: [], // array of arrays, data[0] is row 1
+    data: [], // array of arrays, data[0] is row 1 — backs getLastRow() (content extent)
+    physicalRowCount: 1, // backs getMaxRows() (physical grid size) — DELIBERATELY separate from
+                          // data.length: real Sheets distinguishes "how many rows physically
+                          // exist" from "how far actual content extends", and a prior version of
+                          // this mock conflated the two (both were data.length), which meant a
+                          // test could never exercise the real, critical divergent case
+                          // (maxRows=1000, lastRow=6) that a correct fixture must handle without
+                          // deleting physically-provisioned-but-content-empty rows.
     frozenRows: 0,
     frozenCols: 0,
     protections: [],
     validations: {},
     numberFormats: {}, // 'row:col' -> format string, e.g. '@' for plain text
+    formulas: {}, // 'row:col' -> formula string (e.g. '=COUNTIF(...)'), separate from data/getValues()
     getName: function () { return this.name; },
     getLastRow: function () { return this.data.length; },
-    getMaxRows: function () { return Math.max(this.data.length, 1); },
+    getMaxRows: function () { return Math.max(this.physicalRowCount, this.data.length); },
     insertRowsAfter: function (afterRow, howMany) {
-      while (this.data.length < afterRow + howMany) this.data.push([]);
+      // Physical growth only — deliberately does NOT extend `data`
+      // (content). A freshly inserted row has no content until something
+      // is actually written to it, matching real Sheets.
+      var target = afterRow + howMany;
+      if (target > this.physicalRowCount) this.physicalRowCount = target;
     },
     setFrozenRows: function (n) { this.frozenRows = n; },
     setFrozenColumns: function (n) { this.frozenCols = n; },
-    clear: function () { this.data = []; this.protections = []; this.numberFormats = {}; },
+    clear: function () { this.data = []; this.protections = []; this.numberFormats = {}; this.formulas = {}; this.physicalRowCount = 1; },
     autoResizeColumns: function () {},
-    appendRow: function (row) { this.data.push(row.slice()); return this.getLastRow(); },
-    deleteRow: function (rowIndex) { this.data.splice(rowIndex - 1, 1); },
-    deleteRows: function (start, count) { this.data.splice(start - 1, count); },
+    appendRow: function (row) { this.data.push(row.slice()); if (this.data.length > this.physicalRowCount) this.physicalRowCount = this.data.length; return this.getLastRow(); },
+    deleteRow: function (rowIndex) { this.data.splice(rowIndex - 1, 1); this.physicalRowCount = Math.max(1, this.physicalRowCount - 1); },
+    deleteRows: function (start, count) {
+      this.data.splice(start - 1, count);
+      this.physicalRowCount = Math.max(1, this.physicalRowCount - count);
+    },
     getRange: function (row, col, numRows, numCols) {
       numRows = numRows || 1;
       numCols = numCols || 1;
@@ -42,14 +57,37 @@ function createInMemorySheet(name) {
             while (sheet.data.length < row + r) sheet.data.push([]);
             var targetRow = sheet.data[row + r - 1];
             for (var c = 0; c < numCols; c++) {
-              targetRow[col + c - 1] = values[r][c];
+              var cellKey = (row + r) + ':' + (col + c);
+              var v = values[r][c];
+              if (typeof v === 'string' && v.indexOf('=') === 0) {
+                // Mirrors real setValues(): a leading '=' string becomes a
+                // real formula, not literal text. Track it separately so
+                // getValues() (below) can correctly return a COMPUTED
+                // result distinct from the formula string — getFormulas()
+                // is the only way to recover the formula itself, exactly
+                // like real Apps Script.
+                sheet.formulas[cellKey] = v;
+                targetRow[col + c - 1] = '[COMPUTED:' + v + ']';
+              } else {
+                delete sheet.formulas[cellKey]; // overwriting with a literal value clears any prior formula, matching real Sheets.
+                targetRow[col + c - 1] = v;
+              }
             }
           }
+          if (sheet.data.length > sheet.physicalRowCount) sheet.physicalRowCount = sheet.data.length;
           return this;
         },
         setValue: function (value) {
           while (sheet.data.length < row) sheet.data.push([]);
-          sheet.data[row - 1][col - 1] = value;
+          var cellKey = row + ':' + col;
+          if (typeof value === 'string' && value.indexOf('=') === 0) {
+            sheet.formulas[cellKey] = value;
+            sheet.data[row - 1][col - 1] = '[COMPUTED:' + value + ']';
+          } else {
+            delete sheet.formulas[cellKey];
+            sheet.data[row - 1][col - 1] = value;
+          }
+          if (sheet.data.length > sheet.physicalRowCount) sheet.physicalRowCount = sheet.data.length;
           return this;
         },
         getValues: function () {
@@ -66,6 +104,25 @@ function createInMemorySheet(name) {
           var srcRow = sheet.data[row - 1] || [];
           var v = srcRow[col - 1];
           return v === undefined ? '' : v;
+        },
+        getFormulas: function () {
+          var out = [];
+          for (var r = 0; r < numRows; r++) {
+            var outRow = [];
+            for (var c = 0; c < numCols; c++) outRow.push(sheet.formulas[(row + r) + ':' + (col + c)] || '');
+            out.push(outRow);
+          }
+          return out;
+        },
+        setFormula: function (formula) {
+          return this.setValues([[formula]]); // single-cell convenience; routes through the same tracked-formula path.
+        },
+        clearContent: function () {
+          var blankRow = [];
+          for (var c = 0; c < numCols; c++) blankRow.push('');
+          var blankValues = [];
+          for (var r = 0; r < numRows; r++) blankValues.push(blankRow.slice());
+          return this.setValues(blankValues);
         },
         setDataValidation: function (rule) { sheet.validations[row + ':' + col] = rule; return this; },
         setNumberFormat: function (fmt) {
@@ -158,6 +215,8 @@ function createMockSpreadsheetApp() {
   return api;
 }
 
+var nodeCrypto = require('crypto');
+
 function createMockUtilities() {
   // Real GAS Utilities.getUuid() returns a standard random UUID v4, whose
   // first 8 chars are already unique per call. Match that shape exactly —
@@ -197,7 +256,25 @@ function createMockUtilities() {
       }
       throw new Error('Mock Utilities.formatDate: unsupported pattern "' + pattern + '"');
     },
-    sleep: function () { /* no-op in tests */ }
+    sleep: function () { /* no-op in tests */ },
+    /**
+     * Real Apps Script Utilities.computeDigest(algorithm, value, charset)
+     * returns a signed byte array (-128..127). Node's crypto gives unsigned
+     * 0-255 bytes — converted here so bytesToHex_ in Mailer.gs (which
+     * handles the real Apps Script signed-byte convention) round-trips to
+     * the exact same hex digest a real Apps Script execution would produce.
+     */
+    computeDigest: function (algorithm, value) {
+      var hash = nodeCrypto.createHash('sha256').update(String(value), 'utf8').digest();
+      var bytes = [];
+      for (var i = 0; i < hash.length; i++) {
+        var b = hash[i];
+        bytes.push(b > 127 ? b - 256 : b);
+      }
+      return bytes;
+    },
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    Charset: { UTF_8: 'UTF_8' }
   };
 }
 

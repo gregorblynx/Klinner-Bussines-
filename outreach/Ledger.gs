@@ -103,8 +103,97 @@ function findActiveDryRunDraft_(prospectId, step) {
   return null;
 }
 
+/**
+ * N3 V3 (Codex final audit, blocker N3-4): plural counterpart of
+ * findActiveDryRunDraft_, returning EVERY active (Mode=DRY_RUN,
+ * State=DRAFTED) row for the key, not just the last one. Normally 0 or 1.
+ * More than 1 is only possible after a partially-applied
+ * preserveDraftDurably_ transition (append succeeded, supersede of the old
+ * row failed) — resolveExistingPreviewDraft_ uses the length of this list
+ * as an explicit ambiguity guard and refuses to guess which row is
+ * authoritative, rather than silently picking "the last one" the way
+ * findActiveDryRunDraft_ does for its other (non-safety-critical) callers.
+ */
+function findActiveDryRunDraftRows_(prospectId, step) {
+  var key = getIdempotencyKey_(prospectId, step);
+  var rows = readAllLedgerRows_();
+  var matches = [];
+  for (var i = 0; i < rows.length; i++) {
+    var v = rows[i].values;
+    if (v.Idempotency_Key === key && v.Mode === LEDGER_MODE.DRY_RUN && v.State === LEDGER_STATE.DRAFTED) {
+      matches.push(rows[i]);
+    }
+  }
+  return matches;
+}
+
 function supersedeLedgerRow_(rowIndex) {
   updateLedgerRow_(rowIndex, { State: LEDGER_STATE.SUPERSEDED });
+}
+
+/**
+ * N3 V3 (Codex final audit, blocker N3-4 — partial-failure safety):
+ * the Gmail draft at Draft_ID/Thread_ID needs to be durably preserved —
+ * either because a human edit was detected (content fingerprint changed)
+ * or because this is a legacy row with no baseline fingerprint to compare
+ * against (see verifyPreviewDraftOwnership_'s `legacy` flag). The
+ * underlying resource was NOT deleted or recreated, so this is
+ * deliberately NOT the same thing as supersedeLedgerRow_() + a fresh
+ * appendLedgerRow_() for a brand-new draft — and it is a ONE-TIME, DURABLE
+ * transition: the appended row carries Human_Edit_Preserved=true, so
+ * resolveExistingPreviewDraft_ short-circuits straight to preserving it on
+ * every future run without ever calling this function again for the same
+ * key (no repeated reconciliation rows, no re-evaluating content that was
+ * already confirmed human-edited/legacy — see resolveExistingPreviewDraft_).
+ *
+ * ORDER MATTERS (blocker N3-4): the new row is APPENDED FIRST, the old row
+ * is SUPERSEDED SECOND — the reverse of a naive "retire then add"
+ * ordering, chosen specifically so a partial failure can never leave ZERO
+ * active rows for this key:
+ *   - append throws -> the old row is completely untouched, still the
+ *     sole active row for this key. The next resolveExistingPreviewDraft_
+ *     call sees exactly one active row and safely re-attempts the same
+ *     transition (idempotent in effect — it will recompute the same
+ *     `edited`/`legacy` determination and try again).
+ *   - append succeeds but the FOLLOWING supersede throws -> there are now
+ *     TWO active rows for this key (old + new). This is deliberately NOT
+ *     silently resolved here or anywhere downstream — the very next
+ *     resolveExistingPreviewDraft_ call's findActiveDryRunDraftRows_()
+ *     ambiguity guard (Mailer.gs) sees length > 1 and fails closed
+ *     (BLOCKED_NEEDS_REVIEW) rather than guessing which row is
+ *     authoritative. Never "last row wins" — that could delete or
+ *     duplicate a real Gmail draft based on an unverified guess.
+ * Either partial-failure outcome is safe: no automatic delete, no
+ * automatic duplicate draft, ever.
+ *
+ * Audit trail is preserved by APPENDING rather than overwriting: the old
+ * row keeps its originally-recorded Message_ID and Draft_Fingerprint
+ * untouched (so a reviewer can still see exactly what was first created)
+ * and is marked SUPERSEDED with an Error-column note distinguishing this
+ * from an ordinary delete+recreate supersede. The new row carries the SAME
+ * Prospect_ID/Step/Idempotency_Key/Mode/Draft_ID/Thread_ID (the resource
+ * identity did not change) plus the CURRENT Message_ID/fingerprint and the
+ * durable marker + detection timestamp.
+ *
+ * @param {string} reasonTag 'HUMAN_EDIT_PRESERVED' or 'LEGACY_BASELINE_PRESERVED'
+ *   — recorded verbatim in the old row's Error column so a reviewer can
+ *   tell a confirmed edit apart from a conservative legacy bootstrap.
+ */
+function preserveDraftDurably_(oldRowIndex, oldValues, verification, reasonTag) {
+  var now = new Date();
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: oldValues.Prospect_ID, Email_Normalized: oldValues.Email_Normalized,
+    Step: oldValues.Step, Idempotency_Key: oldValues.Idempotency_Key, Mode: LEDGER_MODE.DRY_RUN,
+    State: LEDGER_STATE.DRAFTED, Thread_ID: oldValues.Thread_ID, Message_ID: verification.currentMessageId,
+    Draft_ID: oldValues.Draft_ID, Confirmed_At: now, Error: '',
+    Draft_Fingerprint: verification.currentFingerprint, Human_Edit_Preserved: true, Human_Edit_Detected_At: now
+  });
+  updateLedgerRow_(oldRowIndex, {
+    State: LEDGER_STATE.SUPERSEDED,
+    Error: reasonTag + ': draft preserved; ' + (oldValues.Draft_Fingerprint
+      ? 'content fingerprint changed from "' + oldValues.Draft_Fingerprint + '" to "' + verification.currentFingerprint + '".'
+      : 'no baseline fingerprint existed (legacy row) — bootstrapped conservatively, not evidence it was ever unedited.')
+  });
 }
 
 /**

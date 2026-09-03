@@ -809,42 +809,644 @@ function test_finding4_foreignDraftIsNeverDeleted_() {
 }
 
 /**
- * N3 positive case: the operator opens a preview draft in Gmail and edits
- * its visible content during review (exactly what F1 asks them to do).
- * The banner-based signal breaks, but the persistent Message_ID captured
- * at creation time must still let the system recognize the draft as its
- * own — regeneration must end with exactly ONE live draft, not two.
+ * N3 (round 1 regression guard): a draft that has NOT been touched since
+ * creation — Draft_ID, Thread_ID and Message_ID all still exactly what
+ * previewStep() recorded — must regenerate normally on a second preview
+ * run: old draft deleted, ledger row superseded, exactly one live draft
+ * survives. This is CASO 1. (T25 already covers this end-to-end against a
+ * real-Gmail-only path; this is the offline-runnable equivalent.)
  */
-function test_N3_editedDraftStillRecognizedViaMessageId_() {
-  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3positive'), Problem_Found: 'Original problem statement.' });
+function test_N3_stableUntouchedDraftRegeneratesNormally_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3caso1'), Problem_Found: 'Original problem statement.' });
   validateAllRows();
   var p = getTestProspectByRow_(row);
 
   var first = previewStep(p.Prospect_ID, 1);
   assertEquals_('DRAFTED', first.status, 'First preview must draft.');
 
-  // Simulate the operator editing the draft's body in Gmail — the banner
-  // line is gone, replaced with content they wrote themselves.
+  var second = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', second.status, 'CASO 1: an untouched draft must regenerate normally on the next preview.');
+  assert_(first.draftId !== second.draftId, 'Regeneration must produce a new draft id.');
+
+  var liveDrafts = GmailApp.getDrafts().filter(function (d) { return d.getId() === first.draftId || d.getId() === second.draftId; });
+  assertEquals_(1, liveDrafts.length, 'CASO 1: exactly one live draft must remain — the old one deleted, not left stranded.');
+  assertEquals_(second.draftId, liveDrafts[0].getId(), 'The surviving draft must be the newly created one.');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'CASO 1: exactly one DRAFTED ledger row must remain.');
+}
+
+/**
+ * Shared setup for the N3 V2 durable-preservation tests below: creates a
+ * prospect, drafts step 1, and returns everything a test needs to then
+ * simulate a specific kind of human edit against the live Gmail message.
+ */
+function n3_setupDraftedProspectForEditTest_(emailTag) {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'Original problem statement.' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var first = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', first.status, 'First preview must draft.');
+
+  var firstLedgerRow = findActiveDryRunDraft_(p.Prospect_ID, 1);
+  assert_(!!firstLedgerRow, 'Precondition: an active DRAFTED ledger row must exist after the first preview.');
+  assert_(!!firstLedgerRow.values.Draft_Fingerprint, 'Precondition: Draft_Fingerprint must have been captured at creation.');
+
+  var liveDraft = GmailApp.getDrafts().filter(function (d) { return d.getId() === first.draftId; })[0];
+  assert_(!!liveDraft, 'Precondition: the first draft must exist.');
+
+  return { p: p, first: first, firstLedgerRow: firstLedgerRow, liveDraft: liveDraft, message: liveDraft.getMessage() };
+}
+
+function n3_assertDurablyPreserved_(ctx, outcome, expectMessageIdChanged) {
+  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', outcome.status,
+    'A content-fingerprint change must be recognized and durably preserved, not silently regenerated.');
+
+  var stillThere = GmailApp.getDrafts().filter(function (d) { return d.getId() === ctx.first.draftId; })[0];
+  assert_(!!stillThere, 'The human-edited draft must NOT have been deleted.');
+
+  var activeRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, activeRows.length, 'Exactly one active DRAFTED ledger row must exist — no duplicate.');
+  assertEquals_(ctx.first.draftId, activeRows[0].values.Draft_ID, 'The active row must still reference the SAME (preserved) Draft_ID.');
+  assertEquals_(true, activeRows[0].values.Human_Edit_Preserved, 'The active row must carry the durable Human_Edit_Preserved marker.');
+  assert_(!!activeRows[0].values.Human_Edit_Detected_At, 'The active row must record when the edit was detected.');
+  assert_(activeRows[0].values.Draft_Fingerprint !== ctx.firstLedgerRow.values.Draft_Fingerprint,
+    'The active row\'s fingerprint must reflect the CURRENT (edited) content, not the original.');
+  if (expectMessageIdChanged === true) {
+    assert_(activeRows[0].values.Message_ID !== ctx.firstLedgerRow.values.Message_ID, 'Message_ID was expected to have rotated.');
+  } else if (expectMessageIdChanged === false) {
+    assertEquals_(ctx.firstLedgerRow.values.Message_ID, activeRows[0].values.Message_ID,
+      'Message_ID was expected to stay the SAME — detection must come from the fingerprint alone, not Message_ID.');
+  }
+
+  // Audit trail: original row appended-not-deleted, marked SUPERSEDED, history untouched.
+  var allRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1;
+  });
+  var original = allRows.filter(function (r) { return r.rowIndex === ctx.firstLedgerRow.rowIndex; })[0];
+  assert_(!!original, 'The ORIGINAL ledger row must still exist (appended, not deleted).');
+  assertEquals_(LEDGER_STATE.SUPERSEDED, original.values.State, 'The original row must be marked SUPERSEDED, not mutated into the new state.');
+  assertEquals_(ctx.firstLedgerRow.values.Message_ID, original.values.Message_ID, 'The original row must keep its ORIGINAL Message_ID forever.');
+  assertEquals_(ctx.firstLedgerRow.values.Draft_Fingerprint, original.values.Draft_Fingerprint, 'The original row must keep its ORIGINAL fingerprint forever.');
+  assert_(original.values.Error.indexOf('HUMAN_EDIT_PRESERVED') !== -1,
+    'The original row must carry a distinguishing marker proving this was a durable preservation, not an ordinary delete+recreate supersede.');
+
+  return activeRows[0];
+}
+
+/**
+ * N3 V2 GOOGLE-REAL FINDING (round 2) — item 2: reproduces the exact
+ * real-world scenario found on the "Klinner Outreach — F1 Test" Sheet with
+ * the Rosa's Bakery draft, where Message_ID rotated after a human edit.
+ * Also covers items 4, 5, 15, 16, 17 (durable preservation across
+ * repeated later runs, with zero ledger growth once preserved).
+ */
+function test_N3_caso2_editWithMessageIdRotationIsPreservedDurably_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso2');
+  var editedBody = ctx.message.getPlainBody() + '\n\nTEST EDIT';
+  ctx.message.getPlainBody = function () { return editedBody; };
+  ctx.message.getBody = ctx.message.getPlainBody;
+  ctx.message.getId = function () { return ctx.firstLedgerRow.values.Message_ID + '-rotated-by-edit'; };
+
+  var second = previewStep(ctx.p.Prospect_ID, 1);
+  var preservedRow = n3_assertDurablyPreserved_(ctx, second, true);
+  assertEquals_(editedBody, ctx.message.getPlainBody(), 'TEST EDIT must survive untouched (item 4).');
+
+  // Item 5 / item 17: several MORE runs with no further edit — must stay
+  // stable, no additional Gmail drafts, NO ledger growth (still exactly
+  // 2 rows total for this key: the original + the one durable row).
+  for (var i = 0; i < 3; i++) {
+    var repeat = previewStep(ctx.p.Prospect_ID, 1);
+    assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', repeat.status, 'Run #' + (i + 3) + ' must still preserve — never recategorized as unedited (item 4/5).');
+  }
+  var allRowsFinal = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1;
+  });
+  assertEquals_(2, allRowsFinal.length, 'Item 17: no repeated reconciliation rows — total row count must stay at exactly 2 (original + durable) after multiple later runs.');
+  var draftsForKey = GmailApp.getDrafts().filter(function (d) { return d.getId() === ctx.first.draftId; });
+  assertEquals_(1, draftsForKey.length, 'Exactly one Gmail draft must exist after repeated later runs — never duplicated.');
+  assertEquals_(editedBody, draftsForKey[0].getMessage().getPlainBody(), 'TEST EDIT must still be intact after repeated later runs.');
+}
+
+/**
+ * N3 V2 REAUDIT FINDING (round 3) — item 3: Message_ID staying the SAME
+ * must NOT be interpreted as "unedited". Detection must come purely from
+ * the content fingerprint.
+ */
+function test_N3_caso3_editWithoutMessageIdRotationIsPreservedDurably_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso3');
+  var editedBody = ctx.message.getPlainBody() + '\n\nTEST EDIT (no id rotation)';
+  ctx.message.getPlainBody = function () { return editedBody; };
+  ctx.message.getBody = ctx.message.getPlainBody;
+  // Deliberately do NOT override getId() — Message_ID stays exactly the same.
+
+  var second = previewStep(ctx.p.Prospect_ID, 1);
+  n3_assertDurablyPreserved_(ctx, second, false);
+}
+
+/**
+ * N3 V2 CASO 5 — item 6: a human changing the RECIPIENT of the draft must
+ * be detected (recipient is part of the fingerprint) and preserved, never
+ * silently deleted or overwritten, and never mistaken for a foreign draft.
+ */
+function test_N3_caso5_recipientChangeIsPreservedDurably_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso5recipient');
+  ctx.message.getTo = function () { return 'someone-completely-different@example-corp-test.com'; };
+
+  var second = previewStep(ctx.p.Prospect_ID, 1);
+  n3_assertDurablyPreserved_(ctx, second, false);
+}
+
+/**
+ * N3 V2 CASO 5 — item 7: a human changing the SUBJECT of the draft must be
+ * detected and preserved the same way.
+ */
+function test_N3_caso5_subjectChangeIsPreservedDurably_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso5subject');
+  ctx.message.getSubject = function () { return 'A completely different subject the human typed'; };
+
+  var second = previewStep(ctx.p.Prospect_ID, 1);
+  n3_assertDurablyPreserved_(ctx, second, false);
+}
+
+/**
+ * N3 V2 CASO 8 — item 12: GmailApp.getDrafts() itself failing (quota,
+ * transient outage, permission) must fail closed — never interpreted as
+ * "no drafts exist" (which would wrongly authorize creating a duplicate).
+ */
+function test_N3_caso8_gmailGetDraftsErrorFailsClosed_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso8getdrafts');
+  var originalGetDrafts = GmailApp.getDrafts;
+  GmailApp.getDrafts = function () { throw new Error('Simulated Gmail outage in getDrafts().'); };
+
+  var second;
+  try {
+    second = previewStep(ctx.p.Prospect_ID, 1);
+  } finally {
+    GmailApp.getDrafts = originalGetDrafts; // restore immediately, even if an assertion below throws
+  }
+
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status, 'A GmailApp.getDrafts() failure must fail closed, not create a duplicate.');
+  assertEquals_('gmail_read_error', second.reason, 'The reason must identify a Gmail read error.');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'No new ledger row must have been created on a Gmail read error.');
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.first.draftId; }), 'The original draft must be untouched.');
+}
+
+/**
+ * N3 V2 CASO 8 — item 13: message.getId() failing must fail closed too,
+ * distinctly from a getDrafts() failure (exercises a different call site).
+ */
+function test_N3_caso8_messageGetIdErrorFailsClosed_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso8getid');
+  ctx.message.getId = function () { throw new Error('Simulated Gmail error reading message id.'); };
+
+  var second = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status, 'A message.getId() failure must fail closed.');
+  assertEquals_('message_id_read_failed', second.reason, 'The reason must identify the failing read.');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'No new ledger row must have been created on a read error.');
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.first.draftId; }), 'The original draft must be untouched (never deleted on a read error).');
+}
+
+/**
+ * N3 V2 CASO 8 — item 14: a failure reading subject/body (content) must
+ * also fail closed, distinctly from the id/thread read failures above.
+ */
+function test_N3_caso8_contentReadErrorFailsClosed_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3caso8content');
+  ctx.message.getPlainBody = function () { throw new Error('Simulated Gmail error reading draft body.'); };
+  ctx.message.getBody = ctx.message.getPlainBody;
+
+  var second = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status, 'A content read failure must fail closed.');
+  assertEquals_('content_read_failed', second.reason, 'The reason must identify the failing read.');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'No new ledger row must have been created on a read error.');
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.first.draftId; }), 'The original draft must be untouched (never deleted on a read error).');
+}
+
+/**
+ * N3 V3 (Codex final audit) test helper: seeds a ledger row shaped exactly
+ * like the two real rows Google-real found (Rosa's Bakery, Acme) —
+ * created BEFORE Draft_Fingerprint/Human_Edit_Preserved/Human_Edit_Detected_At
+ * existed. A real Gmail draft with the preview banner exists, but the
+ * ledger row's Draft_Fingerprint is blank — bypasses previewStep()
+ * entirely (which always populates a fingerprint now) to faithfully
+ * reproduce the pre-migration shape.
+ */
+function n3v3_seedLegacyDraftedRow_(emailTag) {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'Original problem statement.' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var subject = '[KLINNER PREVIEW · Step 1] Legacy test subject';
+  var body = PREVIEW_BANNER + '\n\nOriginal legacy body, written before fingerprinting existed.';
+  var draft = GmailApp.createDraft(p.Email, subject, body, {});
+  var message = draft.getMessage();
+  var threadId = message.getThread().getId();
+
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: p.Prospect_ID, Email_Normalized: p.Email_Normalized,
+    Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.DRY_RUN,
+    State: LEDGER_STATE.DRAFTED, Thread_ID: threadId, Message_ID: message.getId(), Draft_ID: draft.getId(),
+    Confirmed_At: new Date(), Error: '', Draft_Fingerprint: '', Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
+  });
+
+  return { p: p, draft: draft, message: message, draftId: draft.getId(), threadId: threadId, originalBody: body };
+}
+
+/**
+ * N3 V3 — item 11: reproduces ROSA exactly. Legacy row (blank
+ * Draft_Fingerprint) + a KNOWN human edit (TEST EDIT appended, Message_ID
+ * rotated) already applied before the first post-migration Preview runs.
+ * Must never be deleted; TEST EDIT must survive; must become durably
+ * preserved (not just silently skipped this one time).
+ */
+function test_N3v3_legacyBlankFingerprintKnownEditIsPreservedNeverDeleted_() {
+  var ctx = n3v3_seedLegacyDraftedRow_('n3v3rosa');
+  var editedBody = ctx.originalBody + '\n\nTEST EDIT';
+  ctx.message.getPlainBody = function () { return editedBody; };
+  ctx.message.getBody = ctx.message.getPlainBody;
+  ctx.message.getId = function () { return ctx.message.getId ? 'rotated-legacy-message-id' : 'rotated-legacy-message-id'; };
+
+  var outcome = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', outcome.status,
+    'Item 11 (ROSA): a legacy row with a blank fingerprint and a known human edit must be preserved, never deleted.');
+
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.draftId; }), 'ROSA draft must NOT have been deleted.');
+  assertEquals_(editedBody, GmailApp.getDrafts().filter(function (d) { return d.getId() === ctx.draftId; })[0].getMessage().getPlainBody(),
+    'TEST EDIT must survive intact.');
+
+  var activeRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, activeRows.length, 'Exactly one active row — no duplicate.');
+  assertEquals_(true, activeRows[0].values.Human_Edit_Preserved, 'Item 16: the legacy row must become durably preserved.');
+  assert_(!!activeRows[0].values.Draft_Fingerprint, 'A bootstrapped fingerprint must now exist on the durable row.');
+}
+
+/**
+ * N3 V3 — item 12: reproduces ACME. Legacy row (blank Draft_Fingerprint),
+ * NO known edit — the draft is (as far as we know) exactly as created.
+ * Must STILL be preserved conservatively, never assumed intact, never
+ * auto-deleted/regenerated.
+ */
+function test_N3v3_legacyBlankFingerprintApparentlyUntouchedIsPreservedConservatively_() {
+  var ctx = n3v3_seedLegacyDraftedRow_('n3v3acme');
+  // Deliberately no edit simulated — this IS the "apparently untouched" case.
+
+  var outcome = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', outcome.status,
+    'Item 12 (ACME): a legacy row must be preserved conservatively even when apparently untouched — never assumed intact without a baseline.');
+
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.draftId; }), 'ACME draft must NOT have been deleted.');
+  var activeRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, activeRows.length, 'Exactly one active row — no duplicate.');
+  assertEquals_(true, activeRows[0].values.Human_Edit_Preserved, 'The legacy row must become durably preserved even though it looked untouched.');
+}
+
+/**
+ * N3 V3 — items 13/14/15/16: the FIRST post-migration Preview run
+ * transitions a legacy row into the durable state (previous two tests).
+ * This test additionally proves the SECOND and THIRD runs after that
+ * transition still preserve, with zero ledger growth and zero duplicates
+ * — the same durability guarantee CASO 2/3 already have, now proven for
+ * the legacy path specifically.
+ */
+function test_N3v3_legacyPreservationSurvivesMultiplePostMigrationRuns_() {
+  var ctx = n3v3_seedLegacyDraftedRow_('n3v3legacydurable');
+
+  var first = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', first.status, 'First post-migration Preview must preserve, not delete (item 13).');
+
+  for (var i = 0; i < 2; i++) {
+    var repeat = previewStep(ctx.p.Prospect_ID, 1);
+    assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', repeat.status, 'Run #' + (i + 2) + ' must still preserve (item 14).');
+  }
+
+  var allRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1;
+  });
+  assertEquals_(2, allRows.length, 'Item 15/16: no ledger growth after the initial legacy-to-durable transition — exactly 2 rows total (original legacy + durable).');
+  var draftsForKey = GmailApp.getDrafts().filter(function (d) { return d.getId() === ctx.draftId; });
+  assertEquals_(1, draftsForKey.length, 'Item 15: exactly one Gmail draft — never duplicated across repeated runs.');
+}
+
+/**
+ * N3 V3 — blocker N3-4, item 41: if two active DRY_RUN/DRAFTED ledger rows
+ * somehow exist for the same idempotency key (simulating the aftermath of
+ * a partially-applied preserve transition: append succeeded, supersede of
+ * the old row failed), resolveExistingPreviewDraft_ must never silently
+ * pick one — it must fail closed.
+ */
+function test_N3v3_ambiguousMultipleActiveRowsBlocksRegeneration_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3ambiguous'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var first = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', first.status, 'First preview must draft.');
+  var firstRow = findActiveDryRunDraft_(p.Prospect_ID, 1);
+
+  // Simulate the ambiguous aftermath directly: a SECOND active DRAFTED row
+  // for the exact same idempotency key, as preserveDraftDurably_'s append
+  // step would produce if its own supersede step then failed.
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: p.Prospect_ID, Email_Normalized: p.Email_Normalized,
+    Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.DRY_RUN,
+    State: LEDGER_STATE.DRAFTED, Thread_ID: firstRow.values.Thread_ID, Message_ID: firstRow.values.Message_ID,
+    Draft_ID: firstRow.values.Draft_ID, Confirmed_At: new Date(), Error: '',
+    Draft_Fingerprint: firstRow.values.Draft_Fingerprint, Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
+  });
+
+  var activeRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(2, activeRows.length, 'Precondition: exactly two active rows must now exist.');
+
+  var outcome = previewStep(p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', outcome.status, 'Ambiguity must fail closed, not silently pick a row.');
+  assertEquals_('ambiguous_multiple_active_rows', outcome.reason, 'The reason must identify the ambiguity.');
+
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === first.draftId; }), 'The original draft must NOT have been deleted while ambiguous.');
+  var activeRowsAfter = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(2, activeRowsAfter.length, 'Nothing must have been superseded or added while ambiguous — no new draft created.');
+}
+
+/**
+ * N3 V3 — blocker N3-4: if preserveDraftDurably_'s APPEND step itself
+ * throws, the old row must be completely untouched (still State=DRAFTED,
+ * still the sole active row) — proving the append-first ordering actually
+ * protects against a zero-active-rows outcome.
+ */
+function test_N3v3_preserveTransitionAppendFailureLeavesOldRowIntact_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3v3appendfail');
+  var editedBody = ctx.message.getPlainBody() + '\n\nTEST EDIT';
+  ctx.message.getPlainBody = function () { return editedBody; };
+  ctx.message.getBody = ctx.message.getPlainBody;
+
+  var originalAppendLedgerRow = appendLedgerRow_;
+  appendLedgerRow_ = function () { throw new Error('Simulated append failure during preserve transition.'); };
+
+  var outcome;
+  try {
+    outcome = previewStep(ctx.p.Prospect_ID, 1);
+  } finally {
+    appendLedgerRow_ = originalAppendLedgerRow;
+  }
+
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', outcome.status, 'A failed preserve transition must fail closed.');
+  assertEquals_('preserve_transition_failed', outcome.reason, 'The reason must identify the failed transition.');
+
+  var activeRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, activeRows.length, 'The old row must remain the SOLE active row — append-first ordering prevented a zero-active-rows outcome.');
+  assertEquals_(ctx.firstLedgerRow.values.Draft_Fingerprint, activeRows[0].values.Draft_Fingerprint, 'The old row must be completely untouched by the failed append.');
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.first.draftId; }), 'The draft itself must be untouched.');
+
+  // Retry: with appendLedgerRow_ restored, the SAME edit must now be
+  // detected and preserved successfully — proving the failure was
+  // recoverable, not a permanent block.
+  var retry = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', retry.status, 'Item 40: retry after a transient partial failure must succeed.');
+}
+
+/**
+ * N3 V3 — blocker N3-4: if preserveDraftDurably_'s SUPERSEDE step (the
+ * SECOND write) throws AFTER the append succeeded, the very next
+ * resolveExistingPreviewDraft_ call must detect the resulting
+ * two-active-rows ambiguity and fail closed — chains directly into the
+ * ambiguity guard proven by test_N3v3_ambiguousMultipleActiveRowsBlocksRegeneration_.
+ */
+function test_N3v3_preserveTransitionSupersedeFailureIsCaughtByAmbiguityGuardNextRun_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3v3supersedefail');
+  var editedBody = ctx.message.getPlainBody() + '\n\nTEST EDIT';
+  ctx.message.getPlainBody = function () { return editedBody; };
+  ctx.message.getBody = ctx.message.getPlainBody;
+
+  var originalUpdateLedgerRow = updateLedgerRow_;
+  updateLedgerRow_ = function () { throw new Error('Simulated supersede failure during preserve transition.'); };
+
+  var outcome;
+  try {
+    outcome = previewStep(ctx.p.Prospect_ID, 1);
+  } finally {
+    updateLedgerRow_ = originalUpdateLedgerRow;
+  }
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', outcome.status, 'The supersede failure must itself fail closed on this run too.');
+
+  var activeRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === ctx.p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(2, activeRows.length, 'Precondition: the append succeeded (new durable row exists) but the old row was NOT superseded — two active rows now exist.');
+
+  var nextRun = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', nextRun.status, 'The very next run must detect the ambiguity and fail closed.');
+  assertEquals_('ambiguous_multiple_active_rows', nextRun.reason, 'The reason must identify the ambiguity left by the partial failure.');
+  assert_(GmailApp.getDrafts().some(function (d) { return d.getId() === ctx.first.draftId; }), 'The original draft must never have been deleted through any of this.');
+}
+
+/**
+ * N3 V3 — blocker N3-3, items 31-37: a Gmail read failure while capturing
+ * the JUST-CREATED draft's own metadata must fail closed — compensate
+ * (delete) the draft when possible, and never write a "healthy" DRAFTED
+ * row with a blank fingerprint. This variant: draft.getId() and
+ * deleteDraft() both still work, so compensation succeeds and NO ledger
+ * row is written at all.
+ */
+function test_N3v3_creationMetadataFailureWithSuccessfulCompensationWritesNoRow_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3createfail1'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var originalCreateDraft = GmailApp.createDraft;
+  var draftCountBefore = GmailApp.getDrafts().length;
+  GmailApp.createDraft = function (to, subject, body, opts) {
+    var draft = originalCreateDraft(to, subject, body, opts);
+    var msg = draft.getMessage();
+    msg.getId = function () { throw new Error('Simulated post-create message.getId() failure.'); };
+    return draft;
+  };
+
+  var outcome;
+  try {
+    outcome = previewStep(p.Prospect_ID, 1);
+  } finally {
+    GmailApp.createDraft = originalCreateDraft;
+  }
+
+  assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed, not draft successfully.');
+  assertEquals_(true, outcome.compensated, 'Compensation (delete) must have succeeded — draft.getId() itself still worked.');
+  assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'The failed draft must have been deleted — no extra draft remains.');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(0, draftedRows.length, 'No healthy DRAFTED row must have been written when compensation succeeded.');
+}
+
+/**
+ * N3 V3 — blocker N3-3, items 31-37 (uncompensable variant): if the
+ * compensating delete ALSO fails, previewStep must write a recovery
+ * ledger row (blank fingerprint) instead of leaving a fully untracked
+ * orphan — and the NEXT previewStep() run must treat that recovery row
+ * via the legacy-blank-fingerprint policy: preserved, never duplicated.
+ */
+function test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRow_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3createfail2'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var originalCreateDraft = GmailApp.createDraft;
+  var capturedMessage = null;
+  var originalGetSubject = null;
+  GmailApp.createDraft = function (to, subject, body, opts) {
+    var draft = originalCreateDraft(to, subject, body, opts);
+    var msg = draft.getMessage();
+    capturedMessage = msg;
+    originalGetSubject = msg.getSubject;
+    msg.getSubject = function () { throw new Error('Simulated post-create message.getSubject() failure.'); };
+    draft.deleteDraft = function () { throw new Error('Simulated compensation delete failure.'); };
+    return draft;
+  };
+
+  var outcome;
+  try {
+    outcome = previewStep(p.Prospect_ID, 1);
+  } finally {
+    GmailApp.createDraft = originalCreateDraft;
+  }
+
+  assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed.');
+  assertEquals_(false, outcome.compensated, 'Compensation must be reported as failed (the delete itself threw).');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'A recovery row must have been written so the orphan is not fully untracked.');
+  assertEquals_('', draftedRows[0].values.Draft_Fingerprint, 'The recovery row correctly has a blank fingerprint (that is exactly what failed to capture).');
+  assert_(draftedRows[0].values.Error.indexOf('CREATION_METADATA_CAPTURE_FAILED') !== -1, 'The recovery row must be clearly marked.');
+
+  // Restore the real getSubject on the underlying message BEFORE the next
+  // run — the simulated failure was a one-time creation-time event, not a
+  // permanently broken Gmail draft; the point of this test is what happens
+  // on a NORMAL subsequent read of the recovery row, isolated from the
+  // original injected failure.
+  if (capturedMessage && originalGetSubject) capturedMessage.getSubject = originalGetSubject;
+
+  // The critical safety proof: the NEXT run must NOT create a duplicate —
+  // the legacy-blank-fingerprint policy must durably preserve it instead.
+  var nextRun = previewStep(p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', nextRun.status, 'The recovery row must be preserved via the legacy policy, never regenerated into a duplicate.');
+  var draftsForKey = GmailApp.getDrafts().filter(function (d) { return d.getId() === draftedRows[0].values.Draft_ID; });
+  assertEquals_(1, draftsForKey.length, 'Exactly one Gmail draft must exist — the recovery scenario never produced a duplicate.');
+}
+
+/**
+ * N3 V3 — item 1D: recipient canonicalization must absorb Gmail's
+ * "Name <email>" wrapper as a structural difference, not a content edit —
+ * a pure display-name wrapper change around the SAME address must NOT
+ * false-positive into "edited" (a false positive here would still be safe
+ * per policy, but the point of 1D is to avoid unnecessary preservation
+ * noise for a non-edit).
+ */
+function test_N3v3_recipientDisplayNameWrapperDoesNotFalsePositive_() {
+  var ctx = n3_setupDraftedProspectForEditTest_('n3v3recipientwrapper');
+  var bareEmail = ctx.message.getTo();
+  ctx.message.getTo = function () { return 'Test Prospect <' + bareEmail + '>'; };
+
+  var outcome = previewStep(ctx.p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', outcome.status,
+    'A pure "Name <email>" wrapper around the SAME address must canonicalize identically — CASO 1 (untouched), not a false edit.');
+}
+
+/**
+ * N3 V2 CASO 7 — item 11: the ledger's Draft_ID no longer resolves to any
+ * real Gmail draft (e.g. the operator manually deleted it from the Gmail
+ * UI), and Gmail enumeration succeeded and genuinely confirmed absence.
+ * Nothing exists to protect, so previewStep must safely supersede the
+ * stale ledger row and create a fresh draft — never error, never leave two
+ * DRAFTED rows.
+ */
+function test_N3_missingDraftIdCreatesNewSafely_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3caso4'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var first = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', first.status, 'First preview must draft.');
+
+  // Simulate the operator deleting the draft directly in Gmail.
+  var liveDraft = GmailApp.getDrafts().filter(function (d) { return d.getId() === first.draftId; })[0];
+  assert_(!!liveDraft, 'Precondition: the first draft must exist.');
+  liveDraft.deleteDraft();
+  assert_(!GmailApp.getDrafts().some(function (d) { return d.getId() === first.draftId; }), 'Precondition: draft must now be gone from Gmail.');
+
+  var second = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', second.status, 'CASO 4: previewStep must safely create a new draft when the old Draft_ID no longer resolves.');
+  assert_(second.draftId !== first.draftId, 'The new draft must be a genuinely new resource.');
+
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  });
+  assertEquals_(1, draftedRows.length, 'CASO 4: exactly one DRAFTED ledger row must remain — no dangling duplicate.');
+}
+
+/**
+ * N3 V2 CASO 6 — item 9: the ledger's Draft_ID still resolves to a real
+ * Gmail draft, but that draft's current Thread_ID does NOT match what the
+ * ledger recorded at creation time. This is treated as suspicious (a
+ * Draft_ID collision or a tampered ledger row) and must fail closed: never
+ * delete the mismatched draft, never create a duplicate this run, and
+ * (unlike a content edit) never durably preserved — re-evaluated every run.
+ */
+function test_N3_threadIdMismatchBlocksRegeneration_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3caso5'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var first = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', first.status, 'First preview must draft.');
+
   var liveDraft = GmailApp.getDrafts().filter(function (d) { return d.getId() === first.draftId; })[0];
   assert_(!!liveDraft, 'Precondition: the first draft must exist.');
   var message = liveDraft.getMessage();
-  var originalMessageId = message.getId();
-  message.getPlainBody = function () { return 'Hi, I rewrote this myself during review.'; };
-  message.getBody = message.getPlainBody;
+  var originalThread = message.getThread();
+  message.getThread = function () { return { getId: function () { return 'unexpected-different-thread-id'; } }; };
 
-  var second = previewStep(p.Prospect_ID, 1); // Regeneration.
-  assertEquals_('DRAFTED', second.status, 'Second preview (regeneration after an operator edit) must still draft.');
+  var second = previewStep(p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status,
+    'CASO 5: a Thread_ID mismatch must fail closed — no regeneration, no deletion.');
+  assertEquals_('thread_mismatch', second.reason, 'The refusal reason must be thread_mismatch.');
 
-  var liveDrafts = GmailApp.getDrafts().filter(function (d) { return d.getId() === first.draftId || d.getId() === second.draftId; });
-  assertEquals_(1, liveDrafts.length,
-    'Exactly one live draft must remain after regenerating an edited draft — the edited one must have been recognized and superseded via Message_ID, not left stranded (N3).');
-  assertEquals_(second.draftId, liveDrafts[0].getId(), 'The surviving draft must be the newly created one.');
-
-  var draftedLedgerRows = readAllLedgerRows_().filter(function (r) {
+  var stillThere = GmailApp.getDrafts().some(function (d) { return d.getId() === first.draftId; });
+  assert_(stillThere, 'The mismatched-thread draft must NOT have been deleted.');
+  var draftedRows = readAllLedgerRows_().filter(function (r) {
     return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
   });
-  assertEquals_(1, draftedLedgerRows.length, 'Exactly one DRAFTED ledger row must remain (N3).');
-  assert_(!!draftedLedgerRows[0].values.Message_ID, 'The surviving ledger row must have a Message_ID captured, for future regenerations to key off of.');
+  assertEquals_(1, draftedRows.length, 'CASO 5: no duplicate DRAFTED row must have been created — the original stays the only one on record.');
+
+  message.getThread = function () { return originalThread; }; // test cleanup, not part of the assertion
 }
 
 function test_finding5_previewLocksCriticalSection_() {
@@ -1133,41 +1735,111 @@ function test_configValueColumnIsPlainTextFormatted_() {
 }
 
 /**
+ * N3 V2 schema migration: repairSendLedgerColumns_ (SheetRepo.gs) must be
+ * additive-only (never touch columns A-M or any data row) and idempotent
+ * (a no-op once the headers already exist). Simulates a pre-existing real
+ * sheet (from before this fix) by blanking the 3 new header cells first,
+ * then restores them in a finally block so this test never leaves the
+ * shared SendLedger sheet's header row broken for a later test.
+ */
+function test_N3_repairSendLedgerColumnsIsIdempotentAndAdditive_() {
+  var sheet = getSheet_(SHEET_NAMES.SEND_LEDGER);
+  var startCol = SEND_LEDGER_COLUMNS.Draft_Fingerprint;
+  var numCols = 3;
+  var originalHeader = sheet.getRange(1, startCol, 1, numCols).getValues();
+
+  try {
+    sheet.getRange(1, startCol, 1, numCols).clearContent();
+    assertEquals_('', sheet.getRange(1, startCol).getValue(), 'Precondition: header cell must now be blank (simulating a pre-fix sheet).');
+
+    var result = repairSendLedgerColumns_();
+    assert_(result.indexOf('Added') === 0, 'repairSendLedgerColumns_ must report it added the headers on a pre-existing sheet.');
+    var headerAfter = sheet.getRange(1, startCol, 1, numCols).getValues()[0];
+    assertEquals_(JSON.stringify(['Draft_Fingerprint', 'Human_Edit_Preserved', 'Human_Edit_Detected_At']), JSON.stringify(headerAfter),
+      'repairSendLedgerColumns_ must write exactly the 3 expected header names.');
+
+    var secondResult = repairSendLedgerColumns_();
+    assert_(secondResult.indexOf('already has') !== -1, 'repairSendLedgerColumns_ must be idempotent — a no-op once headers already exist.');
+  } finally {
+    sheet.getRange(1, startCol, 1, numCols).setValues(originalHeader); // guarantee restoration even on assertion failure
+  }
+}
+
+/**
+ * Restores a previously-snapshotted range exactly: formula cells get their
+ * formula back (as a real formula, via the leading '=' setValues()
+ * convention — the same mechanism Dashboard's own COUNTIF cells use), and
+ * plain-value cells get their literal value back. getValues() alone loses
+ * formulas (it returns the computed result, not the formula string), so
+ * restoration must be built from BOTH getValues() and getFormulas().
+ * Codex re-audit: formatting/validation/notes/protections are
+ * DELIBERATELY not part of this — this fixture never modifies any of
+ * those (verified: it only ever calls getValues/getFormulas/setValues on
+ * Prospects), so there is nothing there to restore.
+ */
+function snapshotRangeForRestore_(sheet, startRow, numRows, numCols) {
+  if (numRows <= 0) return { values: [], formulas: [] };
+  return {
+    values: sheet.getRange(startRow, 1, numRows, numCols).getValues(),
+    formulas: sheet.getRange(startRow, 1, numRows, numCols).getFormulas()
+  };
+}
+
+function restoreRangeFromSnapshot_(sheet, startRow, snapshot, numCols) {
+  if (!snapshot.values.length) return;
+  var restoreBlock = snapshot.values.map(function (rowValues, r) {
+    return rowValues.map(function (value, c) {
+      var formula = snapshot.formulas[r] ? snapshot.formulas[r][c] : '';
+      return formula ? formula : value;
+    });
+  });
+  sheet.getRange(startRow, 1, restoreBlock.length, numCols).setValues(restoreBlock);
+}
+
+/**
  * Google-real finding: on the real "Klinner Outreach — F1 Test" Sheet,
  * running Validate all rows on a Prospects sheet with real data only in
  * rows 2-6 turned rows 7-1000 (994 rows) into phantom NEEDS_DATA
- * prospects — each assigned a real Prospect_ID/Date_Added. Root cause:
- * initializeProspectsSheet_ applies checkbox data validation to
- * Stop_Contact (O) across all 999 provisioned rows up front, and real
- * Google Sheets auto-populates checkbox-validated blank cells with a
- * literal FALSE — content the old "every cell is '' or null" blank-check
- * did not recognize as blank. This test reproduces that exact real-world
- * cell state (not just an empty array) and proves readAllProspects()/
- * validateAllRows() now ignore it correctly.
+ * prospects. Root cause: initializeProspectsSheet_ applies checkbox data
+ * validation to Stop_Contact (O) across all 999 provisioned rows up
+ * front, and real Google Sheets auto-populates checkbox-validated blank
+ * cells with a literal FALSE — content the old "every cell is '' or
+ * null" blank-check did not recognize as blank.
+ *
+ * Codex re-audit (round 2) fixed two further problems in THIS fixture
+ * itself (never in production code):
+ *   1. Physical vs. content rows: the previous version used getLastRow()
+ *      (content extent) to decide which rows were "safe to delete", which
+ *      is the wrong API for that question. The critical case
+ *      (baselineMaxRows=1000, lastRow=6) means 994 rows physically exist
+ *      — with real validation rules already applied to them — while
+ *      holding no content; getLastRow() would report 6, and deleting
+ *      "everything past 6" would destroy 994 rows that were never this
+ *      test's to touch. getMaxRows() (physical row count) is now what
+ *      decides which physically-added rows this test may delete.
+ *   2. Formula loss: getValues()/setValues() alone silently flattens any
+ *      formula to its last computed value. Restoration is now built from
+ *      BOTH getValues() and getFormulas() via snapshotRangeForRestore_ /
+ *      restoreRangeFromSnapshot_ above.
  */
 function test_ghostRowsNeverBecomeProspects_() {
   var sheet = getSheet_(SHEET_NAMES.PROSPECTS);
   var TOTAL_ROWS = 1000;
 
-  // Codex re-audit fix: the previous version only handled "delete rows
-  // added BEYOND the original size" — it never restored the CONTENT of
-  // rows that already existed inside 2..baselineLastRow before this test
-  // overwrote them. When baselineLastRow was already >= TOTAL_ROWS (the
-  // real-world case, since initializeSheets always provisions 1000 rows),
-  // that delete-only cleanup was a complete no-op and any real pre-
-  // existing data in that range was silently destroyed — demonstrated
-  // with a sentinel row (see test_ghostRowFixtureIsNonDestructive_).
-  //
-  // Fix: snapshot the FULL affected range (2 .. max(baselineLastRow,
-  // TOTAL_ROWS)) before writing anything, then in `finally` (a) delete
-  // only the rows this test added beyond the original sheet size, and
-  // (b) re-write the snapshot back over 2..baselineLastRow so every cell
-  // this test touched — not just "extra" rows — is restored exactly.
-  var baselineLastRow = sheet.getLastRow();
-  var snapshotRowCount = Math.max(baselineLastRow, TOTAL_ROWS);
-  var priorSnapshot = snapshotRowCount >= 2
-    ? sheet.getRange(2, 1, snapshotRowCount - 1, PROSPECTS_LAST_COL).getValues()
-    : [];
+  // Physical row count — NOT getLastRow() — decides what this test is
+  // allowed to insert/delete. Rows that already physically existed before
+  // this test ran (whether or not they held content) must NEVER be
+  // deleted; only rows this test itself inserts may be removed afterward.
+  var baselineMaxRows = sheet.getMaxRows();
+  var rowsAddedByTest = Math.max(0, TOTAL_ROWS - baselineMaxRows);
+  if (rowsAddedByTest > 0) {
+    sheet.insertRowsAfter(baselineMaxRows, rowsAddedByTest);
+  }
+
+  // Snapshot (values + formulas) ONLY for rows that physically existed
+  // before this test — rows this test itself just inserted are new and
+  // have nothing to restore; they get deleted outright in `finally`.
+  var priorSnapshot = snapshotRangeForRestore_(sheet, 2, Math.max(0, baselineMaxRows - 1), PROSPECTS_LAST_COL);
 
   try {
     var sharedDupEmail = testUniqueEmail_('ghost-dup');
@@ -1220,25 +1892,14 @@ function test_ghostRowsNeverBecomeProspects_() {
     assertEquals_(0, touchedGhost.length,
       'None of the 994 checkbox-only rows (7-1000) may have Prospect_ID/Date_Added/Status written — confirmed empty exactly as required.');
   } finally {
-    // True restore, not just cleanup: most of this fixture (rows 7-1000)
-    // is deliberately untagged (mirrors real blank rows, which never carry
-    // Source="TEST_F1_AUTOMATED"), so the standard per-test Source-based
-    // sweep cannot see it — and more importantly, ANY pre-existing content
-    // in 2..baselineLastRow that this test's own write overwrote must come
-    // back exactly, not just have "extra" rows trimmed.
-    //
-    // Step 1: shrink the sheet back to its original row count (deletes
-    // only rows this test itself added beyond what already existed).
-    var currentLastRow = sheet.getLastRow();
-    if (currentLastRow > baselineLastRow) {
-      sheet.deleteRows(baselineLastRow + 1, currentLastRow - baselineLastRow);
+    // Step 1: delete ONLY the physical rows this test itself inserted —
+    // never rows that already existed, content or no content.
+    if (rowsAddedByTest > 0) {
+      sheet.deleteRows(baselineMaxRows + 1, rowsAddedByTest);
     }
-    // Step 2: re-write the pre-test snapshot back over 2..baselineLastRow,
-    // restoring every cell this test's fixture overwrote — including a
-    // baselineLastRow that was already >= TOTAL_ROWS (the real-world case).
-    if (baselineLastRow >= 2) {
-      sheet.getRange(2, 1, baselineLastRow - 1, PROSPECTS_LAST_COL).setValues(priorSnapshot.slice(0, baselineLastRow - 1));
-    }
+    // Step 2: restore every row that physically existed before this test
+    // touched it — values AND formulas — exactly as it was.
+    restoreRangeFromSnapshot_(sheet, 2, priorSnapshot, PROSPECTS_LAST_COL);
   }
 }
 
@@ -1247,13 +1908,22 @@ function test_ghostRowsNeverBecomeProspects_() {
  * pre-existing "real" prospect row sitting INSIDE the range
  * test_ghostRowsNeverBecomeProspects_ overwrites (rows 2-1000), including
  * the exact failing case Codex demonstrated: the sheet already having
- * >= 1000 rows of real content before the ghost test runs. Runs the ghost
- * test itself (not a copy of its logic) so this is a true regression
- * guard on the same code path, not a parallel one that could drift.
+ * >= 1000 physical rows before the ghost test runs. Runs the ghost test
+ * itself (not a copy of its logic) so this is a true regression guard on
+ * the same code path, not a parallel one that could drift.
+ *
+ * Round 2: this test's OWN fixture (the sentinel at row 500) is now also
+ * snapshot-and-restored properly instead of assuming "blank" is the
+ * correct final state — row 500 is restored to whatever it held
+ * immediately before this test wrote its sentinel, not left empty by
+ * default.
  */
 function test_ghostRowFixtureIsNonDestructive_() {
   var sheet = getSheet_(SHEET_NAMES.PROSPECTS);
   var sentinelRow = 500; // deep inside the range the ghost test overwrites and must restore.
+
+  // Never assume row 500 was blank before this test touches it.
+  var priorRowSnapshot = snapshotRangeForRestore_(sheet, sentinelRow, 1, PROSPECTS_LAST_COL);
 
   var sentinelValues = {};
   PROSPECTS_COLUMN_ORDER.forEach(function (c) { sentinelValues[c] = ''; });
@@ -1271,18 +1941,14 @@ function test_ghostRowFixtureIsNonDestructive_() {
   sentinelValues.Stop_Contact = false;
   sentinelValues.Status = STATUS.READY;
 
-  // The sheet should already have >= sentinelRow rows from initializeSheets'
-  // own 1000-row provisioning; this is defensive, not the point of the test.
-  if (sheet.getLastRow() < sentinelRow) sheet.insertRowsAfter(sheet.getLastRow(), sentinelRow - sheet.getLastRow());
+  if (sheet.getMaxRows() < sentinelRow) sheet.insertRowsAfter(sheet.getMaxRows(), sentinelRow - sheet.getMaxRows());
   sheet.getRange(sentinelRow, 1, 1, PROSPECTS_LAST_COL).setValues([PROSPECTS_COLUMN_ORDER.map(function (c) { return sentinelValues[c]; })]);
   var sentinelBefore = sheet.getRange(sentinelRow, 1, 1, PROSPECTS_LAST_COL).getValues()[0];
 
   try {
     // Exercises the EXACT snapshot/write/restore path under scrutiny —
-    // including the case Codex used to prove the bug: baselineLastRow is
-    // now >= 1000 (this sentinel plus initializeSheets' own provisioning),
-    // which is precisely the scenario the old delete-only cleanup silently
-    // did nothing for.
+    // including the case Codex used to prove the bug: baselineMaxRows is
+    // now >= 1000 (this sentinel plus initializeSheets' own provisioning).
     test_ghostRowsNeverBecomeProspects_();
 
     var sentinelAfter = sheet.getRange(sentinelRow, 1, 1, PROSPECTS_LAST_COL).getValues()[0];
@@ -1291,9 +1957,75 @@ function test_ghostRowFixtureIsNonDestructive_() {
       'sentinelSurvivedAfterTestAndCleanup must be true. Before=' + JSON.stringify(sentinelBefore) +
       ' After=' + JSON.stringify(sentinelAfter));
   } finally {
-    // Self-cleanup of the sentinel row itself — independent of whatever
-    // the inner ghost test's own cleanup did.
-    sheet.getRange(sentinelRow, 1, 1, PROSPECTS_LAST_COL).setValues([PROSPECTS_COLUMN_ORDER.map(function () { return ''; })]);
+    // Restore row 500 to EXACTLY what it held before THIS test touched it
+    // — never assume blank is correct.
+    restoreRangeFromSnapshot_(sheet, sentinelRow, priorRowSnapshot, PROSPECTS_LAST_COL);
+  }
+}
+
+/**
+ * Codex re-audit — mandatory regression scenario: a REAL pre-existing row
+ * already occupies row 500 (including a formula cell) BEFORE the sentinel
+ * test's own fixture ever touches it — the nested scenario Codex asked
+ * for explicitly. After running test_ghostRowFixtureIsNonDestructive_()
+ * (which itself seeds and restores its OWN sentinel at the same row),
+ * this pre-existing row must come back byte-for-byte, formula included,
+ * and the sheet's physical row count must be unchanged.
+ */
+function test_preexistingRow500SurvivesNestedGhostAndSentinelTests_() {
+  var sheet = getSheet_(SHEET_NAMES.PROSPECTS);
+  var row = 500;
+
+  // Establish the 1000-physical-row precondition explicitly rather than
+  // assuming it — by the time this runs inside the full suite, EARLIER
+  // tests' own teardown (cleanupTestRows_ deleting their tagged rows via
+  // sheet.deleteRow) has legitimately shrunk the physical row count below
+  // 1000, exactly mirroring how deleting rows works on a real Sheet. That
+  // is correct, expected suite behavior, not a bug — so this test ensures
+  // its own precondition instead of asserting a suite-order-dependent
+  // global, the same way initializeSheets() itself would top up a sheet
+  // that has fewer than 1000 rows.
+  if (sheet.getMaxRows() < 1000) sheet.insertRowsAfter(sheet.getMaxRows(), 1000 - sheet.getMaxRows());
+  var baselineMaxRowsBeforeAnything = sheet.getMaxRows();
+  assertEquals_(1000, baselineMaxRowsBeforeAnything, 'Precondition: the sheet must be provisioned to 1000 physical rows before this scenario runs.');
+
+  var existingRealValues = {};
+  PROSPECTS_COLUMN_ORDER.forEach(function (c) { existingRealValues[c] = ''; });
+  existingRealValues.Prospect_ID = 'existing-real-row';
+  existingRealValues.Date_Added = new Date();
+  existingRealValues.Source = 'REAL_DATA';
+  existingRealValues.Business_Name = 'Existing Real Prospect';
+  existingRealValues.Email = 'existing@example-corp-test.com';
+  existingRealValues.City = 'Denver';
+  existingRealValues.State = 'CO';
+  existingRealValues.Problem_Found = 'Already here before any sentinel/ghost test ran.';
+  existingRealValues.Stop_Contact = false;
+  existingRealValues.Status = STATUS.READY;
+
+  sheet.getRange(row, 1, 1, PROSPECTS_LAST_COL).setValues([PROSPECTS_COLUMN_ORDER.map(function (c) { return existingRealValues[c]; })]);
+  // A formula in an appropriate cell of the overwritten range — Notes (Q),
+  // a plain free-text column with no special parsing — the mock supports
+  // getFormulas()/setValues('=...') exactly like real Apps Script.
+  sheet.getRange(row, PROSPECTS_COLUMNS.Notes).setValue('=CONCATENATE("Real"," ","Data")');
+
+  var originalRow = snapshotRangeForRestore_(sheet, row, 1, PROSPECTS_LAST_COL);
+
+  try {
+    test_ghostRowFixtureIsNonDestructive_(); // nests its own sentinel write/restore at this same row.
+
+    var afterEverything = snapshotRangeForRestore_(sheet, row, 1, PROSPECTS_LAST_COL);
+    assertEquals_(JSON.stringify(originalRow.values), JSON.stringify(afterEverything.values),
+      'Row 500\'s pre-existing values must be restored exactly after the nested sentinel+ghost tests run.');
+    assertEquals_(JSON.stringify(originalRow.formulas), JSON.stringify(afterEverything.formulas),
+      'Row 500\'s pre-existing FORMULA must be restored as a real formula, not flattened to its computed value.');
+    assertEquals_('=CONCATENATE("Real"," ","Data")', afterEverything.formulas[0][PROSPECTS_COLUMNS.Notes - 1],
+      'The Notes formula specifically must survive intact.');
+
+    assertEquals_(1000, sheet.getMaxRows(), 'Physical row count must be unchanged (still 1000) after all nested test machinery completes.');
+  } finally {
+    // Final self-cleanup: this test's OWN fixture (the "existing real
+    // row") must not leak either — blank row 500 unconditionally.
+    sheet.getRange(row, 1, 1, PROSPECTS_LAST_COL).setValues([PROSPECTS_COLUMN_ORDER.map(function () { return ''; })]);
   }
 }
 
@@ -1324,7 +2056,25 @@ var F1_TEST_FUNCTIONS = [
   ['N2_domainSuppressionMasking', test_N2_unsubscribeAlwaysCreatesEmailScopeRecordEvenUnderDomainSuppression_],
   ['N2_round2_reasonMasking', test_N2_round2_priorReasonNeverMasksUnsubscribeRecord_],
   ['finding4_draftOwnership', test_finding4_foreignDraftIsNeverDeleted_],
-  ['N3_editedDraftRecognized', test_N3_editedDraftStillRecognizedViaMessageId_],
+  ['N3_caso1_stableUnedited', test_N3_stableUntouchedDraftRegeneratesNormally_],
+  ['N3_caso2_messageIdRotates', test_N3_caso2_editWithMessageIdRotationIsPreservedDurably_],
+  ['N3_caso3_messageIdStable', test_N3_caso3_editWithoutMessageIdRotationIsPreservedDurably_],
+  ['N3_caso5_recipientChange', test_N3_caso5_recipientChangeIsPreservedDurably_],
+  ['N3_caso5_subjectChange', test_N3_caso5_subjectChangeIsPreservedDurably_],
+  ['N3_caso7_missingDraftId', test_N3_missingDraftIdCreatesNewSafely_],
+  ['N3_caso6_threadIdMismatch', test_N3_threadIdMismatchBlocksRegeneration_],
+  ['N3_caso8_getDraftsError', test_N3_caso8_gmailGetDraftsErrorFailsClosed_],
+  ['N3_caso8_messageIdError', test_N3_caso8_messageGetIdErrorFailsClosed_],
+  ['N3_caso8_contentReadError', test_N3_caso8_contentReadErrorFailsClosed_],
+  ['N3v3_legacyRosaKnownEdit', test_N3v3_legacyBlankFingerprintKnownEditIsPreservedNeverDeleted_],
+  ['N3v3_legacyAcmeUntouched', test_N3v3_legacyBlankFingerprintApparentlyUntouchedIsPreservedConservatively_],
+  ['N3v3_legacyDurableAcrossRuns', test_N3v3_legacyPreservationSurvivesMultiplePostMigrationRuns_],
+  ['N3v3_ambiguousActiveRows', test_N3v3_ambiguousMultipleActiveRowsBlocksRegeneration_],
+  ['N3v3_appendFailureLeavesOldRowIntact', test_N3v3_preserveTransitionAppendFailureLeavesOldRowIntact_],
+  ['N3v3_supersedeFailureCaughtNextRun', test_N3v3_preserveTransitionSupersedeFailureIsCaughtByAmbiguityGuardNextRun_],
+  ['N3v3_creationFailureCompensated', test_N3v3_creationMetadataFailureWithSuccessfulCompensationWritesNoRow_],
+  ['N3v3_creationFailureRecoveryRow', test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRow_],
+  ['N3v3_recipientWrapperNoFalsePositive', test_N3v3_recipientDisplayNameWrapperDoesNotFalsePositive_],
   ['finding5_previewLocking', test_finding5_previewLocksCriticalSection_],
   ['finding6_orphanCompensation', test_finding6_orphanedDraftIsCompensatedOnLedgerFailure_],
   ['finding8_liveEntryPoint', test_finding8_liveHelpersAreNotGlobalEntryPoints_],
@@ -1335,8 +2085,10 @@ var F1_TEST_FUNCTIONS = [
   ['finding13_publicDomainToggle', test_finding13_publicDomainPolicyToggleIsConsulted_],
   ['finding14_whitespaceBlank', test_finding14_whitespaceOnlyFieldsCountAsBlank_],
   ['configValuePlainTextFormat', test_configValueColumnIsPlainTextFormatted_],
+  ['N3_repairSendLedgerColumns', test_N3_repairSendLedgerColumnsIsIdempotentAndAdditive_],
   ['ghostRowsNeverBecomeProspects', test_ghostRowsNeverBecomeProspects_],
-  ['ghostRowFixtureNonDestructive', test_ghostRowFixtureIsNonDestructive_]
+  ['ghostRowFixtureNonDestructive', test_ghostRowFixtureIsNonDestructive_],
+  ['preexistingRow500SurvivesNested', test_preexistingRow500SurvivesNestedGhostAndSentinelTests_]
 ];
 
 /** Run manually once a real Gmail thread has been set up per its docstring — not part of the automated suite. */

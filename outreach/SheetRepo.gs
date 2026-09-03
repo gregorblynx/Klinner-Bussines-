@@ -185,6 +185,58 @@ function initializeSendLedgerSheet_() {
   return sheet;
 }
 
+/**
+ * N3 V2 migration for a real SendLedger sheet that was already initialized
+ * BEFORE Draft_Fingerprint/Human_Edit_Preserved/Human_Edit_Detected_At
+ * (Constants.gs columns 14-16) existed. Because those columns were
+ * APPENDED at the end of the layout (never inserted), the fix is purely
+ * additive: write the 3 missing header cells into N1:P1. Existing data
+ * rows need no migration at all — Sheets already treats any cell past a
+ * row's last written column as blank, which is exactly the correct value
+ * for every pre-existing row (they have no fingerprint/durable-preserve
+ * state yet; appendLedgerRow_/updateLedgerRow_ from this point forward
+ * populate those columns normally for new/changed rows).
+ *
+ * initializeSendLedgerSheet_() cannot do this itself: it intentionally
+ * early-returns once a SendLedger sheet exists (by design — it must never
+ * clear or reorder real ledger history), so it will never re-apply a
+ * header change to an existing sheet on its own.
+ *
+ * Guarantees:
+ *   - Only ever writes to row 1, columns 14-16 (N1:P1) — never touches
+ *     columns A-M or any data row.
+ *   - Never calls clear/clearContent/clearFormat.
+ *   - Idempotent — if N1 already reads 'Draft_Fingerprint', this is a
+ *     no-op; re-running it after it already ran changes nothing further.
+ * Run manually (once, on the real Sheet) from the Apps Script editor — not
+ * wired into a trigger or the menu, since it is a one-time repair for a
+ * ledger initialized before this fix existed, not a routine operation.
+ * NOT executed against Google as part of this delivery — see README.md.
+ */
+function repairSendLedgerColumns_() {
+  var sheet = getSheet_(SHEET_NAMES.SEND_LEDGER);
+  var newColumnNames = ['Draft_Fingerprint', 'Human_Edit_Preserved', 'Human_Edit_Detected_At'];
+  var startCol = SEND_LEDGER_COLUMNS.Draft_Fingerprint; // 14
+  if (sheet.getRange(1, startCol).getValue() === newColumnNames[0]) {
+    return 'SendLedger already has Draft_Fingerprint/Human_Edit_Preserved/Human_Edit_Detected_At headers — nothing to repair.';
+  }
+  sheet.getRange(1, startCol, 1, newColumnNames.length).setValues([newColumnNames]);
+  return 'Added SendLedger headers N1:P1 (Draft_Fingerprint, Human_Edit_Preserved, Human_Edit_Detected_At). ' +
+    'No existing row or column A-M was changed.';
+}
+
+/**
+ * Temporary public wrapper, no parameters, matching the same pattern as
+ * repairConfigValueColumnFormat() in Config.gs — see that function's
+ * docstring for why the trailing-underscore name alone was not reliably
+ * selectable from the Apps Script editor's "Select function to run"
+ * dropdown. Delegates entirely to repairSendLedgerColumns_() — zero logic
+ * duplicated, zero behavior change.
+ */
+function repairSendLedgerColumns() {
+  return repairSendLedgerColumns_();
+}
+
 function initializeLogSheet_() {
   var sheet = getOrCreateSheet_(SHEET_NAMES.LOG);
   if (sheetHasExpectedHeader_(sheet, 'Timestamp')) return sheet;
