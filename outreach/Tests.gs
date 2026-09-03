@@ -1418,12 +1418,16 @@ function test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRo
   var originalCreateDraft = GmailApp.createDraft;
   var capturedMessage = null;
   var originalGetSubject = null;
+  var capturedDraft = null;
+  var originalDeleteDraft = null;
   GmailApp.createDraft = function (to, subject, body, opts) {
     var draft = originalCreateDraft(to, subject, body, opts);
     var msg = draft.getMessage();
     capturedMessage = msg;
     originalGetSubject = msg.getSubject;
     msg.getSubject = function () { throw new Error('Simulated post-create message.getSubject() failure.'); };
+    capturedDraft = draft;
+    originalDeleteDraft = draft.deleteDraft;
     draft.deleteDraft = function () { throw new Error('Simulated compensation delete failure.'); };
     return draft;
   };
@@ -1491,6 +1495,16 @@ function n3_assertCreationFailureCompensatesCleanly_(emailTag, corruptDraftFn) {
     outcome = previewStep(p.Prospect_ID, 1);
   } finally {
     GmailApp.createDraft = originalCreateDraft;
+    // Isolation (Priority 3, Codex final audit): deleteDraft must be
+    // restored to its real implementation BEFORE this test ends — the
+    // permanently-broken override otherwise made the test framework's own
+    // teardown (cleanupTestArtifacts_, which deletes any DRAFTED row this
+    // test's Run_ID left behind) fail too, leaking a Prospects row,
+    // SendLedger rows, and Log rows into every test that ran after this
+    // one. The simulated failure is a one-time creation-time event, not a
+    // permanently broken Gmail draft — real cleanup must be able to
+    // actually delete it once the test's own assertions are done with it.
+    if (capturedDraft && originalDeleteDraft) capturedDraft.deleteDraft = originalDeleteDraft;
   }
 
   assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed.');

@@ -57,9 +57,24 @@ function main() {
 
   console.log('\n=== Klinner Outreach — local F1 test run (mocked Sheets/Gmail) ===');
   console.log(result.report);
-  console.log('\n' + result.passed + '/' + result.total + ' passed.');
 
-  if (result.passed !== result.total) {
+  // Priority 3 (Codex final audit): functional pass/fail and isolation
+  // clean/leaked are TWO SEPARATE gates. Before this fix, a test could
+  // leak state (leftover Prospects/SendLedger/Log rows, an undeleted
+  // draft, a permanently-broken mock method) into every test that ran
+  // after it — silently, because the runner's exit code only ever looked
+  // at `passed !== total`. A leak that happened not to flip any later
+  // test's assertions to FAIL (or one in the very last test, with nothing
+  // after it to corrupt) would exit 0 even with isolationCleanCount below
+  // total. Both counts are now checked independently and BOTH must be
+  // clean for a green exit.
+  var functionalOk = result.passed === result.total;
+  var isolationOk = result.isolationCleanCount === result.total;
+
+  console.log('\nfunctional ' + result.passed + '/' + result.total + ' ' + (functionalOk ? 'PASS' : 'FAIL'));
+  console.log('isolation clean ' + result.isolationCleanCount + '/' + result.total + ' ' + (isolationOk ? 'PASS' : 'FAIL'));
+
+  if (!functionalOk || !isolationOk) {
     process.exitCode = 1;
   }
 }
