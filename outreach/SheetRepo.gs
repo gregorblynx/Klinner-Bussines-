@@ -215,14 +215,32 @@ function initializeSendLedgerSheet_() {
  */
 function repairSendLedgerColumns_() {
   var sheet = getSheet_(SHEET_NAMES.SEND_LEDGER);
-  var newColumnNames = ['Draft_Fingerprint', 'Human_Edit_Preserved', 'Human_Edit_Detected_At'];
+  var expected = ['Draft_Fingerprint', 'Human_Edit_Preserved', 'Human_Edit_Detected_At'];
   var startCol = SEND_LEDGER_COLUMNS.Draft_Fingerprint; // 14
-  if (sheet.getRange(1, startCol).getValue() === newColumnNames[0]) {
-    return 'SendLedger already has Draft_Fingerprint/Human_Edit_Preserved/Human_Edit_Detected_At headers — nothing to repair.';
+  var endCol = startCol + expected.length - 1;          // 16
+
+  // The grid itself must be wide enough before anything can be written to
+  // column P — a sheet created with fewer columns would otherwise throw.
+  if (typeof sheet.getMaxColumns === 'function' && sheet.getMaxColumns() < endCol) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), endCol - sheet.getMaxColumns());
   }
-  sheet.getRange(1, startCol, 1, newColumnNames.length).setValues([newColumnNames]);
-  return 'Added SendLedger headers N1:P1 (Draft_Fingerprint, Human_Edit_Preserved, Human_Edit_Detected_At). ' +
-    'No existing row or column A-M was changed.';
+
+  // Validate ALL THREE headers, not just the first: a partially-applied
+  // repair (N correct, O/P blank or wrong) previously read as "already
+  // done" because only N1 was checked.
+  var current = sheet.getRange(1, startCol, 1, expected.length).getValues()[0];
+  var wrong = [];
+  for (var i = 0; i < expected.length; i++) {
+    if (String(current[i] || '').trim() !== expected[i]) wrong.push(expected[i]);
+  }
+  if (wrong.length === 0) {
+    return 'SendLedger already has all three headers (Draft_Fingerprint, Human_Edit_Preserved, ' +
+      'Human_Edit_Detected_At) — nothing to repair.';
+  }
+
+  sheet.getRange(1, startCol, 1, expected.length).setValues([expected]);
+  return 'Repaired SendLedger header(s) ' + wrong.join(', ') + ' in N1:P1. ' +
+    'No existing row and no column A-M was changed.';
 }
 
 /**
