@@ -1778,6 +1778,361 @@ function test_finding8_liveHelpersAreNotGlobalEntryPoints_() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// N5 (Codex final audit, round 2) — REAL executable LIVE-path tests.
+//
+// Round 1 verified N5 statically only, per this project's established
+// policy (findings #7/#8) of never flipping DRY_RUN=FALSE even locally.
+// The round-2 audit explicitly rejected that as insufficient for N5
+// specifically — static checks cannot prove the durable-ledger-blocking
+// property actually holds across a SECOND execution, which is the entire
+// point of N5. withLiveModeEnabledForTest_ is the one, explicit, well-
+// audited exception to the "never flip DRY_RUN" policy: every Config value
+// it touches (DRY_RUN, the 5 PENDING_F0 keys, and the send window/day keys
+// — widened to "always open" so these tests are never flaky depending on
+// what real-world hour/day they happen to run) is captured before the
+// change and unconditionally restored in `finally`, even if the wrapped
+// function throws.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps `fn` with DRY_RUN=FALSE, all 5 PENDING_F0 keys resolved to dummy
+ * (but non-blank) values, and the send window/day widened to "always
+ * open" — so a real sendStep1()/sendFollowUp() call can actually reach
+ * doStep1Send_/doFollowUpSend_, deterministically, regardless of the real
+ * wall-clock time this test happens to run at. Every touched Config value
+ * is restored exactly, in `finally`, whether or not `fn` throws.
+ */
+function withLiveModeEnabledForTest_(fn) {
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var lastRow = sheet.getLastRow();
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var rowByKey = {};
+  for (var i = 0; i < values.length; i++) rowByKey[values[i][0]] = i + 2;
+
+  var overrides = { DRY_RUN: 'FALSE', SEND_START_HOUR: '0', SEND_END_HOUR: '24', SEND_DAYS: 'MON,TUE,WED,THU,FRI,SAT,SUN' };
+  PENDING_F0_REQUIRED_KEYS.forEach(function (key) { overrides[key] = 'test-resolved-' + key.toLowerCase() + '@example.com'; });
+
+  var keysToTouch = Object.keys(overrides);
+  var originalValues = {};
+  keysToTouch.forEach(function (key) {
+    var row = rowByKey[key];
+    if (!row) throw new Error('withLiveModeEnabledForTest_: Config key "' + key + '" not found.');
+    originalValues[key] = sheet.getRange(row, 2).getValue();
+  });
+
+  try {
+    keysToTouch.forEach(function (key) { sheet.getRange(rowByKey[key], 2).setValue(overrides[key]); });
+    resetConfigCache_();
+    return fn();
+  } finally {
+    keysToTouch.forEach(function (key) { sheet.getRange(rowByKey[key], 2).setValue(originalValues[key]); });
+    resetConfigCache_();
+  }
+}
+
+/** N5 test setup: a READY prospect, eligible for a real step-1 LIVE send. */
+function n5_setupReadyProspect_(emailTag) {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'x' });
+  validateAllRows();
+  return getTestProspectByRow_(row);
+}
+
+/**
+ * N5 test setup: an IN_SEQUENCE prospect due for step 2, with a real
+ * seeded LIVE thread it can reply on — everything doFollowUpSend_/canSend_
+ * need. Constructed directly (same pattern T21 and similar eligibility
+ * tests already use) since this is test fixture setup, not production
+ * write-path code.
+ */
+function n5_setupFollowUpDueProspect_(emailTag, config) {
+  var email = testUniqueEmail_(emailTag);
+  var emailNormalized = normalizeEmail_(email);
+  var thread = GmailApp._seedLiveThread(email, config.SENDER_EMAIL || 'outreach-test@example.com');
+  var past = new Date(); past.setDate(past.getDate() - 3);
+  var row = addTestProspectRow_({
+    Prospect_ID: Utilities.getUuid(), Email: email, Email_Normalized: emailNormalized,
+    Domain: extractDomain_(emailNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE,
+    Problem_Found: 'x', Status: STATUS.IN_SEQUENCE, Sequence_Step: 1,
+    Step1_Sent_At: past, Last_Contacted: past, Next_Action_Date: past, Thread_ID: thread.getId()
+  });
+  return { p: getTestProspectByRow_(row), thread: thread };
+}
+
+/**
+ * N5 items 1, 2, 3, 13: draft.send() throws (ambiguous outcome) — the
+ * ledger row must be durably AMBIGUOUS even if the secondary Prospects
+ * NEEDS_REVIEW write ALSO fails; a second execution must be blocked from
+ * sending again by the ledger alone; the lock must be released so the
+ * second execution isn't blocked by lock contention instead (which would
+ * mask whether the ledger block actually works).
+ */
+function test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_('n5step1throw');
+
+    var originalCreateDraft = GmailApp.createDraft;
+    GmailApp.createDraft = function (to, subject, body, opts) {
+      var draft = originalCreateDraft(to, subject, body, opts);
+      draft.send = function () { throw new Error('Simulated Gmail send() failure — ambiguous outcome.'); };
+      return draft;
+    };
+    var originalWriteRowById = writeRowById_;
+    writeRowById_ = function () { throw new Error('Simulated Prospects write failure.'); };
+
+    var threw = false;
+    try {
+      sendStep1(p.Prospect_ID);
+    } catch (e) {
+      threw = true;
+    } finally {
+      GmailApp.createDraft = originalCreateDraft;
+      writeRowById_ = originalWriteRowById;
+    }
+    assert_(threw, 'sendStep1 must propagate the send() failure.');
+    assert_(!LockService.getScriptLock().hasLock(), 'Item 13: the lock must be released after the ambiguous exception propagated.');
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length, 'Exactly one LIVE ledger row must exist.');
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, ledgerRows[0].values.State,
+      'Items 1/3: the ledger row must be durably AMBIGUOUS even though the secondary Prospects write ALSO failed.');
+
+    // Item 2: a second execution must NOT attempt to send again.
+    var draftCountBefore = GmailApp.getDrafts().length;
+    var second = sendStep1(p.Prospect_ID);
+    assertEquals_('SKIPPED_ALREADY_CLAIMED', second.status, 'Item 2: a second execution must be blocked by the ledger, never attempt to send again.');
+    assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'No new draft/send attempt must have been made.');
+  });
+}
+
+/** N5 item 11: the normal, unedited confirmed path — exactly one real send. */
+function test_N5_normalConfirmedStep1SendsExactlyOnce_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_('n5step1normal');
+    var outcome = sendStep1(p.Prospect_ID);
+    assertEquals_('SENT', outcome.status, 'A normal step-1 send must succeed.');
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length, 'Exactly one LIVE ledger row must exist.');
+    assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State);
+
+    var freshRow = findRowById_(p.Prospect_ID);
+    assertEquals_(STATUS.IN_SEQUENCE, freshRow.values.Status, 'Prospects must be updated to IN_SEQUENCE on a confirmed send.');
+    assertEquals_(1, Number(freshRow.values.Sequence_Step));
+
+    // Item 10: a confirmed SENT key remains blocked forever at the LEDGER
+    // level (checked directly — after a real successful send, canSend_'s
+    // OWN state-machine logic also independently refuses a repeat, since
+    // Status/Sequence_Step have advanced; that is correct and expected,
+    // but a different guard than the one item 10 is about — isLiveKeyBlocked_
+    // is the one this test needs to prove).
+    assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'Item 10: a confirmed SENT key must remain blocked at the ledger level — never resend.');
+  });
+}
+
+/**
+ * N5 items 4, 5: thread.reply() throws (ambiguous outcome) — durable
+ * ledger block; a second execution must not reply again.
+ */
+function test_N5_followUpReplyThrowsDurablyBlocksLedger_() {
+  withLiveModeEnabledForTest_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('n5followupthrow', config);
+    var p = setup.p;
+
+    var originalReply = setup.thread.reply;
+    setup.thread.reply = function () { throw new Error('Simulated Gmail reply() failure — ambiguous outcome.'); };
+
+    var threw = false;
+    try {
+      sendFollowUp(p.Prospect_ID, 2);
+    } catch (e) {
+      threw = true;
+    } finally {
+      setup.thread.reply = originalReply;
+    }
+    assert_(threw, 'sendFollowUp must propagate the reply() failure.');
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length, 'Exactly one LIVE ledger row must exist.');
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, ledgerRows[0].values.State, 'Item 4: reply() throwing must durably block the ledger row.');
+
+    // Item 5: a second execution must NOT reply again — proven directly
+    // (the ledger blocks the key regardless of what Prospects shows; here
+    // the NEEDS_REVIEW write also succeeded, so canSend_'s OWN state-
+    // machine logic independently refuses too — both guards agree, but
+    // isLiveKeyBlocked_ is the one this item is specifically about).
+    assert_(isLiveKeyBlocked_(p.Prospect_ID, 2), 'Item 5: the idempotency key must be blocked at the ledger level.');
+    var messagesBefore = setup.thread.getMessages().length;
+    var second = sendFollowUp(p.Prospect_ID, 2);
+    assert_(second.status !== 'SENT', 'Item 5: a second execution must never actually send.');
+    assertEquals_(messagesBefore, setup.thread.getMessages().length, 'No new message must have been added to the thread.');
+  });
+}
+
+/**
+ * N5 items 6, 7: message-count mismatch after a successful reply() —
+ * durable block, even if the secondary Prospects write ALSO fails.
+ */
+function test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFails_() {
+  withLiveModeEnabledForTest_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('n5followupmismatch', config);
+    var p = setup.p;
+
+    // Simulate an inbound reply landing in the exact race window: reply()
+    // itself succeeds, but getMessages() afterward shows +2, not +1.
+    var originalReply = setup.thread.reply;
+    setup.thread.reply = function (body) {
+      var normalResult = originalReply.call(setup.thread, body);
+      setup.thread._messages = setup.thread.getMessages().concat([{
+        getId: function () { return 'race-inbound-msg'; }, getFrom: function () { return p.Email; },
+        getTo: function () { return config.SENDER_EMAIL; }, getSubject: function () { return 'Re:'; },
+        getPlainBody: function () { return 'An inbound reply landed in the race window.'; }, getBody: function () { return ''; }
+      }]);
+      setup.thread.getMessages = function () { return setup.thread._messages; };
+      return normalResult;
+    };
+    var originalWriteRowById = writeRowById_;
+    writeRowById_ = function () { throw new Error('Simulated Prospects write failure.'); };
+
+    var threw = false;
+    try {
+      sendFollowUp(p.Prospect_ID, 2);
+    } catch (e) {
+      threw = true;
+    } finally {
+      setup.thread.reply = originalReply;
+      writeRowById_ = originalWriteRowById;
+    }
+    assert_(threw, 'sendFollowUp must propagate the ambiguous-outcome error.');
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length, 'Exactly one LIVE ledger row must exist.');
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, ledgerRows[0].values.State,
+      'Items 6/7: a message-count mismatch must durably block the ledger row even though the Prospects write ALSO failed.');
+
+    var second = sendFollowUp(p.Prospect_ID, 2);
+    assertEquals_('SKIPPED_ALREADY_CLAIMED', second.status, 'A second execution must still be blocked.');
+  });
+}
+
+/** N5 item 12: the normal, unedited confirmed follow-up path — exactly one real reply. */
+function test_N5_normalConfirmedFollowUpRepliesExactlyOnce_() {
+  withLiveModeEnabledForTest_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('n5followupnormal', config);
+    var p = setup.p;
+
+    var messagesBefore = setup.thread.getMessages().length;
+    var outcome = sendFollowUp(p.Prospect_ID, 2);
+    assertEquals_('SENT', outcome.status, 'A normal follow-up send must succeed.');
+    assertEquals_(messagesBefore + 1, setup.thread.getMessages().length, 'Exactly one message must have been added to the thread.');
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length);
+    assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State);
+
+    assert_(isLiveKeyBlocked_(p.Prospect_ID, 2), 'A confirmed SENT follow-up key must remain blocked at the ledger level.');
+    var second = sendFollowUp(p.Prospect_ID, 2);
+    assert_(second.status !== 'SENT', 'A second execution must never actually send.');
+    assertEquals_(messagesBefore + 1, setup.thread.getMessages().length, 'No second reply must have been sent.');
+  });
+}
+
+/**
+ * N5 items 8, 9: Recon's stale-claim reconciliation must never authorize a
+ * retry on an ambiguous outcome. Item 8: zero search results. Item 9: the
+ * search call itself fails.
+ */
+function test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_() {
+  var config = getConfig();
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n5reconzero'), Problem_Found: 'x' });
+  var p = getTestProspectByRow_(row);
+  var staleClaimedAt = new Date(); staleClaimedAt.setMinutes(staleClaimedAt.getMinutes() - (config.CLAIM_STALE_MINUTES + 30));
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: staleClaimedAt, Prospect_ID: p.Prospect_ID, Email_Normalized: normalizeEmail_(p.Email),
+    Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,
+    Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
+  });
+  // GmailApp.search()'s default mock returns [] unless something sent a
+  // real draft to this address — nothing did, so this IS the zero-result case.
+
+  reconcileStaleLiveClaims_(config);
+
+  var row2 = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+  })[0];
+  assertEquals_(LEDGER_STATE.AMBIGUOUS, row2.values.State,
+    'Item 8: a stale CLAIMED row with zero matching sent messages must become AMBIGUOUS (durably blocked), NEVER a retryable state.');
+  assert_(row2.values.State !== LEDGER_STATE.ABANDONED, 'The dangerous ABANDONED-as-retryable state must never be produced.');
+  assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The idempotency key must still be blocked after reconciliation.');
+}
+
+function test_N5_reconStaleClaimSearchErrorFailsClosed_() {
+  var config = getConfig();
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n5reconerror'), Problem_Found: 'x' });
+  var p = getTestProspectByRow_(row);
+  var staleClaimedAt = new Date(); staleClaimedAt.setMinutes(staleClaimedAt.getMinutes() - (config.CLAIM_STALE_MINUTES + 30));
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: staleClaimedAt, Prospect_ID: p.Prospect_ID, Email_Normalized: normalizeEmail_(p.Email),
+    Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,
+    Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
+  });
+
+  var originalSearch = GmailApp.search;
+  GmailApp.search = function () { throw new Error('Simulated Gmail search() failure.'); };
+  try {
+    reconcileStaleLiveClaims_(config);
+  } finally {
+    GmailApp.search = originalSearch;
+  }
+
+  var row2 = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+  })[0];
+  assertEquals_(LEDGER_STATE.CLAIMED, row2.values.State, 'Item 9: a search failure must leave the row untouched (still CLAIMED, still blocking) — fail closed.');
+  assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The idempotency key must still be blocked.');
+}
+
+/**
+ * N5 item 14: neither nightlyRecon (which calls reconcileStaleLiveClaims_)
+ * nor dailyDigest ever converts an AMBIGUOUS LIVE key into a retryable
+ * state automatically — AMBIGUOUS is a terminal, human-reconciled state
+ * with no code path that transitions it further.
+ */
+function test_N5_reconAndDigestNeverConvertAmbiguousKeyToRetryable_() {
+  var config = getConfig();
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n5ambiguousstable'), Problem_Found: 'x' });
+  var p = getTestProspectByRow_(row);
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: p.Prospect_ID, Email_Normalized: normalizeEmail_(p.Email),
+    Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.AMBIGUOUS,
+    Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: 'Simulated pre-existing ambiguous outcome.'
+  });
+
+  nightlyRecon();
+  assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'nightlyRecon must never convert an AMBIGUOUS key into a retryable state.');
+
+  dailyDigest();
+  assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'dailyDigest must never convert an AMBIGUOUS key into a retryable state.');
+
+  var stillAmbiguous = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+  })[0];
+  assertEquals_(LEDGER_STATE.AMBIGUOUS, stillAmbiguous.values.State, 'The row must remain exactly AMBIGUOUS — untouched by either sweep.');
+}
+
 function test_finding14_whitespaceOnlyFieldsCountAsBlank_() {
   var config = getConfig();
   var prospectMissingRequired = { Business_Name: 'X', Problem_Found: '   ' };
