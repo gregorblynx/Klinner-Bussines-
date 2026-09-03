@@ -457,8 +457,32 @@ function deletePreviewDraftIfOwned_(draftId, ledgerEntryValues) {
  *   action: 'CREATE_NEW' | 'PRESERVE_EXISTING' | 'BLOCKED_NEEDS_REVIEW'
  */
 function resolveExistingPreviewDraft_(prospectId, step) {
-  // CASO 10: ambiguity guard FIRST, before anything else touches Gmail or
-  // the ledger. findActiveDryRunDraftRows_ (Ledger.gs) returns every
+  // CASO 11 (N3 final round): an unresolved PREVIEW claim blocks
+  // everything, checked FIRST. A PREVIEW_CLAIMED row means a draft
+  // creation was claimed and may be in flight or died mid-flight; a
+  // PREVIEW_AMBIGUOUS row means a Gmail side effect that could have
+  // created a draft had an outcome we could not resolve. In BOTH cases a
+  // real Gmail draft may exist that we cannot identify — creating another
+  // one would be exactly the duplicate this whole barrier exists to
+  // prevent. Never auto-resolved: an ADMIN action is required.
+  var activePreviewRows = findActivePreviewRows_(prospectId, step);
+  var unresolvedClaims = activePreviewRows.filter(function (r) {
+    return r.values.State === LEDGER_STATE.PREVIEW_CLAIMED || r.values.State === LEDGER_STATE.PREVIEW_AMBIGUOUS;
+  });
+  if (unresolvedClaims.length > 0) {
+    var claimState = unresolvedClaims[0].values.State;
+    logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, unresolvedClaims[0].values.Email_Normalized, step,
+      'Preview blocked: an unresolved ' + claimState + ' ledger row exists for this key ' +
+      '(row ' + unresolvedClaims[0].rowIndex + '). A Gmail draft may exist that this run cannot identify — ' +
+      'refusing to create another. Needs manual ADMIN review.');
+    return {
+      action: 'BLOCKED_NEEDS_REVIEW',
+      reason: claimState === LEDGER_STATE.PREVIEW_AMBIGUOUS ? 'preview_ambiguous' : 'preview_claim_unresolved'
+    };
+  }
+
+  // CASO 10: ambiguity guard, before anything else touches Gmail or the
+  // ledger. findActiveDryRunDraftRows_ (Ledger.gs) returns every
   // Mode=DRY_RUN/State=DRAFTED row for this key — normally exactly 0 or 1.
   var activeRows = findActiveDryRunDraftRows_(prospectId, step);
   if (activeRows.length > 1) {
@@ -637,7 +661,19 @@ function createPreviewDraft_(prospectId, step, prospect, rendered, config) {
  *           'SKIPPED_NO_TEMPLATE' | 'SKIPPED_THREAD_NOT_FOUND' |
  *           'SKIPPED_LOCK_BUSY' | 'ERROR_LEDGER_WRITE_FAILED' |
  *           'SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT' | 'SKIPPED_DRAFT_NEEDS_REVIEW' |
- *           'ERROR_DRAFT_METADATA_CAPTURE_FAILED'
+ *           'ERROR_DRAFT_METADATA_CAPTURE_FAILED' |
+ *           'ERROR_PREVIEW_CLAIM_FAILED' | 'ERROR_PREVIEW_CREATE_AMBIGUOUS'
+ *
+ * MANUAL RECOVERY (N3 final round): a key left in PREVIEW_CLAIMED or
+ * PREVIEW_AMBIGUOUS is blocked permanently and deliberately — no code
+ * path auto-resolves it, because doing so safely would require proving a
+ * negative about Gmail state that this architecture cannot prove. To
+ * resolve one by hand: find the row in SendLedger (Mode=DRY_RUN, the
+ * Error column explains what happened), check Gmail's Drafts folder for
+ * a matching draft to that prospect/step, delete it if present, then set
+ * that row's State to SUPERSEDED. The next Preview run will then create a
+ * fresh draft normally. Blocking one prospect's preview until a human
+ * looks is always preferable to creating a second real draft.
  *   (SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT/SKIPPED_DRAFT_NEEDS_REVIEW are N3:
  *   an existing live draft was recognized as human-edited/legacy or as
  *   ownership-unverifiable — see resolveExistingPreviewDraft_.
@@ -684,8 +720,68 @@ function previewStep(prospectId, step) {
       return { status: 'SKIPPED_DRAFT_NEEDS_REVIEW', reason: draftDecision.reason };
     }
 
-    var draftResult = createPreviewDraft_(prospectId, step, prospect, rendered, config);
-    if (draftResult.skipped) return { status: draftResult.status };
+    // ------------------------------------------------------------------
+    // N3 (Codex re-audit, final round): DURABLE PREVIEW CLAIM, written and
+    // flushed BEFORE any Gmail call that could create a draft.
+    //
+    // Every previous round tried to close the orphan-draft hole with more
+    // catches AFTER GmailApp.createDraft() — and every round Codex found
+    // another ordering where a draft could exist in Gmail with no durable
+    // ledger barrier (createDraft succeeds -> getId() throws ->
+    // deleteDraft() also throws -> draft survives, untracked, and the next
+    // Preview creates a second one). No amount of post-hoc compensation
+    // fixes that, because the compensation itself can fail.
+    //
+    // The correct property is the same one LIVE sending already had:
+    // claim the idempotency key DURABLY FIRST, then perform the side
+    // effect. If the claim cannot be persisted, the side effect never
+    // happens at all. From here on, a Gmail draft can only ever exist
+    // while a blocking ledger row for its key also exists.
+    // ------------------------------------------------------------------
+    var claimRowNum;
+    try {
+      claimRowNum = appendPreviewClaim_(prospectId, step, prospect.Email_Normalized);
+    } catch (claimError) {
+      // CASO A: no barrier could be persisted -> do NOT call Gmail at all.
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'Could not persist the PREVIEW_CLAIMED barrier: ' + claimError +
+        '. GmailApp.createDraft() was NOT called — no draft can exist without a durable ledger barrier.');
+      return { status: 'ERROR_PREVIEW_CLAIM_FAILED' };
+    }
+
+    var draftResult;
+    try {
+      draftResult = createPreviewDraft_(prospectId, step, prospect, rendered, config);
+    } catch (createError) {
+      // CASO B: the draft-creating call itself threw. Its outcome is
+      // UNRESOLVABLE — Gmail may or may not have created a draft, and if
+      // it did we have no reference or id for it. The claim must stay
+      // blocking, permanently, until a human resolves it.
+      try {
+        markPreviewClaimAmbiguous_(claimRowNum, 'GmailApp draft creation threw: ' + createError + ' — a draft may or may not exist.');
+      } catch (markError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'Could not mark the preview claim PREVIEW_AMBIGUOUS: ' + markError +
+          ' — the row stays PREVIEW_CLAIMED, which is ALSO blocking, so the key remains closed either way.');
+      }
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'Draft creation threw: ' + createError + '. Key durably blocked; no automatic retry. Needs manual ADMIN review.');
+      return { status: 'ERROR_PREVIEW_CREATE_AMBIGUOUS' };
+    }
+
+    if (draftResult.skipped) {
+      // createPreviewDraft_ returned before making ANY draft-creating call
+      // (the broken-LIVE-Thread_ID path) — provably nothing was created,
+      // so the claim can be released and the key re-opened.
+      try {
+        releasePreviewClaim_(claimRowNum, 'No Gmail draft was created (' + draftResult.status + ').');
+      } catch (releaseError) {
+        logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'Could not release the preview claim after a skipped creation: ' + releaseError +
+          ' — the row stays PREVIEW_CLAIMED (blocking). Safe, but needs manual ADMIN release.');
+      }
+      return { status: draftResult.status };
+    }
 
     // N3 V3 (Codex final audit, blocker N3-3): capturing the just-created
     // draft's own id, message id, and content fingerprint must be
@@ -724,44 +820,34 @@ function previewStep(prospectId, step) {
     }
 
     if (creationError || !draftFingerprint) {
-      // Fail closed: never write a "healthy" DRAFTED row with a blank
-      // fingerprint from a metadata-capture failure. We created this draft
-      // ourselves, synchronously, in this same execution — no human could
-      // have touched it yet — so deleting it via the DIRECT OBJECT
-      // REFERENCE we already hold (attemptDeleteDraftDirectly_) is safe
-      // (not an ownership check; there is nothing to distinguish it from
-      // yet) AND avoids the enumeration failure surface entirely (Codex
-      // round 2: a Draft_ID lookup through GmailApp.getDrafts() could
-      // itself throw on an UNRELATED draft's getId() — see
-      // findDraftInListSafely_ — a risk that simply does not exist when
-      // deleting the object we already have in hand).
+      // CASO C/D: the draft EXISTS but its metadata could not be read.
+      // Try to compensate via the DIRECT OBJECT REFERENCE we already hold
+      // (never an enumeration lookup — that could itself throw on an
+      // unrelated draft, see findDraftInListSafely_, and here we don't
+      // even need an id). Then resolve the durable claim according to
+      // what we can actually PROVE:
+      //   - delete confirmed  -> release the claim (key re-opens; there is
+      //                          provably no draft left).
+      //   - delete failed     -> PREVIEW_AMBIGUOUS: the draft may still
+      //                          exist and we may not even know its id.
+      //                          The key stays closed forever until an
+      //                          ADMIN resolves it. This is the case that
+      //                          used to produce an untracked orphan plus
+      //                          a duplicate on the next run.
       var compensated = attemptDeleteDraftDirectly_(draftResult.draft);
-      if (!compensated && draftId) {
-        // Could not confirm the draft is gone (the delete call itself
-        // threw) — it may still physically exist. Record what we DO know
-        // as a recovery row (blank fingerprint) so the legacy-blank-
-        // fingerprint policy above durably preserves it on the very next
-        // run instead of a future previewStep() silently creating a
-        // second draft alongside an untracked orphan.
-        try {
-          appendLedgerRow_({
-            Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,
-            Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.DRY_RUN,
-            State: LEDGER_STATE.DRAFTED, Thread_ID: usedThreadId || '', Message_ID: draftMessageId, Draft_ID: draftId,
-            Confirmed_At: new Date(),
-            Error: 'CREATION_METADATA_CAPTURE_FAILED: ' + creationError + ' — recorded as a recovery row; ' +
-              'treated as legacy/needs-review by resolveExistingPreviewDraft_, never auto-deleted or duplicated.',
-            Draft_Fingerprint: '', Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
-          });
-        } catch (recoveryLedgerError) {
-          logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-            'Draft metadata capture failed AND the recovery ledger row also failed to write: ' + recoveryLedgerError +
-            '. Draft_ID=' + (draftId || 'UNKNOWN') + ' is a fully untracked orphan — NEEDS MANUAL REVIEW.');
+      try {
+        if (compensated) {
+          releasePreviewClaim_(claimRowNum,
+            'Metadata capture failed (' + creationError + ') but the draft was CONFIRMED deleted.');
+        } else {
+          markPreviewClaimAmbiguous_(claimRowNum,
+            'Metadata capture failed (' + creationError + ') AND the compensating delete also failed. ' +
+            'Draft_ID=' + (draftId || 'UNKNOWN') + ' may still exist in Gmail.');
         }
-      } else if (!compensated) {
+      } catch (claimResolveError) {
         logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-          'Draft creation metadata capture failed AND the created draft\'s own Draft_ID is unknown — a Gmail draft ' +
-          'may exist with NO trace in SendLedger. NEEDS MANUAL REVIEW (residual risk; see Mailer.gs docstring).');
+          'Could not update the preview claim after a metadata-capture failure: ' + claimResolveError +
+          ' — the row stays PREVIEW_CLAIMED, which is still blocking, so no duplicate can be created.');
       }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
         'Draft creation metadata capture failed: ' + creationError + '. draftId=' + (draftId || 'UNKNOWN') +
@@ -769,21 +855,36 @@ function previewStep(prospectId, step) {
       return { status: 'ERROR_DRAFT_METADATA_CAPTURE_FAILED', draftId: draftId || undefined, compensated: compensated };
     }
 
-    var ledgerEntry = {
-      Run_ID: getRunId_(), Claimed_At: '', Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,
-      Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.DRY_RUN,
-      State: LEDGER_STATE.DRAFTED, Thread_ID: usedThreadId, Message_ID: draftMessageId, Draft_ID: draftId,
-      Confirmed_At: new Date(), Error: '', Draft_Fingerprint: draftFingerprint, Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
-    };
-
     try {
-      appendLedgerRow_(ledgerEntry);
+      // CASO E happy path: the claim row ITSELF becomes the DRAFTED row,
+      // updated in place — so this key never has two active rows, and
+      // never has zero.
+      finalizePreviewClaimAsDrafted_(claimRowNum, {
+        threadId: usedThreadId, messageId: draftMessageId, draftId: draftId, fingerprint: draftFingerprint
+      });
     } catch (ledgerError) {
-      var compensation = deletePreviewDraftIfOwned_(draftId, ledgerEntry);
+      // CASO E failure path: the draft exists but could not be recorded as
+      // DRAFTED. The claim row is still PREVIEW_CLAIMED (blocking) — same
+      // resolution rules as above.
+      var compensation = attemptDeleteDraftDirectly_(draftResult.draft);
+      try {
+        if (compensation) {
+          releasePreviewClaim_(claimRowNum,
+            'Final DRAFTED transition failed (' + ledgerError + ') but the draft was CONFIRMED deleted.');
+        } else {
+          markPreviewClaimAmbiguous_(claimRowNum,
+            'Final DRAFTED transition failed (' + ledgerError + ') AND the compensating delete also failed. ' +
+            'Draft_ID=' + draftId + ' may still exist in Gmail.');
+        }
+      } catch (claimResolveError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'Could not update the preview claim after a final-transition failure: ' + claimResolveError +
+          ' — the row stays PREVIEW_CLAIMED, which is still blocking.');
+      }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-        'Ledger write failed after draft creation. Draft_ID=' + draftId + ' compensated=' + compensation.deleted +
-        (compensation.deleted ? '' : ' — ORPHANED DRAFT, NEEDS MANUAL REVIEW.') + ' ledgerError=' + ledgerError);
-      return { status: 'ERROR_LEDGER_WRITE_FAILED', draftId: draftId, compensated: compensation.deleted };
+        'Ledger transition to DRAFTED failed after draft creation. Draft_ID=' + draftId +
+        ' compensated=' + compensation + '. ledgerError=' + ledgerError);
+      return { status: 'ERROR_LEDGER_WRITE_FAILED', draftId: draftId, compensated: compensation };
     }
 
     logEvent_(LOG_LEVEL.INFO, LOG_EVENT.DRAFTED, prospectId, prospect.Email_Normalized, step, 'Draft_ID=' + draftId);

@@ -190,7 +190,22 @@ var LEDGER_STATE = {
   // defined (not deleted) only so the enum remains a stable reference for
   // any historical row a value like this could already exist in.
   ABANDONED: 'ABANDONED',
-  AMBIGUOUS: 'AMBIGUOUS'
+  AMBIGUOUS: 'AMBIGUOUS',
+  // N3 (Codex re-audit, final round — orphan drafts eliminated
+  // structurally): the PREVIEW-side equivalents of LIVE's
+  // CLAIMED/AMBIGUOUS. A durable PREVIEW_CLAIMED row is written AND
+  // FLUSHED before GmailApp.createDraft() is ever called, mirroring
+  // doStep1Send_'s claim-before-send ordering — so a draft can never
+  // exist in Gmail without a durable ledger barrier for its idempotency
+  // key. PREVIEW_AMBIGUOUS is where that claim lands when the outcome of
+  // the Gmail side effect cannot be resolved (createDraft threw, or a
+  // post-creation failure could not be compensated). BOTH block any
+  // further preview attempt for the same key — see
+  // isPreviewKeyBlockedState_/findActivePreviewRows_ (Ledger.gs).
+  // Neither is ever auto-resolved: only an explicit ADMIN action clears
+  // them (see the recovery notes in Mailer.gs's previewStep docstring).
+  PREVIEW_CLAIMED: 'PREVIEW_CLAIMED',
+  PREVIEW_AMBIGUOUS: 'PREVIEW_AMBIGUOUS'
 };
 
 /**

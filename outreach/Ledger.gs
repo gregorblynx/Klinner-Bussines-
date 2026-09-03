@@ -141,6 +141,110 @@ function findActiveDryRunDraftRows_(prospectId, step) {
   return matches;
 }
 
+/**
+ * N3 (Codex re-audit, final round): the PREVIEW-side blocking states.
+ * A preview idempotency key is blocked from any NEW Gmail draft creation
+ * while a row in ANY of these states exists:
+ *   - DRAFTED           a live preview draft already exists for this key.
+ *   - PREVIEW_CLAIMED   a draft creation was claimed and may be in flight
+ *                       (or died mid-flight — a killed Apps Script
+ *                       execution leaves exactly this).
+ *   - PREVIEW_AMBIGUOUS a Gmail side effect that could have created a
+ *                       draft had an outcome we cannot resolve, and
+ *                       compensation could not confirm cleanup.
+ * SUPERSEDED/FAILED are deliberately NOT blocking: both mean "no Gmail
+ * draft exists for this key any more", which is exactly when a fresh
+ * preview SHOULD be allowed.
+ */
+function isPreviewKeyBlockedState_(state) {
+  return state === LEDGER_STATE.DRAFTED ||
+    state === LEDGER_STATE.PREVIEW_CLAIMED ||
+    state === LEDGER_STATE.PREVIEW_AMBIGUOUS;
+}
+
+/**
+ * Every DRY_RUN row for this key currently in a preview-blocking state
+ * (see isPreviewKeyBlockedState_). Normally 0 or 1. This is what
+ * resolveExistingPreviewDraft_ reads — NOT findActiveDryRunDraftRows_,
+ * which only sees DRAFTED and would therefore miss an unresolved claim.
+ */
+function findActivePreviewRows_(prospectId, step) {
+  var key = getIdempotencyKey_(prospectId, step);
+  var rows = readAllLedgerRows_();
+  var matches = [];
+  for (var i = 0; i < rows.length; i++) {
+    var v = rows[i].values;
+    if (v.Idempotency_Key === key && v.Mode === LEDGER_MODE.DRY_RUN && isPreviewKeyBlockedState_(v.State)) {
+      matches.push(rows[i]);
+    }
+  }
+  return matches;
+}
+
+/**
+ * N3: writes and FLUSHES the durable PREVIEW_CLAIMED barrier for
+ * (prospectId, step) BEFORE any Gmail draft-creating call is made.
+ * appendLedgerRow_ calls SpreadsheetApp.flush() itself, so by the time
+ * this returns the barrier is persisted, not merely buffered — that
+ * ordering is the whole point: if this throws, the caller must NOT call
+ * GmailApp.createDraft() at all (there would be no barrier for the draft
+ * it would create).
+ * @return {number} the ledger row index of the claim.
+ */
+function appendPreviewClaim_(prospectId, step, emailNormalized) {
+  return appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: emailNormalized,
+    Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.DRY_RUN,
+    State: LEDGER_STATE.PREVIEW_CLAIMED, Thread_ID: '', Message_ID: '', Draft_ID: '',
+    Confirmed_At: '', Error: 'PREVIEW_CLAIMED: barrier written before GmailApp.createDraft() was called.',
+    Draft_Fingerprint: '', Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
+  });
+}
+
+/**
+ * N3: the claim's Gmail side effect had an unresolvable outcome (or a
+ * post-creation failure could not be compensated). Transitions the claim
+ * to PREVIEW_AMBIGUOUS — still blocking, permanently, until a human
+ * resolves it. NOTE: if this write itself fails the row simply stays
+ * PREVIEW_CLAIMED, which is ALSO blocking — either way the key remains
+ * closed, which is why this is safe to call best-effort.
+ */
+function markPreviewClaimAmbiguous_(rowIndex, note) {
+  updateLedgerRow_(rowIndex, {
+    State: LEDGER_STATE.PREVIEW_AMBIGUOUS,
+    Error: 'PREVIEW_AMBIGUOUS: ' + note + ' Needs manual ADMIN review — never auto-retried.'
+  });
+}
+
+/**
+ * N3: the claim is provably resolvable to "no Gmail draft exists" (the
+ * draft was confirmed deleted, or was never created at all). Releasing
+ * the claim to SUPERSEDED — a NON-blocking state — is the only path that
+ * re-opens the key for a future preview, and it is only ever taken on
+ * CONFIRMED cleanup, never on an unproven assumption.
+ */
+function releasePreviewClaim_(rowIndex, note) {
+  updateLedgerRow_(rowIndex, {
+    State: LEDGER_STATE.SUPERSEDED,
+    Error: 'PREVIEW_CLAIM_RELEASED: ' + note
+  });
+}
+
+/**
+ * N3: the happy path — the draft exists, all its metadata was captured,
+ * so the claim row itself becomes the DRAFTED row (updated in place, so
+ * there is never a window with two active rows or zero active rows for
+ * this key).
+ */
+function finalizePreviewClaimAsDrafted_(rowIndex, fields) {
+  updateLedgerRow_(rowIndex, {
+    State: LEDGER_STATE.DRAFTED,
+    Thread_ID: fields.threadId, Message_ID: fields.messageId, Draft_ID: fields.draftId,
+    Confirmed_At: new Date(), Error: '', Draft_Fingerprint: fields.fingerprint,
+    Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
+  });
+}
+
 function supersedeLedgerRow_(rowIndex) {
   updateLedgerRow_(rowIndex, { State: LEDGER_STATE.SUPERSEDED });
 }
