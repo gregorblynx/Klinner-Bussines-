@@ -1,7 +1,7 @@
 'use strict';
 /**
  * N3 V3 (Codex final audit — durable Gmail preview ownership, hardened)
- * mutation test. Proves SEVEN independent protections are load-bearing,
+ * mutation test. Proves TEN independent protections are load-bearing,
  * each caught by a distinct, narrow test:
  *
  *   A. Removing the durable-preserve branch in resolveExistingPreviewDraft_
@@ -205,6 +205,52 @@ function mutationG_reintroduceOrphanDraftGap(source) {
   return s;
 }
 
+
+// --- Mutation H (final round): move the PREVIEW claim to AFTER the Gmail
+// draft-creating call — reintroducing the exact window where a draft can
+// exist with no durable ledger barrier. ---
+function mutationH_claimAfterCreateDraft(source) {
+  var s2 = replaceOrThrow(source, 'H1',
+    "    var claimRowNum;\n" +
+    "    try {\n" +
+    "      claimRowNum = appendPreviewClaim_(prospectId, step, prospect.Email_Normalized);\n" +
+    "    } catch (claimError) {",
+    "    var claimRowNum = null; // MUTATION H: claim deferred until after Gmail.\n" +
+    "    try {\n" +
+    "      if (false) claimRowNum = appendPreviewClaim_(prospectId, step, prospect.Email_Normalized);\n" +
+    "    } catch (claimError) {");
+  return replaceOrThrow(s2, 'H2',
+    "    var draftId = '';\n" +
+    "    var draftMessageId = '';",
+    "    claimRowNum = appendPreviewClaim_(prospectId, step, prospect.Email_Normalized); // MUTATION H: too late.\n" +
+    "    var draftId = '';\n" +
+    "    var draftMessageId = '';");
+}
+
+// --- Mutation I: PREVIEW_AMBIGUOUS no longer blocks a later preview. ---
+function mutationI_ambiguousNotBlocking(source) {
+  return replaceOrThrow(source, 'I',
+    "  return state === LEDGER_STATE.DRAFTED ||\n" +
+    "    state === LEDGER_STATE.PREVIEW_CLAIMED ||\n" +
+    "    state === LEDGER_STATE.PREVIEW_AMBIGUOUS;",
+    "  return state === LEDGER_STATE.DRAFTED ||\n" +
+    "    state === LEDGER_STATE.PREVIEW_CLAIMED; // MUTATION I: PREVIEW_AMBIGUOUS no longer blocks.");
+}
+
+// --- Mutation J: on a FAILED cleanup, release the claim anyway (treating
+// an unproven cleanup as if it had succeeded). ---
+function mutationJ_releaseClaimOnFailedCleanup(source) {
+  return replaceOrThrow(source, 'J',
+    "        if (compensated) {\n" +
+    "          releasePreviewClaim_(claimRowNum,\n" +
+    "            'Metadata capture failed (' + creationError + ') but the draft was CONFIRMED deleted.');\n" +
+    "        } else {",
+    "        if (true) { // MUTATION J: release regardless of whether cleanup actually worked.\n" +
+    "          releasePreviewClaim_(claimRowNum,\n" +
+    "            'Metadata capture failed (' + creationError + ') but the draft was CONFIRMED deleted.');\n" +
+    "        } else {");
+}
+
 var MUTATIONS = [
   { label: 'A (remove durable-preserve guard)', file: 'Mailer.gs', mutate: mutationA_removeDurablePreserveGuard, mustBeCaughtBy: 'N3_caso2_messageIdRotates' },
   { label: 'B (neuter fingerprint comparison)', file: 'Mailer.gs', mutate: mutationB_neuterFingerprintComparison, mustBeCaughtBy: 'N3_caso3_messageIdStable' },
@@ -212,7 +258,10 @@ var MUTATIONS = [
   { label: 'D (blank fingerprint = unedited)', file: 'Mailer.gs', mutate: mutationD_blankFingerprintTreatedAsUnedited, mustBeCaughtBy: 'N3v3_legacyRosaKnownEdit' },
   { label: 'E (partial-transition safety removed)', file: 'Ledger.gs', mutate: mutationE_revertPartialFailureOrdering, mustBeCaughtBy: 'N3v3_appendFailureLeavesOldRowIntact' },
   { label: 'F (healthy DRAFTED with blank fingerprint allowed)', file: 'Mailer.gs', mutate: mutationF_disableCreationFailClosedGuard, mustBeCaughtBy: 'N3v3_creationFailureCompensated' },
-  { label: 'G (orphan-draft gap reintroduced)', file: 'Mailer.gs', mutate: mutationG_reintroduceOrphanDraftGap, mustBeCaughtBy: 'N3v3_orphanGap_getThread' }
+  { label: 'G (orphan-draft gap reintroduced)', file: 'Mailer.gs', mutate: mutationG_reintroduceOrphanDraftGap, mustBeCaughtBy: 'N3v3_orphanGap_getThread' },
+  { label: 'H (preview claim moved after createDraft)', file: 'Mailer.gs', mutate: mutationH_claimAfterCreateDraft, mustBeCaughtBy: 'N3v3_createDraftThrows' },
+  { label: 'I (PREVIEW_AMBIGUOUS not blocking)', file: 'Ledger.gs', mutate: mutationI_ambiguousNotBlocking, mustBeCaughtBy: 'N3v3_unc_draftGetId' },
+  { label: 'J (claim released on a FAILED cleanup)', file: 'Mailer.gs', mutate: mutationJ_releaseClaimOnFailedCleanup, mustBeCaughtBy: 'N3v3_unc_draftGetId' }
 ];
 
 var allPassed = true;

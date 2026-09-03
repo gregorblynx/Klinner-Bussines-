@@ -30,6 +30,16 @@ function createInMemorySheet(name) {
     getName: function () { return this.name; },
     getLastRow: function () { return this.data.length; },
     getMaxRows: function () { return Math.max(this.physicalRowCount, this.data.length); },
+    physicalColumnCount: 26, // backs getMaxColumns(), grown by insertColumnsAfter — real sheets have a finite grid width.
+    getMaxColumns: function () {
+      var widest = this.physicalColumnCount;
+      for (var i = 0; i < this.data.length; i++) if (this.data[i].length > widest) widest = this.data[i].length;
+      return widest;
+    },
+    insertColumnsAfter: function (afterCol, howMany) {
+      var target = afterCol + howMany;
+      if (target > this.physicalColumnCount) this.physicalColumnCount = target;
+    },
     insertRowsAfter: function (afterRow, howMany) {
       // Physical growth only — deliberately does NOT extend `data`
       // (content). A freshly inserted row has no content until something
@@ -301,6 +311,12 @@ function createMockGmailApp() {
   var labels = {};
   var threads = {}; // id -> thread mock, for _seedLiveThread / getThreadById
   var sentIndex = []; // {recipientEmail, thread} — backs search(), populated by draft.send()
+  // N3/N5 (Codex re-audit): real call counters for the three Gmail side
+  // effects that can create/send something. Behavioral tests assert EXACT
+  // counts ("exactly one send ever happened"), which is a far stronger
+  // proof than inspecting resulting state — state can look identical
+  // whether an operation ran once or twice-with-one-failure.
+  var callCounts = { createDraft: 0, createDraftReply: 0, send: 0, reply: 0 };
 
   function makeMessage(from, to, subject, body) {
     messageCounter++;
@@ -340,6 +356,7 @@ function createMockGmailApp() {
        * can find it — real reconciliation-path testing needs this.
        */
       send: function () {
+        callCounts.send++;
         var idx = drafts.indexOf(draft);
         if (idx !== -1) drafts.splice(idx, 1);
         threadCounter++;
@@ -366,7 +383,19 @@ function createMockGmailApp() {
     _drafts: drafts,
     _threads: threads,
     _sentIndex: sentIndex,
+    _callCounts: callCounts,
+    _resetCallCounts: function () {
+      callCounts.createDraft = 0; callCounts.createDraftReply = 0; callCounts.send = 0; callCounts.reply = 0;
+    },
+    /** Test-only: removes a thread seeded by _seedLiveThread so a test leaves no residual mock state. */
+    _removeThreadForTest: function (threadId) {
+      delete threads[threadId];
+      for (var i = sentIndex.length - 1; i >= 0; i--) {
+        if (sentIndex[i].thread && sentIndex[i].thread.getId() === threadId) sentIndex.splice(i, 1);
+      }
+    },
     createDraft: function (to, subject, body) {
+      callCounts.createDraft++;
       return makeDraft(to, subject, body, null);
     },
     getDrafts: function () { return drafts.slice(); },
@@ -411,10 +440,12 @@ function createMockGmailApp() {
         addLabel: function () {},
         /** Real GmailThread.reply() returns the GmailThread itself, NOT a GmailMessage — Codex finding #7. */
         reply: function (body) {
+          callCounts.reply++;
           messages.push(makeMessage(senderEmail, recipientEmail, 'Re: A quick note', body));
           return thread;
         },
         createDraftReply: function (body) {
+          callCounts.createDraftReply++;
           return makeDraft(recipientEmail, 'Re: A quick note', body, thread);
         }
       };

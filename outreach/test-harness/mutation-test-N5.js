@@ -13,8 +13,9 @@
  *      — the ledger-level guard itself disabled.
  *   B. doFollowUpSend_'s reply()-throw handler downgraded from AMBIGUOUS
  *      back to FAILED (round-1 bug reintroduced for this specific site).
- *   C. reconcileStaleLiveClaims_'s zero-search-result branch reverted to
- *      the dangerous ABANDONED-as-retryable state (Recon.gs).
+ *   C. reconcileStaleLiveClaims_ reverted to inferring SENT from a single
+ *      generic recipient-search match — a match that cannot identify THIS
+ *      step (Recon.gs).
  *   D. doStep1Send_'s ledger CLAIM moved from BEFORE the risky Gmail call
  *      to AFTER it succeeds — reproducing "no ledger protection exists
  *      while a Gmail operation that could have sent is in flight or
@@ -79,35 +80,17 @@ function mutationB_followUpReplyThrowDowngradedToFailed(source) {
     "      });");
 }
 
-// --- Mutation C: reconcileStaleLiveClaims_'s zero-result branch reverted to ABANDONED (Recon.gs). ---
-function mutationC_reconZeroResultBackToAbandoned(source) {
+// --- Mutation C: reintroduce the false-SENT inference — a single generic
+// recipient-search match treated as proof that THIS step was sent. ---
+function mutationC_falseSentInference(source) {
   return replaceOrThrow(source, 'C',
-    "    if (threads.length === 1) {\n" +
-    "      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });\n" +
-    "      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step,\n" +
-    "        'Reconciled from stale claim: exactly one positive match found.');\n" +
-    "    } else {\n" +
-    "      var reason = threads.length === 0\n" +
-    "        ? 'zero matching sent messages found (absence of a search hit is not proof nothing was sent)'\n" +
-    "        : threads.length + ' ambiguous matching sent messages found (cannot determine which is ours)';\n" +
-    "      updateLedgerRow_(row.rowIndex, {\n" +
-    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
-    "        Error: 'Stale CLAIMED, ' + reason + ' — durably blocked, needs manual reconciliation.'\n" +
-    "      });",
-    "    if (threads.length === 1) {\n" +
-    "      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });\n" +
-    "      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, v.Prospect_ID, v.Email_Normalized, v.Step,\n" +
-    "        'Reconciled from stale claim: exactly one positive match found.');\n" +
-    "    } else if (threads.length === 0) {\n" +
-    "      // MUTATION C: reverted to the dangerous round-1 bug — a negative\n" +
-    "      // search authorizes ABANDONED, which isLiveKeyBlocked_ does NOT block on.\n" +
-    "      updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.ABANDONED });\n" +
-    "    } else {\n" +
-    "      var reason = threads.length + ' ambiguous matching sent messages found (cannot determine which is ours)';\n" +
-    "      updateLedgerRow_(row.rowIndex, {\n" +
-    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
-    "        Error: 'Stale CLAIMED, ' + reason + ' — durably blocked, needs manual reconciliation.'\n" +
-    "      });");
+    "      evidence = threads.length + ' message(s) to this recipient found in Sent (diagnostic only — a generic ' +\n" +
+    "        'recipient search cannot prove THIS specific step was or was not sent)';",
+    "      evidence = threads.length + ' message(s) found';\n" +
+    "      if (threads.length === 1) { // MUTATION C: treat one generic match as proof of SENT.\n" +
+    "        updateLedgerRow_(row.rowIndex, { State: LEDGER_STATE.SENT, Confirmed_At: new Date() });\n" +
+    "        return;\n" +
+    "      }");
 }
 
 // --- Mutation D: doStep1Send_'s ledger CLAIM moved to AFTER send() succeeds (Mailer.gs). ---
@@ -158,7 +141,7 @@ function mutationD_claimMovedAfterSend(source) {
 var MUTATIONS = [
   { label: 'A (AMBIGUOUS removed from isLiveKeyBlocked_)', file: 'Ledger.gs', mutate: mutationA_removeAmbiguousFromBlockingCheck, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
   { label: 'B (follow-up reply-throw downgraded to FAILED)', file: 'Mailer.gs', mutate: mutationB_followUpReplyThrowDowngradedToFailed, mustBeCaughtBy: 'N5_followUpThrowsDurableBlock' },
-  { label: 'C (recon zero-result reverted to ABANDONED)', file: 'Recon.gs', mutate: mutationC_reconZeroResultBackToAbandoned, mustBeCaughtBy: 'N5_reconZeroSearchNeverRetryable' },
+  { label: 'C (false SENT inferred from one search match)', file: 'Recon.gs', mutate: mutationC_falseSentInference, mustBeCaughtBy: 'N5_reconSingleMatchAmbiguous' },
   { label: 'D (claim moved to after send() succeeds)', file: 'Mailer.gs', mutate: mutationD_claimMovedAfterSend, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' }
 ];
 

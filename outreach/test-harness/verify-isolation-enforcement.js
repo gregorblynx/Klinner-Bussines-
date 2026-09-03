@@ -56,6 +56,15 @@ function runCopy(tmpDir) {
 }
 
 var CLEANUP_MARKER = 'function cleanupTestRows_() {';
+// P4 (Codex re-audit): the isolation gate must also catch a leaked Gmail
+// DRAFT, not just leaked sheet rows — that was the exact failure mode
+// Codex found (77/77 "clean" while two real drafts survived the run).
+var LEAK_ANCHOR = 'function test_T21_blankNextActionDateIgnored_() {';
+function mutationLeakADraft(source) {
+  if (source.indexOf(LEAK_ANCHOR) === -1) throw new Error('Draft-leak anchor not found — Tests.gs may have changed shape.');
+  return source.replace(LEAK_ANCHOR,
+    LEAK_ANCHOR + "\n  GmailApp.createDraft('leaked@example-corp-test.com', 'MUTATION: leaked draft', 'Deliberately never cleaned up.');");
+}
 function mutationBreakCleanup(source) {
   if (source.indexOf(CLEANUP_MARKER) === -1) throw new Error('cleanupTestRows_ marker not found — Tests.gs may have changed shape.');
   var start = source.indexOf(CLEANUP_MARKER);
@@ -101,6 +110,27 @@ if (!dirtyFunctionalLine || !dirtyIsolationLine) {
   console.log((isolationNowDirty ? 'PASS' : 'FAIL') + ' — isolation gate correctly reports dirty: ' + dirtyIsolationLine[0]);
   console.log((dirtyRun.status !== 0 ? 'PASS' : 'FAIL') + ' — exit code is non-zero despite functional gate being clean.');
   if (!functionalStillPassed || !isolationNowDirty || dirtyRun.status === 0) allPassed = false;
+}
+
+// 3. A single leaked Gmail draft: every test's own assertions still pass,
+//    but the isolation gate must catch it and the exit code must be non-zero.
+var leakDir = buildTempCopy(mutationLeakADraft);
+var leakRun = runCopy(leakDir);
+fs.rmSync(leakDir, { recursive: true, force: true });
+console.log('\nLeaked-Gmail-draft suite: exit=' + leakRun.status);
+var leakFunctionalLine = /functional (\d+)\/(\d+) (PASS|FAIL)/.exec(leakRun.stdout);
+var leakIsolationLine = /isolation clean (\d+)\/(\d+) (PASS|FAIL)/.exec(leakRun.stdout);
+if (!leakFunctionalLine || !leakIsolationLine) {
+  console.log('FAIL — could not parse the draft-leak run\'s output.');
+  console.log(leakRun.stdout.slice(-800));
+  allPassed = false;
+} else {
+  var leakFunctionalGreen = leakFunctionalLine[1] === leakFunctionalLine[2] && leakFunctionalLine[3] === 'PASS';
+  var leakIsolationDirty = leakIsolationLine[1] !== leakIsolationLine[2] && leakIsolationLine[3] === 'FAIL';
+  console.log((leakFunctionalGreen ? 'PASS' : 'FAIL') + ' — functional gate still all-green with a leaked draft: ' + leakFunctionalLine[0]);
+  console.log((leakIsolationDirty ? 'PASS' : 'FAIL') + ' — isolation gate catches the leaked Gmail draft: ' + leakIsolationLine[0]);
+  console.log((leakRun.status !== 0 ? 'PASS' : 'FAIL') + ' — exit code is non-zero for a leaked draft.');
+  if (!leakFunctionalGreen || !leakIsolationDirty || leakRun.status === 0) allPassed = false;
 }
 
 console.log('\n' + (allPassed ? 'ISOLATION ENFORCEMENT VERIFICATION: PASS' : 'ISOLATION ENFORCEMENT VERIFICATION: FAIL'));

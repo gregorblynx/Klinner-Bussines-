@@ -19,6 +19,10 @@
 var TEST_SOURCE_MARKER = 'TEST_F1_AUTOMATED';
 var _testCreatedSuppressionValues = []; // scope=email rows tests created — tracked by Value.
 var _testCreatedDomainSuppressionValues_ = []; // scope=domain rows tests created — tracked separately (different Scope).
+// P4 (Codex re-audit): Gmail threads a test seeded or caused to be
+// created. The isolation check now diffs the mock's thread map, so these
+// must be removed in teardown like any other shared-sandbox artifact.
+var _testCreatedThreadIds_ = [];
 
 function assert_(condition, message) {
   if (!condition) throw new Error('ASSERTION FAILED: ' + message);
@@ -1255,9 +1259,20 @@ function test_N3_caso8_gmailGetDraftsErrorFailsClosed_() {
  */
 function test_N3_caso8_messageGetIdErrorFailsClosed_() {
   var ctx = n3_setupDraftedProspectForEditTest_('n3caso8getid');
+  // P4 (Codex re-audit): capture the real implementation so it can be put
+  // back before teardown. A permanently poisoned getId() makes the
+  // framework's own ownership-verified cleanup unable to delete this
+  // draft, which is exactly how two real drafts leaked out of the suite
+  // while it still reported "isolation clean".
+  var originalGetId = ctx.message.getId;
   ctx.message.getId = function () { throw new Error('Simulated Gmail error reading message id.'); };
 
-  var second = previewStep(ctx.p.Prospect_ID, 1);
+  var second;
+  try {
+    second = previewStep(ctx.p.Prospect_ID, 1);
+  } finally {
+    ctx.message.getId = originalGetId;
+  }
   assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status, 'A message.getId() failure must fail closed.');
   assertEquals_('message_id_read_failed', second.reason, 'The reason must identify the failing read.');
 
@@ -1274,10 +1289,19 @@ function test_N3_caso8_messageGetIdErrorFailsClosed_() {
  */
 function test_N3_caso8_contentReadErrorFailsClosed_() {
   var ctx = n3_setupDraftedProspectForEditTest_('n3caso8content');
+  // P4: same restoration requirement as the getId case above.
+  var originalGetPlainBody = ctx.message.getPlainBody;
+  var originalGetBody = ctx.message.getBody;
   ctx.message.getPlainBody = function () { throw new Error('Simulated Gmail error reading draft body.'); };
   ctx.message.getBody = ctx.message.getPlainBody;
 
-  var second = previewStep(ctx.p.Prospect_ID, 1);
+  var second;
+  try {
+    second = previewStep(ctx.p.Prospect_ID, 1);
+  } finally {
+    ctx.message.getPlainBody = originalGetPlainBody;
+    ctx.message.getBody = originalGetBody;
+  }
   assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', second.status, 'A content read failure must fail closed.');
   assertEquals_('content_read_failed', second.reason, 'The reason must identify the failing read.');
 
@@ -1602,26 +1626,32 @@ function test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRo
   assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create metadata read failure must fail closed.');
   assertEquals_(false, outcome.compensated, 'Compensation must be reported as failed (the delete itself threw).');
 
-  var draftedRows = readAllLedgerRows_().filter(function (r) {
-    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.State === LEDGER_STATE.DRAFTED;
+  // N3 final round (CASO C): the durable barrier is now the pre-claim row
+  // itself, transitioned to PREVIEW_AMBIGUOUS — NOT an appended "recovery
+  // row" written after the fact (which could itself fail to write).
+  var keyRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.DRY_RUN;
   });
-  assertEquals_(1, draftedRows.length, 'A recovery row must have been written so the orphan is not fully untracked.');
-  assertEquals_('', draftedRows[0].values.Draft_Fingerprint, 'The recovery row correctly has a blank fingerprint (that is exactly what failed to capture).');
-  assert_(draftedRows[0].values.Error.indexOf('CREATION_METADATA_CAPTURE_FAILED') !== -1, 'The recovery row must be clearly marked.');
+  assertEquals_(1, keyRows.length, 'Exactly one ledger row must exist for this key — the pre-claim, transitioned in place.');
+  assertEquals_(LEDGER_STATE.PREVIEW_AMBIGUOUS, keyRows[0].values.State,
+    'An uncompensable post-create failure must leave the claim PREVIEW_AMBIGUOUS (durably blocking).');
+  assert_(keyRows[0].values.Error.indexOf('PREVIEW_AMBIGUOUS') !== -1, 'The row must be clearly marked for manual ADMIN review.');
 
-  // Restore the real getSubject on the underlying message BEFORE the next
-  // run — the simulated failure was a one-time creation-time event, not a
-  // permanently broken Gmail draft; the point of this test is what happens
-  // on a NORMAL subsequent read of the recovery row, isolated from the
-  // original injected failure.
   if (capturedMessage && originalGetSubject) capturedMessage.getSubject = originalGetSubject;
 
-  // The critical safety proof: the NEXT run must NOT create a duplicate —
-  // the legacy-blank-fingerprint policy must durably preserve it instead.
+  // The critical safety proof: the NEXT run must create ZERO additional
+  // drafts — the ambiguous claim blocks it outright.
+  var draftCountBeforeNextRun = GmailApp.getDrafts().length;
   var nextRun = previewStep(p.Prospect_ID, 1);
-  assertEquals_('SKIPPED_DRAFT_PRESERVED_HUMAN_EDIT', nextRun.status, 'The recovery row must be preserved via the legacy policy, never regenerated into a duplicate.');
-  var draftsForKey = GmailApp.getDrafts().filter(function (d) { return d.getId() === draftedRows[0].values.Draft_ID; });
-  assertEquals_(1, draftsForKey.length, 'Exactly one Gmail draft must exist — the recovery scenario never produced a duplicate.');
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', nextRun.status, 'A PREVIEW_AMBIGUOUS key must block the next Preview entirely.');
+  assertEquals_('preview_ambiguous', nextRun.reason, 'The block reason must identify the ambiguous claim.');
+  assertEquals_(draftCountBeforeNextRun, GmailApp.getDrafts().length, 'ZERO additional drafts must have been created.');
+
+  // Test cleanup: this key is deliberately left blocked (that IS the
+  // behavior under test), so the orphaned draft is not tracked by any
+  // DRAFTED row and the framework's teardown cannot find it — remove it
+  // here so the suite's isolation check stays honest.
+  if (capturedDraft) { try { capturedDraft.deleteDraft(); } catch (e) { /* already restored above */ } }
 }
 
 /**
@@ -1637,6 +1667,195 @@ function test_N3v3_creationMetadataFailureWithFailedCompensationWritesRecoveryRo
  * enumeration lookup — see attemptDeleteDraftDirectly_), regardless of
  * which specific read failed.
  */
+/**
+ * N3 final round, CASOS C/D (uncompensable variants): for EACH
+ * post-creation read that can fail, if the compensating delete ALSO
+ * fails, the pre-claim must end PREVIEW_AMBIGUOUS and the next Preview
+ * must create ZERO additional drafts — proven with a real
+ * GmailApp.createDraft call counter, not just by inspecting state.
+ */
+function n3_assertUncompensableFailureBlocksDurably_(emailTag, corruptMessageFn) {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var originalCreateDraft = GmailApp.createDraft;
+  var capturedDraft = null;
+  var originalDeleteDraft = null;
+  GmailApp._resetCallCounts();
+  GmailApp.createDraft = function (to, subject, body, opts) {
+    var draft = originalCreateDraft(to, subject, body, opts);
+    corruptMessageFn(draft);
+    capturedDraft = draft;
+    originalDeleteDraft = draft.deleteDraft;
+    draft.deleteDraft = function () { throw new Error('Simulated compensation delete failure.'); };
+    return draft;
+  };
+
+  var outcome;
+  try {
+    outcome = previewStep(p.Prospect_ID, 1);
+  } finally {
+    GmailApp.createDraft = originalCreateDraft;
+    if (capturedDraft && originalDeleteDraft) capturedDraft.deleteDraft = originalDeleteDraft;
+  }
+
+  assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status, 'A post-create read failure must fail closed.');
+  assertEquals_(false, outcome.compensated, 'The compensating delete failed, so compensation must be reported false.');
+  assertEquals_(1, GmailApp._callCounts.createDraft, 'Exactly one draft-creating call so far.');
+
+  var keyRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.DRY_RUN;
+  });
+  assertEquals_(1, keyRows.length, 'Exactly one ledger row (the pre-claim) must exist for this key.');
+  assertEquals_(LEDGER_STATE.PREVIEW_AMBIGUOUS, keyRows[0].values.State,
+    'An uncompensable failure must leave the claim PREVIEW_AMBIGUOUS — durably blocking.');
+
+  var nextRun = previewStep(p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', nextRun.status, 'The next Preview must be blocked outright.');
+  assertEquals_('preview_ambiguous', nextRun.reason, 'The block reason must identify the ambiguous claim.');
+  assertEquals_(1, GmailApp._callCounts.createDraft,
+    'CASO C/D: total GmailApp.createDraft call count across BOTH runs must still be EXACTLY 1 — zero duplicates.');
+
+  if (capturedDraft) { try { capturedDraft.deleteDraft(); } catch (e) { /* restored above */ } }
+}
+
+/** N3 item 4: draft.getId() throws AND the delete also fails. */
+function test_N3v3_uncompensable_draftGetIdThrows_() {
+  n3_assertUncompensableFailureBlocksDurably_('n3uncdraftid', function (draft) {
+    draft.getId = function () { throw new Error('Simulated draft.getId() failure.'); };
+  });
+}
+
+/** N3 item 5: getMessage() throws AND the delete also fails. */
+function test_N3v3_uncompensable_getMessageThrows_() {
+  n3_assertUncompensableFailureBlocksDurably_('n3uncgetmessage', function (draft) {
+    draft.getMessage = function () { throw new Error('Simulated draft.getMessage() failure.'); };
+  });
+}
+
+/** N3 item 6: message.getThread() throws AND the delete also fails. */
+function test_N3v3_uncompensable_getThreadThrows_() {
+  n3_assertUncompensableFailureBlocksDurably_('n3uncgetthread', function (draft) {
+    draft.getMessage().getThread = function () { throw new Error('Simulated message.getThread() failure.'); };
+  });
+}
+
+/** N3 item 7: thread.getId() throws AND the delete also fails. */
+function test_N3v3_uncompensable_threadGetIdThrows_() {
+  n3_assertUncompensableFailureBlocksDurably_('n3uncthreadid', function (draft) {
+    var msg = draft.getMessage();
+    msg.getThread = function () { return { getId: function () { throw new Error('Simulated thread.getId() failure.'); } }; };
+  });
+}
+
+/** N3 item 8: content/fingerprint read throws AND the delete also fails. */
+function test_N3v3_uncompensable_contentReadThrows_() {
+  n3_assertUncompensableFailureBlocksDurably_('n3unccontent', function (draft) {
+    var msg = draft.getMessage();
+    msg.getPlainBody = function () { throw new Error('Simulated body read failure.'); };
+    msg.getBody = msg.getPlainBody;
+  });
+}
+
+/**
+ * N3 item 2: GmailApp.createDraft() itself throws. Its outcome is
+ * unresolvable (Gmail may have created a draft we have no handle on), so
+ * the claim must stay blocking and the next run must not call createDraft
+ * a second time.
+ */
+function test_N3v3_createDraftThrowsBlocksKeyDurably_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3createthrows'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  var originalCreateDraft = GmailApp.createDraft;
+  GmailApp._resetCallCounts();
+  GmailApp.createDraft = function () {
+    GmailApp._callCounts.createDraft++;
+    throw new Error('Simulated GmailApp.createDraft() failure with unresolvable outcome.');
+  };
+
+  var outcome;
+  try {
+    outcome = previewStep(p.Prospect_ID, 1);
+  } finally {
+    GmailApp.createDraft = originalCreateDraft;
+  }
+
+  assertEquals_('ERROR_PREVIEW_CREATE_AMBIGUOUS', outcome.status, 'CASO B: a throwing createDraft must fail closed as ambiguous.');
+  var keyRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.DRY_RUN;
+  });
+  assertEquals_(1, keyRows.length, 'Exactly one ledger row (the pre-claim) must exist.');
+  assertEquals_(LEDGER_STATE.PREVIEW_AMBIGUOUS, keyRows[0].values.State,
+    'CASO B: createDraft throwing must leave the claim PREVIEW_AMBIGUOUS — we cannot prove no draft was created.');
+
+  var nextRun = previewStep(p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', nextRun.status, 'The next run must be blocked.');
+  assertEquals_(1, GmailApp._callCounts.createDraft,
+    'CASO B: total createDraft call count across BOTH runs must be EXACTLY 1 — never retried automatically.');
+}
+
+/**
+ * N3 item 12: the normal path — exactly one draft-creating call, and the
+ * pre-claim resolves in place to a healthy DRAFTED row (never two rows,
+ * never zero).
+ */
+function test_N3v3_normalPreviewClaimResolvesToDraftedExactlyOnce_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3claimhappy'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+
+  GmailApp._resetCallCounts();
+  var outcome = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', outcome.status, 'A normal preview must draft.');
+  assertEquals_(1, GmailApp._callCounts.createDraft, 'Exactly one GmailApp.createDraft call.');
+
+  var keyRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.DRY_RUN;
+  });
+  assertEquals_(1, keyRows.length, 'The claim row must have been transitioned IN PLACE — exactly one row, never two.');
+  assertEquals_(LEDGER_STATE.DRAFTED, keyRows[0].values.State, 'The claim must resolve to DRAFTED.');
+  assertEquals_(outcome.draftId, keyRows[0].values.Draft_ID, 'The row must carry the real Draft_ID.');
+  assert_(!!keyRows[0].values.Draft_Fingerprint, 'The row must carry a real fingerprint.');
+}
+
+/**
+ * N3 item 10: an unrelated draft throwing during a compensation-path
+ * enumeration must never erase the durable protection. Here the ADMIN
+ * bulk-cleanup path (deletePreviewDraftIfOwned_, the only remaining
+ * enumeration-based caller) hits a poisoned draft — the tracked row must
+ * survive untouched rather than being superseded on a failed lookup.
+ */
+function test_N3v3_enumerationErrorDoesNotEraseDurableProtection_() {
+  var poisoned = GmailApp.createDraft('poison-enum@example-corp-test.com', 'Unrelated', 'Unrelated body.');
+  poisoned.getId = function () { throw new Error('Simulated poisoned draft during enumeration.'); };
+
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3enumprotect'), Problem_Found: 'x' });
+  validateAllRows();
+  var p = getTestProspectByRow_(row);
+  var first = previewStep(p.Prospect_ID, 1);
+  assertEquals_('DRAFTED', first.status, 'First preview must draft.');
+
+  var result;
+  try {
+    result = deleteKlinnerPreviewDrafts(); // ADMIN bulk path — enumerates all drafts.
+  } finally {
+    poisoned.deleteDraft();
+  }
+
+  var keyRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.DRY_RUN;
+  });
+  assertEquals_(1, keyRows.length, 'The tracked row must still exist.');
+  assertEquals_(LEDGER_STATE.DRAFTED, keyRows[0].values.State,
+    'An enumeration failure must NOT supersede the row — durable protection must survive a failed lookup.');
+  assert_(GmailApp.getDrafts().some(function (d) {
+    try { return d.getId() === first.draftId; } catch (e) { return false; }
+  }), 'The tracked draft itself must still exist (never deleted on an unverifiable lookup).');
+}
+
 function n3_assertCreationFailureCompensatesCleanly_(emailTag, corruptDraftFn) {
   var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'x' });
   validateAllRows();
@@ -1758,34 +1977,34 @@ function test_N3v3_unrelatedDraftEnumerationErrorFailsClosedOnLaterRun_() {
 }
 
 /**
- * N3 orphan-draft gap, item 10: if compensation (the direct delete) AND
- * the recovery-row write BOTH fail, previewStep must still return a
- * controlled status — never throw uncaught, never crash the caller
- * (previewQueue's forEach has no try/catch around previewStep calls).
- * This is the documented, acknowledged residual risk (Mailer.gs
- * docstring): a fully untracked orphan can still occur here, but the
- * function itself must degrade gracefully, not crash.
+ * N3 final round, CASO E (worst case): the draft exists, its metadata was
+ * captured fine, but the FINAL transition of the claim row to DRAFTED
+ * fails — AND the compensating delete fails — AND the attempt to mark the
+ * claim PREVIEW_AMBIGUOUS fails too (all three use the same broken
+ * updateLedgerRow_). The pre-claim row simply stays PREVIEW_CLAIMED,
+ * which is itself a blocking state, so the key remains closed and the
+ * next run creates ZERO additional drafts. previewStep must also never
+ * throw uncaught (previewQueue's forEach has no try/catch around it).
  */
-function test_N3v3_bothCompensationAndRecoveryRowFailStillReturnsControlledStatus_() {
-  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3bothfail'), Problem_Found: 'x' });
+function test_N3v3_finalTransitionFailureLeavesClaimBlockingAndNoDuplicate_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n3v3finaltransition'), Problem_Found: 'x' });
   validateAllRows();
   var p = getTestProspectByRow_(row);
 
   var originalCreateDraft = GmailApp.createDraft;
   var capturedDraft = null;
   var originalDeleteDraft = null;
+  var createDraftCalls = 0;
   GmailApp.createDraft = function (to, subject, body, opts) {
+    createDraftCalls++;
     var draft = originalCreateDraft(to, subject, body, opts);
-    var msg = draft.getMessage();
-    msg.getSubject = function () { throw new Error('Simulated post-create message.getSubject() failure.'); };
     capturedDraft = draft;
     originalDeleteDraft = draft.deleteDraft;
     draft.deleteDraft = function () { throw new Error('Simulated compensation delete failure.'); };
     return draft;
   };
-  var originalAppendLedgerRow = appendLedgerRow_;
-  var recoveryAttempted = false;
-  appendLedgerRow_ = function () { recoveryAttempted = true; throw new Error('Simulated recovery ledger row write failure.'); };
+  var originalUpdateLedgerRow = updateLedgerRow_;
+  updateLedgerRow_ = function () { throw new Error('Simulated final DRAFTED transition failure.'); };
 
   var outcome;
   var threw = false;
@@ -1795,20 +2014,29 @@ function test_N3v3_bothCompensationAndRecoveryRowFailStillReturnsControlledStatu
     threw = true;
   } finally {
     GmailApp.createDraft = originalCreateDraft;
-    appendLedgerRow_ = originalAppendLedgerRow;
-    // Test cleanup: restore the real deleteDraft and remove the now fully
-    // untracked draft ourselves, so this test leaves nothing behind for
-    // the isolation harness (Priority 3) to (silently) miss.
-    if (capturedDraft && originalDeleteDraft) {
-      capturedDraft.deleteDraft = originalDeleteDraft;
-      capturedDraft.deleteDraft();
-    }
+    updateLedgerRow_ = originalUpdateLedgerRow;
+    if (capturedDraft && originalDeleteDraft) capturedDraft.deleteDraft = originalDeleteDraft;
   }
 
-  assert_(!threw, 'previewStep must never itself throw uncaught, even when BOTH compensation and the recovery-row write fail.');
-  assertEquals_('ERROR_DRAFT_METADATA_CAPTURE_FAILED', outcome.status);
-  assertEquals_(false, outcome.compensated, 'Compensation must be reported as failed.');
-  assert_(recoveryAttempted, 'A recovery-row write must have been ATTEMPTED even though it also failed.');
+  assert_(!threw, 'previewStep must never throw uncaught, even when the transition, the delete, AND the claim update all fail.');
+  assertEquals_('ERROR_LEDGER_WRITE_FAILED', outcome.status, 'CASO E: the final transition failure must be reported explicitly.');
+  assertEquals_(false, outcome.compensated, 'The compensating delete failed, so compensation must be reported false.');
+  assertEquals_(1, createDraftCalls, 'Exactly one draft-creating call must have happened so far.');
+
+  var keyRows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.DRY_RUN;
+  });
+  assertEquals_(1, keyRows.length, 'Exactly one ledger row must exist for this key.');
+  assertEquals_(LEDGER_STATE.PREVIEW_CLAIMED, keyRows[0].values.State,
+    'With every ledger update broken, the pre-claim must simply REMAIN PREVIEW_CLAIMED — still blocking.');
+
+  // The safety proof: the next run must create ZERO additional drafts.
+  var nextRun = previewStep(p.Prospect_ID, 1);
+  assertEquals_('SKIPPED_DRAFT_NEEDS_REVIEW', nextRun.status, 'An unresolved PREVIEW_CLAIMED key must block the next Preview.');
+  assertEquals_('preview_claim_unresolved', nextRun.reason, 'The block reason must identify the unresolved claim.');
+  assertEquals_(1, createDraftCalls, 'CASO E: total createDraft call count across BOTH runs must still be exactly 1.');
+
+  if (capturedDraft) { try { capturedDraft.deleteDraft(); } catch (e) { /* restored above */ } }
 }
 
 /**
@@ -1922,25 +2150,43 @@ function test_finding5_previewLocksCriticalSection_() {
   assertEquals_('DRAFTED', secondAttempt.status, 'Once the lock is free, previewStep must proceed normally.');
 }
 
-function test_finding6_orphanedDraftIsCompensatedOnLedgerFailure_() {
+/**
+ * Finding #6, superseded by the N3 final-round pre-claim architecture
+ * (CASO A): a ledger write failure no longer needs COMPENSATION at all,
+ * because the ledger barrier is now written BEFORE Gmail is touched. If
+ * appendLedgerRow_ fails, the PREVIEW_CLAIMED barrier could not be
+ * persisted, so GmailApp.createDraft() is never called and there is
+ * nothing to compensate — a strictly stronger property than the original
+ * "create then compensate" behavior this test used to assert.
+ */
+function test_finding6_ledgerFailureMeansNoDraftIsEverCreated_() {
   var row = addTestProspectRow_({ Email: testUniqueEmail_('finding6'), Problem_Found: 'x' });
   validateAllRows();
   var p = getTestProspectByRow_(row);
 
   var originalAppendLedgerRow = appendLedgerRow_;
+  var originalCreateDraft = GmailApp.createDraft;
+  var createDraftCalls = 0;
   var draftCountBefore = GmailApp.getDrafts().length;
+  GmailApp.createDraft = function (to, subject, body, opts) {
+    createDraftCalls++;
+    return originalCreateDraft(to, subject, body, opts);
+  };
   appendLedgerRow_ = function () { throw new Error('Simulated ledger write failure for finding #6 test.'); };
 
   var outcome;
   try {
     outcome = previewStep(p.Prospect_ID, 1);
   } finally {
-    appendLedgerRow_ = originalAppendLedgerRow; // restore immediately, even if an assertion below throws
+    appendLedgerRow_ = originalAppendLedgerRow;
+    GmailApp.createDraft = originalCreateDraft;
   }
 
-  assertEquals_('ERROR_LEDGER_WRITE_FAILED', outcome.status, 'previewStep must report the ledger failure explicitly, not silently succeed (finding #6).');
-  assertEquals_(true, outcome.compensated, 'The orphaned draft must be compensated (deleted) when the ledger write fails.');
-  assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'No extra draft must remain in Gmail after compensation.');
+  assertEquals_('ERROR_PREVIEW_CLAIM_FAILED', outcome.status,
+    'CASO A: if the durable PREVIEW_CLAIMED barrier cannot be persisted, previewStep must fail closed.');
+  assertEquals_(0, createDraftCalls,
+    'CASO A: GmailApp.createDraft() must NEVER be called when the pre-claim write failed — call count must be exactly 0.');
+  assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'No draft must exist in Gmail at all.');
 }
 
 function test_finding9_quotaBudgetRespectsAllFourFactors_() {
@@ -2200,6 +2446,7 @@ function n5_setupFollowUpDueProspect_(emailTag, config) {
   var email = testUniqueEmail_(emailTag);
   var emailNormalized = normalizeEmail_(email);
   var thread = GmailApp._seedLiveThread(email, config.SENDER_EMAIL || 'outreach-test@example.com');
+  _testCreatedThreadIds_.push(thread.getId()); // P4: tracked for teardown.
   var past = new Date(); past.setDate(past.getDate() - 3);
   var row = addTestProspectRow_({
     Prospect_ID: Utilities.getUuid(), Email: email, Email_Normalized: emailNormalized,
@@ -2221,11 +2468,15 @@ function n5_setupFollowUpDueProspect_(emailTag, config) {
 function test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_() {
   withLiveModeEnabledForTest_(function () {
     var p = n5_setupReadyProspect_('n5step1throw');
+    GmailApp._resetCallCounts();
 
     var originalCreateDraft = GmailApp.createDraft;
     GmailApp.createDraft = function (to, subject, body, opts) {
       var draft = originalCreateDraft(to, subject, body, opts);
-      draft.send = function () { throw new Error('Simulated Gmail send() failure — ambiguous outcome.'); };
+      draft.send = function () {
+        GmailApp._callCounts.send++; // count the INVOCATION — the point is that Gmail was reached.
+        throw new Error('Simulated Gmail send() failure — ambiguous outcome.');
+      };
       return draft;
     };
     var originalWriteRowById = writeRowById_;
@@ -2242,6 +2493,7 @@ function test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_() 
     }
     assert_(threw, 'sendStep1 must propagate the send() failure.');
     assert_(!LockService.getScriptLock().hasLock(), 'Item 13: the lock must be released after the ambiguous exception propagated.');
+    assertEquals_(1, GmailApp._callCounts.send, 'Exactly one draft.send() call so far.');
 
     var ledgerRows = readAllLedgerRows_().filter(function (r) {
       return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
@@ -2255,6 +2507,8 @@ function test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_() 
     var second = sendStep1(p.Prospect_ID);
     assertEquals_('SKIPPED_ALREADY_CLAIMED', second.status, 'Item 2: a second execution must be blocked by the ledger, never attempt to send again.');
     assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'No new draft/send attempt must have been made.');
+    assertEquals_(1, GmailApp._callCounts.send,
+      'P2-A: total draft.send() call count across BOTH executions must be EXACTLY 1, even though the Prospects write also failed.');
   });
 }
 
@@ -2262,8 +2516,10 @@ function test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_() 
 function test_N5_normalConfirmedStep1SendsExactlyOnce_() {
   withLiveModeEnabledForTest_(function () {
     var p = n5_setupReadyProspect_('n5step1normal');
+    GmailApp._resetCallCounts();
     var outcome = sendStep1(p.Prospect_ID);
     assertEquals_('SENT', outcome.status, 'A normal step-1 send must succeed.');
+    assertEquals_(1, GmailApp._callCounts.send, 'P2-D: a normal confirmed step-1 must call draft.send() EXACTLY once.');
 
     var ledgerRows = readAllLedgerRows_().filter(function (r) {
       return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
@@ -2294,9 +2550,13 @@ function test_N5_followUpReplyThrowsDurablyBlocksLedger_() {
     var config = getConfig();
     var setup = n5_setupFollowUpDueProspect_('n5followupthrow', config);
     var p = setup.p;
+    GmailApp._resetCallCounts();
 
     var originalReply = setup.thread.reply;
-    setup.thread.reply = function () { throw new Error('Simulated Gmail reply() failure — ambiguous outcome.'); };
+    setup.thread.reply = function () {
+      GmailApp._callCounts.reply++;
+      throw new Error('Simulated Gmail reply() failure — ambiguous outcome.');
+    };
 
     var threw = false;
     try {
@@ -2324,6 +2584,8 @@ function test_N5_followUpReplyThrowsDurablyBlocksLedger_() {
     var second = sendFollowUp(p.Prospect_ID, 2);
     assert_(second.status !== 'SENT', 'Item 5: a second execution must never actually send.');
     assertEquals_(messagesBefore, setup.thread.getMessages().length, 'No new message must have been added to the thread.');
+    assertEquals_(1, GmailApp._callCounts.reply,
+      'P2-B: total thread.reply() call count across BOTH executions must be EXACTLY 1.');
   });
 }
 
@@ -2336,6 +2598,7 @@ function test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFa
     var config = getConfig();
     var setup = n5_setupFollowUpDueProspect_('n5followupmismatch', config);
     var p = setup.p;
+    GmailApp._resetCallCounts();
 
     // Simulate an inbound reply landing in the exact race window: reply()
     // itself succeeds, but getMessages() afterward shows +2, not +1.
@@ -2373,6 +2636,8 @@ function test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFa
 
     var second = sendFollowUp(p.Prospect_ID, 2);
     assertEquals_('SKIPPED_ALREADY_CLAIMED', second.status, 'A second execution must still be blocked.');
+    assertEquals_(1, GmailApp._callCounts.reply,
+      'P2-C: total thread.reply() call count across BOTH executions must be EXACTLY 1 after an ambiguous message-count outcome.');
   });
 }
 
@@ -2382,10 +2647,12 @@ function test_N5_normalConfirmedFollowUpRepliesExactlyOnce_() {
     var config = getConfig();
     var setup = n5_setupFollowUpDueProspect_('n5followupnormal', config);
     var p = setup.p;
+    GmailApp._resetCallCounts();
 
     var messagesBefore = setup.thread.getMessages().length;
     var outcome = sendFollowUp(p.Prospect_ID, 2);
     assertEquals_('SENT', outcome.status, 'A normal follow-up send must succeed.');
+    assertEquals_(1, GmailApp._callCounts.reply, 'P2-E: a normal confirmed follow-up must call thread.reply() EXACTLY once.');
     assertEquals_(messagesBefore + 1, setup.thread.getMessages().length, 'Exactly one message must have been added to the thread.');
 
     var ledgerRows = readAllLedgerRows_().filter(function (r) {
@@ -2428,6 +2695,101 @@ function test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_() {
     'Item 8: a stale CLAIMED row with zero matching sent messages must become AMBIGUOUS (durably blocked), NEVER a retryable state.');
   assert_(row2.values.State !== LEDGER_STATE.ABANDONED, 'The dangerous ABANDONED-as-retryable state must never be produced.');
   assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The idempotency key must still be blocked after reconciliation.');
+}
+
+/**
+ * P3 (Codex re-audit): Recon must NEVER infer SENT from a generic
+ * recipient search — "in:sent to:<email>" matches any message ever sent
+ * to that address, including a previous step or an unrelated manual
+ * email. Every stale CLAIMED outcome must be AMBIGUOUS regardless of how
+ * many matches the search returns, and the counters must describe what
+ * actually happened.
+ */
+function n5_seedStaleClaim_(emailTag, config) {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_(emailTag), Problem_Found: 'x' });
+  var p = getTestProspectByRow_(row);
+  var staleClaimedAt = new Date();
+  staleClaimedAt.setMinutes(staleClaimedAt.getMinutes() - (config.CLAIM_STALE_MINUTES + 30));
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: staleClaimedAt, Prospect_ID: p.Prospect_ID, Email_Normalized: normalizeEmail_(p.Email),
+    Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,
+    Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
+  });
+  return p;
+}
+
+function n5_ledgerStateFor_(prospectId, step) {
+  var rows = readAllLedgerRows_().filter(function (r) {
+    return r.values.Prospect_ID === prospectId && r.values.Step === step && r.values.Mode === LEDGER_MODE.LIVE;
+  });
+  return rows.length === 1 ? rows[0].values.State : ('UNEXPECTED_ROW_COUNT_' + rows.length);
+}
+
+/** P3 case 2: exactly ONE unrelated match must still be AMBIGUOUS, never SENT. */
+function test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_() {
+  var config = getConfig();
+  var p = n5_seedStaleClaim_('n5reconone', config);
+
+  var originalSearch = GmailApp.search;
+  GmailApp.search = function () {
+    return [{ getId: function () { return 'unrelated-thread'; }, getMessages: function () { return []; } }];
+  };
+  var counters;
+  try {
+    counters = reconcileStaleLiveClaims_(config);
+  } finally {
+    GmailApp.search = originalSearch;
+  }
+
+  assertEquals_(LEDGER_STATE.AMBIGUOUS, n5_ledgerStateFor_(p.Prospect_ID, 1),
+    'P3: exactly one search match must NOT be treated as proof of SENT — a generic recipient search cannot identify THIS step.');
+  assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The key must remain blocked.');
+  assertEquals_(1, counters.ambiguous, 'Counters must report one ambiguous outcome.');
+  assertEquals_(0, counters.searchErrors, 'No search error occurred.');
+}
+
+/** P3 case 3: multiple matches must also be AMBIGUOUS. */
+function test_N5_reconMultipleMatchesAreAmbiguous_() {
+  var config = getConfig();
+  var p = n5_seedStaleClaim_('n5reconmany', config);
+
+  var originalSearch = GmailApp.search;
+  GmailApp.search = function () {
+    return [
+      { getId: function () { return 't1'; }, getMessages: function () { return []; } },
+      { getId: function () { return 't2'; }, getMessages: function () { return []; } }
+    ];
+  };
+  try {
+    reconcileStaleLiveClaims_(config);
+  } finally {
+    GmailApp.search = originalSearch;
+  }
+
+  assertEquals_(LEDGER_STATE.AMBIGUOUS, n5_ledgerStateFor_(p.Prospect_ID, 1), 'Multiple matches must be AMBIGUOUS.');
+  assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The key must remain blocked.');
+}
+
+/** P3 case 7: counters must honestly describe outcomes, including on a search error. */
+function test_N5_reconCountersAreHonest_() {
+  var config = getConfig();
+  var p = n5_seedStaleClaim_('n5reconcounters', config);
+
+  var originalSearch = GmailApp.search;
+  GmailApp.search = function () { throw new Error('Simulated search failure.'); };
+  var counters;
+  try {
+    counters = reconcileStaleLiveClaims_(config);
+  } finally {
+    GmailApp.search = originalSearch;
+  }
+
+  assertEquals_(1, counters.examined, 'One stale row was examined.');
+  assertEquals_(1, counters.searchErrors, 'The search error must be counted as an error...');
+  assertEquals_(1, counters.unchanged, '...and as unchanged...');
+  assertEquals_(0, counters.ambiguous, '...and must NOT be counted as an ambiguous resolution.');
+  assert_(!counters.hasOwnProperty('resolved'), 'There must be no "resolved" counter — nothing is ever auto-resolved under this policy.');
+  assertEquals_(LEDGER_STATE.CLAIMED, n5_ledgerStateFor_(p.Prospect_ID, 1), 'A search error must leave the row untouched (still CLAIMED).');
 }
 
 function test_N5_reconStaleClaimSearchErrorFailsClosed_() {
@@ -2549,23 +2911,43 @@ function test_configValueColumnIsPlainTextFormatted_() {
 function test_N3_repairSendLedgerColumnsIsIdempotentAndAdditive_() {
   var sheet = getSheet_(SHEET_NAMES.SEND_LEDGER);
   var startCol = SEND_LEDGER_COLUMNS.Draft_Fingerprint;
-  var numCols = 3;
-  var originalHeader = sheet.getRange(1, startCol, 1, numCols).getValues();
+  var expected = ['Draft_Fingerprint', 'Human_Edit_Preserved', 'Human_Edit_Detected_At'];
+  var originalHeader = sheet.getRange(1, startCol, 1, expected.length).getValues();
+  var lastRow = Math.max(sheet.getLastRow(), 1);
+  var originalCoreColumns = sheet.getRange(1, 1, lastRow, startCol - 1).getValues();
 
   try {
-    sheet.getRange(1, startCol, 1, numCols).clearContent();
-    assertEquals_('', sheet.getRange(1, startCol).getValue(), 'Precondition: header cell must now be blank (simulating a pre-fix sheet).');
-
+    // Case 1: all three headers missing (a pre-fix sheet).
+    sheet.getRange(1, startCol, 1, expected.length).clearContent();
     var result = repairSendLedgerColumns_();
-    assert_(result.indexOf('Added') === 0, 'repairSendLedgerColumns_ must report it added the headers on a pre-existing sheet.');
-    var headerAfter = sheet.getRange(1, startCol, 1, numCols).getValues()[0];
-    assertEquals_(JSON.stringify(['Draft_Fingerprint', 'Human_Edit_Preserved', 'Human_Edit_Detected_At']), JSON.stringify(headerAfter),
-      'repairSendLedgerColumns_ must write exactly the 3 expected header names.');
+    assert_(result.indexOf('Repaired') === 0, 'It must report which headers it repaired.');
+    assertEquals_(JSON.stringify(expected), JSON.stringify(sheet.getRange(1, startCol, 1, expected.length).getValues()[0]),
+      'All three headers must be written exactly.');
 
-    var secondResult = repairSendLedgerColumns_();
-    assert_(secondResult.indexOf('already has') !== -1, 'repairSendLedgerColumns_ must be idempotent — a no-op once headers already exist.');
+    // Case 2: idempotent — a second call is a no-op.
+    var second = repairSendLedgerColumns_();
+    assert_(second.indexOf('already has all three') !== -1, 'A second call must be a no-op.');
+
+    // Case 3 (P6, Codex re-audit): N correct but O/P wrong. The old
+    // version only checked N1, so it reported "nothing to repair" and
+    // left a half-migrated sheet in place.
+    sheet.getRange(1, startCol + 1).setValue('WRONG_HEADER');
+    sheet.getRange(1, startCol + 2).clearContent();
+    var partial = repairSendLedgerColumns_();
+    assert_(partial.indexOf('Repaired') === 0, 'A partially-correct header row must still be repaired, not reported as done.');
+    assertEquals_(JSON.stringify(expected), JSON.stringify(sheet.getRange(1, startCol, 1, expected.length).getValues()[0]),
+      'All three headers must be correct after repairing a partial migration.');
+
+    // Case 4: columns A-M and every data row are untouched throughout.
+    assertEquals_(JSON.stringify(originalCoreColumns), JSON.stringify(sheet.getRange(1, 1, lastRow, startCol - 1).getValues()),
+      'Columns A-M (headers AND data rows) must be byte-identical.');
+
+    // Case 5: the grid is wide enough for column P.
+    if (typeof sheet.getMaxColumns === 'function') {
+      assert_(sheet.getMaxColumns() >= startCol + expected.length - 1, 'The sheet grid must be wide enough to hold column P.');
+    }
   } finally {
-    sheet.getRange(1, startCol, 1, numCols).setValues(originalHeader); // guarantee restoration even on assertion failure
+    sheet.getRange(1, startCol, 1, expected.length).setValues(originalHeader); // guarantee restoration
   }
 }
 
@@ -2891,10 +3273,18 @@ var F1_TEST_FUNCTIONS = [
   ['N3v3_orphanGap_getThread', test_N3v3_creationFailure_getThreadThrows_],
   ['N3v3_orphanGap_threadGetId', test_N3v3_creationFailure_threadGetIdThrows_],
   ['N3v3_orphanGap_unrelatedEnumError', test_N3v3_unrelatedDraftEnumerationErrorFailsClosedOnLaterRun_],
-  ['N3v3_orphanGap_bothCompensationFail', test_N3v3_bothCompensationAndRecoveryRowFailStillReturnsControlledStatus_],
+  ['N3v3_orphanGap_finalTransitionFail', test_N3v3_finalTransitionFailureLeavesClaimBlockingAndNoDuplicate_],
+  ['N3v3_unc_draftGetId', test_N3v3_uncompensable_draftGetIdThrows_],
+  ['N3v3_unc_getMessage', test_N3v3_uncompensable_getMessageThrows_],
+  ['N3v3_unc_getThread', test_N3v3_uncompensable_getThreadThrows_],
+  ['N3v3_unc_threadGetId', test_N3v3_uncompensable_threadGetIdThrows_],
+  ['N3v3_unc_contentRead', test_N3v3_uncompensable_contentReadThrows_],
+  ['N3v3_createDraftThrows', test_N3v3_createDraftThrowsBlocksKeyDurably_],
+  ['N3v3_claimResolvesToDrafted', test_N3v3_normalPreviewClaimResolvesToDraftedExactlyOnce_],
+  ['N3v3_enumErrorKeepsProtection', test_N3v3_enumerationErrorDoesNotEraseDurableProtection_],
   ['N3v3_recipientWrapperNoFalsePositive', test_N3v3_recipientDisplayNameWrapperDoesNotFalsePositive_],
   ['finding5_previewLocking', test_finding5_previewLocksCriticalSection_],
-  ['finding6_orphanCompensation', test_finding6_orphanedDraftIsCompensatedOnLedgerFailure_],
+  ['finding6_ledgerFailureNoDraft', test_finding6_ledgerFailureMeansNoDraftIsEverCreated_],
   ['finding8_liveEntryPoint', test_finding8_liveHelpersAreNotGlobalEntryPoints_],
   ['N5_step1ThrowsDurableBlock', test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_],
   ['N5_step1NormalExactlyOnce', test_N5_normalConfirmedStep1SendsExactlyOnce_],
@@ -2903,6 +3293,9 @@ var F1_TEST_FUNCTIONS = [
   ['N5_followUpNormalExactlyOnce', test_N5_normalConfirmedFollowUpRepliesExactlyOnce_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
+  ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],
+  ['N5_reconMultipleMatchesAmbiguous', test_N5_reconMultipleMatchesAreAmbiguous_],
+  ['N5_reconCountersHonest', test_N5_reconCountersAreHonest_],
   ['N5_reconDigestNeverConvertAmbiguous', test_N5_reconAndDigestNeverConvertAmbiguousKeyToRetryable_],
   ['finding9_quotaBudget', test_finding9_quotaBudgetRespectsAllFourFactors_],
   ['finding10_canSendSequence', test_finding10_canSendEnforcesStepSequence_],
@@ -2944,6 +3337,13 @@ function runAllF1Tests() {
     var testRunId = getRunId_(); // Fresh, unique to this one test.
     allTestRunIds.push(testRunId);
 
+    // P4 (Codex re-audit): the isolation check used to look ONLY at sheet
+    // rows, so a test that left a Gmail draft, a seeded thread, a held
+    // lock, or a monkey-patched mock method behind still reported
+    // "clean". Snapshot the whole shared sandbox before the test so
+    // verifyCleanTestState_ can diff it afterwards.
+    var sandboxBefore = snapshotSandboxState_();
+
     var testError = null;
     try {
       fn();
@@ -2960,7 +3360,7 @@ function runAllF1Tests() {
 
     var isolation = { clean: false, detail: 'not checked' };
     try {
-      isolation = verifyCleanTestState_(testRunId);
+      isolation = verifyCleanTestState_(testRunId, sandboxBefore);
     } catch (e) {
       isolation = { clean: false, detail: 'verifyCleanTestState_ threw: ' + e };
     }
@@ -3016,6 +3416,20 @@ function cleanupTestArtifacts_(testRunId) {
     }
   });
 
+  // P4: shared Gmail mock state — threads this test seeded, plus any
+  // thread a real (mock) send created and recorded on one of its ledger
+  // rows. Only the mock exposes _removeThreadForTest; against real Apps
+  // Script this is a no-op, which is correct (we never delete real threads).
+  if (typeof GmailApp._removeThreadForTest === 'function') {
+    ledgerRows.forEach(function (r) {
+      if (r.values.Thread_ID) _testCreatedThreadIds_.push(r.values.Thread_ID);
+    });
+    _testCreatedThreadIds_.forEach(function (threadId) {
+      try { GmailApp._removeThreadForTest(threadId); } catch (e) { /* best effort */ }
+    });
+  }
+  _testCreatedThreadIds_ = [];
+
   cleanupTestLedgerAndLog_(testRunId);
   cleanupTestRows_(); // Prospects fixtures + tracked Suppression rows for this test.
 }
@@ -3026,7 +3440,55 @@ function cleanupTestArtifacts_(testRunId) {
  * production data (on a non-dedicated test spreadsheet) is untouched by
  * design and must not trip this.
  */
-function verifyCleanTestState_(testRunId) {
+/**
+ * P4 (Codex re-audit): captures every piece of SHARED sandbox state a
+ * test could leave dirty, so verifyCleanTestState_ can diff it after
+ * teardown. Codex found the previous isolation check reported 77/77
+ * "clean" while two Gmail drafts were actually left behind — it only
+ * looked at sheet rows. Gmail drafts, seeded threads, the script lock,
+ * and monkey-patched mock/global functions are all real cross-test
+ * contamination vectors and are all captured here.
+ */
+function snapshotSandboxState_() {
+  var draftIds = [];
+  try {
+    GmailApp.getDrafts().forEach(function (d) {
+      try { draftIds.push(d.getId()); } catch (e) { draftIds.push('UNREADABLE_DRAFT'); }
+    });
+  } catch (e) { draftIds = ['DRAFT_ENUMERATION_FAILED']; }
+
+  var threadIds = [];
+  try {
+    if (GmailApp._threads) { for (var tid in GmailApp._threads) { if (GmailApp._threads.hasOwnProperty(tid)) threadIds.push(tid); } }
+  } catch (e) { threadIds = ['THREAD_ENUMERATION_FAILED']; }
+
+  // Identity of the shared functions tests monkey-patch. Comparing the
+  // references (not calling them) catches any override left installed.
+  var patchables = {
+    'GmailApp.createDraft': GmailApp.createDraft,
+    'GmailApp.getDrafts': GmailApp.getDrafts,
+    'GmailApp.search': GmailApp.search,
+    'GmailApp.getThreadById': GmailApp.getThreadById,
+    'appendLedgerRow_': appendLedgerRow_,
+    'updateLedgerRow_': updateLedgerRow_,
+    'writeRowById_': writeRowById_
+  };
+
+  return { draftIds: draftIds, threadIds: threadIds, patchables: patchables };
+}
+
+function diffIdList_(before, after) {
+  var beforeCounts = {};
+  before.forEach(function (id) { beforeCounts[id] = (beforeCounts[id] || 0) + 1; });
+  var extra = [];
+  after.forEach(function (id) {
+    if (beforeCounts[id]) beforeCounts[id]--;
+    else extra.push(id);
+  });
+  return extra;
+}
+
+function verifyCleanTestState_(testRunId, sandboxBefore) {
   var leftoverProspects = readAllProspects().filter(function (r) { return r.values.Source === TEST_SOURCE_MARKER; }).length;
   var leftoverLedger = readAllLedgerRows_().filter(function (r) { return r.values.Run_ID === testRunId; }).length;
 
@@ -3045,6 +3507,29 @@ function verifyCleanTestState_(testRunId) {
   if (leftoverLedger > 0) problems.push(leftoverLedger + ' SendLedger row(s) for Run_ID=' + testRunId);
   if (leftoverLog > 0) problems.push(leftoverLog + ' Log row(s) for Run_ID=' + testRunId);
   if (leftoverSuppression > 0) problems.push(leftoverSuppression + ' tracked Suppression row(s) not cleared');
+
+  // P4: the shared Gmail/mock sandbox, not just the sheets.
+  if (sandboxBefore) {
+    var after = snapshotSandboxState_();
+
+    var extraDrafts = diffIdList_(sandboxBefore.draftIds, after.draftIds);
+    if (extraDrafts.length > 0) problems.push(extraDrafts.length + ' Gmail draft(s) left behind (' + extraDrafts.join(', ') + ')');
+
+    var extraThreads = diffIdList_(sandboxBefore.threadIds, after.threadIds);
+    if (extraThreads.length > 0) problems.push(extraThreads.length + ' Gmail thread(s) left behind (' + extraThreads.join(', ') + ')');
+
+    var patched = [];
+    for (var name in sandboxBefore.patchables) {
+      if (!sandboxBefore.patchables.hasOwnProperty(name)) continue;
+      if (after.patchables[name] !== sandboxBefore.patchables[name]) patched.push(name);
+    }
+    if (patched.length > 0) problems.push('mock/global override(s) not restored: ' + patched.join(', '));
+  }
+
+  try {
+    var lock = LockService.getScriptLock();
+    if (typeof lock.hasLock === 'function' && lock.hasLock()) problems.push('script lock still held');
+  } catch (e) { /* real Apps Script has no hasLock() — skip */ }
 
   return { clean: problems.length === 0, detail: problems.length === 0 ? 'clean' : problems.join('; ') };
 }
