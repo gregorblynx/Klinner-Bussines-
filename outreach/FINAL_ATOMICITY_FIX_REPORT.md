@@ -1,5 +1,14 @@
 # Final atomicity + isolation fix — after Codex re-audit
 
+> **Superseded in part.** The production fixes below were audited and
+> passed. Two test-infrastructure gaps in this round's §6 isolation work
+> did not: `_configCache` was not part of the shared-sandbox comparison,
+> and the content-extent fix reached `setValues()` but not `setValue()`.
+> Both are closed in
+> [FINAL_TEST_INFRA_REPORT.md](FINAL_TEST_INFRA_REPORT.md), which carries
+> the current counts (95/95, 8 enforcement scenarios). Everything else
+> below still holds.
+
 Four blockers, all closed locally. Nothing pushed, nothing touched on Google. N4, timezone, Recon, the fingerprint algorithm and the N5 core were not reopened; no new test showed a regression in any of them.
 
 ## 1. Atomic finalization design
