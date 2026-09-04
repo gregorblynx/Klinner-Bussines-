@@ -11,29 +11,56 @@
  */
 
 /**
- * P3 (Codex atomicity round): real Sheets tracks a CONTENT extent —
- * getLastRow() is "the last row that actually holds a value", and writing
- * blanks into rows past it does not extend it. This mock modelled the
- * extent as `data.length`, so setValues()-ing a block of empty strings
- * across rows 2-1000 permanently grew getLastRow() from 1 to 1000 for
- * every subsequent test, silently shifting where appendRow() landed.
- * That is exactly the kind of shared-state leak P3 is about, and the
- * isolation checker surfaced it as soon as it started comparing real
- * sheet content. Trimming trailing all-blank rows after a write restores
- * the real semantics; rows containing `false` (a checkbox) or 0 are
- * values, not blanks, and are deliberately preserved.
+ * Real Sheets tracks a CONTENT extent — getLastRow() is "the last row that
+ * actually holds a value", and writing blanks into rows past it does not
+ * extend it. This mock modelled the extent as `data.length`, so
+ * setValues()-ing a block of empty strings across rows 2-1000 permanently
+ * grew getLastRow() from 1 to 1000 for every subsequent test, silently
+ * shifting where appendRow() landed.
+ *
+ * Codex's follow-up audit found the fix had been applied to setValues()
+ * only, leaving the two write paths INCONSISTENT: setValues([['']]) at row
+ * 1000 left getLastRow() alone while setValue('') at the same cell pushed
+ * it to 1000. Both now route through finishWrite() below, so the content
+ * extent is a property of the sheet, not of which API happened to write to
+ * it — and, as in real Sheets, blanking out the last cell that held
+ * content can SHRINK the extent again.
+ *
+ * What counts as blank, exactly:
+ *   ''         blank
+ *   null       blank      (a cleared cell; matches how getValues() renders
+ *                          rows that were never written)
+ *   undefined  blank      (an unwritten cell inside a short row array)
+ *   false      CONTENT    (a checkbox is a value — this is what the
+ *                          ghost-row fixture's 994 Stop_Contact cells are)
+ *   0          CONTENT
+ *   '0'        CONTENT
+ *   formula    CONTENT    (stored as '[COMPUTED:=...]', never blank)
  */
+function isBlankCellValue(v) {
+  return v === '' || v === null || v === undefined;
+}
+
 function trimTrailingBlankRows(sheet) {
   while (sheet.data.length > 0) {
     var row = sheet.data[sheet.data.length - 1];
     var hasValue = false;
     for (var c = 0; c < row.length; c++) {
-      var v = row[c];
-      if (v !== '' && v !== null && v !== undefined) { hasValue = true; break; }
+      if (!isBlankCellValue(row[c])) { hasValue = true; break; }
     }
     if (hasValue) return;
     sheet.data.pop();
   }
+}
+
+/**
+ * The single tail every cell write shares: grow the physical grid to cover
+ * what was addressed (the grid and the content extent are different
+ * things), then recompute the content extent.
+ */
+function finishWrite(sheet) {
+  if (sheet.data.length > sheet.physicalRowCount) sheet.physicalRowCount = sheet.data.length;
+  trimTrailingBlankRows(sheet);
 }
 
 function createInMemorySheet(name) {
@@ -110,8 +137,7 @@ function createInMemorySheet(name) {
               }
             }
           }
-          if (sheet.data.length > sheet.physicalRowCount) sheet.physicalRowCount = sheet.data.length;
-          trimTrailingBlankRows(sheet); // real Sheets never grows the content extent with blanks
+          finishWrite(sheet);
           return this;
         },
         setValue: function (value) {
@@ -124,7 +150,7 @@ function createInMemorySheet(name) {
             delete sheet.formulas[cellKey];
             sheet.data[row - 1][col - 1] = value;
           }
-          if (sheet.data.length > sheet.physicalRowCount) sheet.physicalRowCount = sheet.data.length;
+          finishWrite(sheet); // same content-extent rule as setValues — see finishWrite/isBlankCellValue.
           return this;
         },
         getValues: function () {
