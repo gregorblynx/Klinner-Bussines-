@@ -61,6 +61,23 @@ function sheetDump(name) {
   }));
 }
 
+/**
+ * Our OWN rendering of the shared Config cache, written here rather than
+ * imported from Tests.gs on purpose: the point of this file is that a bug
+ * in the suite's own isolation helpers cannot hide a leak from it, and
+ * reusing configCacheSignature_ would reintroduce exactly that shared
+ * failure mode. Distinguishes "nothing cached" from "cached", and renders
+ * the full key/value content so a divergent value (the MAX_PER_DAY=999
+ * case) shows up as a difference, not just a presence.
+ */
+function configCacheView() {
+  var cache = ctx._configCache;
+  if (cache === null || cache === undefined) return 'NULL (nothing cached)';
+  var out = [];
+  Object.keys(cache).sort().forEach(function (k) { out.push(k + '=' + JSON.stringify(cache[k])); });
+  return 'CACHED{' + out.join(';') + '}';
+}
+
 function inspect() {
   var G = ctx.GmailApp;
   var drafts = G.getDrafts().map(function (d) {
@@ -92,6 +109,7 @@ function inspect() {
     labels: G._labelNames().sort(),
     sentIndex: G._sentIndex.map(function (e) { return e.recipientEmail + '>' + e.thread.getId(); }).sort(),
     callCounts: JSON.stringify(G._callCounts),
+    configCache: configCacheView(),
     sheets: sheetsOut,
     lockHeld: lockHeld,
     patched: {
@@ -149,7 +167,30 @@ compareValue('Gmail messages (total across threads)', before.messageCount, after
 compareList('Gmail labels', before.labels, after.labels);
 compareList('Gmail sent index', before.sentIndex, after.sentIndex);
 compareValue('Gmail call counters', before.callCounts, after.callCounts);
+compareValue('_configCache', before.configCache, after.configCache);
 SHEETS.forEach(function (n) { compareValue(n + ' sheet content', before.sheets[n], after.sheets[n]); });
+
+// Independent coherence check: whatever is cached at the end must agree
+// with what the Config SHEET actually says. A restored-but-wrong cache
+// would pass the before/after comparison above and fail this one.
+(function () {
+  var cache = ctx._configCache;
+  if (cache === null || cache === undefined) {
+    console.log('OK    _configCache coherence: nothing cached, so nothing can diverge from the Config sheet');
+    return;
+  }
+  var saved = cache;
+  ctx._configCache = null;
+  var fresh;
+  try { fresh = ctx.getConfig(); } finally { ctx._configCache = saved; }
+  var mismatched = Object.keys(saved).filter(function (k) {
+    return JSON.stringify(saved[k]) !== JSON.stringify(fresh[k]);
+  });
+  var ok = mismatched.length === 0;
+  console.log((ok ? 'OK  ' : 'LEAK') + '  _configCache coherence with the Config sheet: ' +
+    (ok ? 'every cached key matches' : 'DIVERGENT keys: ' + mismatched.join(', ')));
+  if (!ok) problems.push('_configCache diverges from the Config sheet');
+})();
 compareValue('script lock held', before.lockHeld, after.lockHeld);
 
 var patchedNames = Object.keys(before.patched).filter(function (n) { return before.patched[n] !== after.patched[n]; });

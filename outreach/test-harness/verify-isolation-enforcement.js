@@ -31,6 +31,8 @@
  *   6. message appended to an
  *      already-existing thread     -> caught (no id set changes at all)
  *   7. untracked Suppression row   -> caught (no test marker, no Run_ID)
+ *   8. contaminated _configCache    -> caught (Config SHEET stays correct;
+ *                                      the divergence is in memory only)
  *
  * Run: node test-harness/verify-isolation-enforcement.js
  */
@@ -142,13 +144,29 @@ function mutationLeakSuppressionRow(source) {
     "\n  getSheet_(SHEET_NAMES.SUPPRESSION).appendRow(['untracked-leak@example-corp-test.com', SUPPRESSION_SCOPE.EMAIL, 'MUTATION', new Date()]);");
 }
 
+// --- 8. The Config cache: shared mutable state that no sheet comparison
+//        can see. The mutation leaves the Config SHEET completely correct
+//        and sets MAX_PER_DAY=999 in the cache only, with the per-test
+//        restore removed so the contamination survives teardown. Every
+//        later test then runs against a configuration that exists nowhere
+//        on the sheet — which is exactly why the gate must catch it. ---
+function mutationLeakConfigCache(source) {
+  var s = replaceOrThrow(source, '8a', LEAK_ANCHOR,
+    LEAK_ANCHOR +
+    "\n  getConfig();\n  _configCache.MAX_PER_DAY = 999; // MUTATION: cache diverges from the Config sheet.");
+  return replaceOrThrow(s, '8b',
+    "    try { restoreConfigCache_(sandboxBefore.configCache); } catch (e) { /* best effort */ }",
+    "    /* MUTATION: config-cache restore removed — contamination now survives teardown. */");
+}
+
 var SCENARIOS = [
   { label: '2. sheet-row residue (cleanup disabled)', mutate: mutationBreakCleanup },
   { label: '3. leaked Gmail draft', mutate: mutationLeakADraft },
   { label: '4. leaked Gmail call counter', mutate: mutationLeakCallCounters },
   { label: '5. leaked Gmail label', mutate: mutationLeakALabel },
   { label: '6. message appended to a pre-existing thread', mutate: mutationModifyExistingThreadMessages },
-  { label: '7. untracked Suppression row', mutate: mutationLeakSuppressionRow }
+  { label: '7. untracked Suppression row', mutate: mutationLeakSuppressionRow },
+  { label: '8. contaminated _configCache (Config sheet untouched)', mutate: mutationLeakConfigCache }
 ];
 
 var allPassed = true;

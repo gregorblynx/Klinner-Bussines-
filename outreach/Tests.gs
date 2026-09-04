@@ -2272,6 +2272,99 @@ function test_N3atomic_incompleteDraftedRowNeverAuthorizesCreateNew_() {
 }
 
 /**
+ * P1 (Codex test-infra round), case 1 — baseline null.
+ * The suite starts with nothing cached. A test that calls getConfig()
+ * populates the shared cache; teardown must put it back to null, not
+ * merely to "some cache".
+ */
+function test_configCache_baselineNullIsRestoredToNull_() {
+  var outerBaseline = captureConfigCache_();
+  try {
+    resetConfigCache_();
+    var baseline = captureConfigCache_();
+    assertEquals_('NULL', baseline.signature, 'Precondition: the baseline for this case must be an empty cache.');
+
+    getConfig(); // populates the shared cache
+    assert_(captureConfigCache_().signature !== 'NULL', 'getConfig() must actually populate the shared cache.');
+
+    restoreConfigCache_(baseline);
+    assertEquals_('NULL', captureConfigCache_().signature,
+      'Teardown must return the cache to null — "populated" is not the same baseline as "empty".');
+  } finally {
+    restoreConfigCache_(outerBaseline);
+  }
+}
+
+/**
+ * P1, case 2 — baseline object. The restore must reproduce the EXACT
+ * values that were cached before the test, never a hardcoded set and
+ * never the test's own mutation. Mutating in place is the important part:
+ * restoring the captured object REFERENCE would silently "restore" the
+ * mutation, so the capture has to be a deep copy.
+ */
+function test_configCache_baselineObjectIsRestoredExactly_() {
+  var outerBaseline = captureConfigCache_();
+  try {
+    resetConfigCache_();
+    getConfig();
+    var baseline = captureConfigCache_();
+    assert_(baseline.signature !== 'NULL', 'Precondition: the baseline for this case must be a populated cache.');
+    var originalMaxPerDay = _configCache.MAX_PER_DAY;
+
+    _configCache.MAX_PER_DAY = 999; // in-place mutation of the SHARED object
+    assert_(captureConfigCache_().signature !== baseline.signature, 'The mutation must be visible in the signature.');
+
+    restoreConfigCache_(baseline);
+    assertEquals_(baseline.signature, captureConfigCache_().signature,
+      'Teardown must restore the exact pre-test cache content.');
+    assertEquals_(originalMaxPerDay, _configCache.MAX_PER_DAY,
+      'MAX_PER_DAY must be back to whatever it actually was — never a hardcoded value.');
+  } finally {
+    restoreConfigCache_(outerBaseline);
+  }
+}
+
+/**
+ * P1, case 3 — the exact false negative Codex reproduced: the Config
+ * SHEET is untouched and every functional assertion still holds, but the
+ * shared cache says MAX_PER_DAY=999. Sheet-content comparison is blind to
+ * it by construction. Both isolation detectors must fire, and
+ * verifyCleanTestState_ must report it as a problem.
+ */
+function test_configCache_divergentCacheIsDetectedAsContamination_() {
+  var outerBaseline = captureConfigCache_();
+  try {
+    resetConfigCache_();
+    getConfig();
+    var baseline = snapshotSandboxState_();
+    var sheetMaxPerDay = readConfigFromSheetIgnoringCache_().MAX_PER_DAY;
+
+    _configCache.MAX_PER_DAY = 999;
+
+    assertEquals_(sheetMaxPerDay, readConfigFromSheetIgnoringCache_().MAX_PER_DAY,
+      'Precondition: the Config SHEET must be untouched — the divergence exists only in memory.');
+    assert_(sheetMaxPerDay !== 999, 'Precondition: 999 must not be the real configured value.');
+
+    // Detector 1: the cache changed and was not put back.
+    assert_(captureConfigCache_().signature !== baseline.configCache.signature,
+      'Detector 1: a mutated cache must differ from the captured baseline signature.');
+
+    // Detector 2: the cache no longer agrees with the sheet — independent
+    // of the baseline, so it fires even if the baseline was already wrong.
+    var coherence = configCacheCoherenceProblem_();
+    assert_(!!coherence, 'Detector 2: a cache diverging from the Config sheet must be reported.');
+
+    // End to end: this is what the runner actually calls.
+    var verdict = verifyCleanTestState_(getRunId_(), baseline);
+    assert_(!verdict.clean, 'verifyCleanTestState_ must NOT report clean while the shared cache is contaminated.');
+    assert_(verdict.detail.indexOf('_configCache') !== -1 || verdict.detail.indexOf('cached Config') !== -1,
+      'The isolation detail must name the Config cache. Got: ' + verdict.detail);
+  } finally {
+    restoreConfigCache_(outerBaseline);
+  }
+}
+
+/**
  * N3 V3 — item 1D: recipient canonicalization must absorb Gmail's
  * "Name <email>" wrapper as a structural difference, not a content edit —
  * a pure display-name wrapper change around the SAME address must NOT
@@ -3588,6 +3681,9 @@ var F1_TEST_FUNCTIONS = [
   ['N3atomic_stateWriteFailsMetadataDurable', test_N3atomic_finalStateWriteFailureLeavesMetadataDurableAndClaimBlocking_],
   ['N3atomic_metadataWriteFailsNoDraftedState', test_N3atomic_metadataWriteFailureNeverPublishesDraftedState_],
   ['N3atomic_incompleteDraftedBlocksCreateNew', test_N3atomic_incompleteDraftedRowNeverAuthorizesCreateNew_],
+  ['configCache_baselineNullRestored', test_configCache_baselineNullIsRestoredToNull_],
+  ['configCache_baselineObjectRestoredExactly', test_configCache_baselineObjectIsRestoredExactly_],
+  ['configCache_divergenceDetected', test_configCache_divergentCacheIsDetectedAsContamination_],
   ['N3v3_unc_draftGetId', test_N3v3_uncompensable_draftGetIdThrows_],
   ['N3v3_unc_getMessage', test_N3v3_uncompensable_getMessageThrows_],
   ['N3v3_unc_getThread', test_N3v3_uncompensable_getThreadThrows_],
@@ -3768,6 +3864,14 @@ function cleanupTestArtifacts_(testRunId, sandboxBefore) {
   cleanupTestLedgerAndLog_(testRunId);
   cleanupTestRows_(); // Prospects fixtures + tracked Suppression rows for this test.
 
+  // P1: put the shared Config cache back exactly as this test found it.
+  // Restoring the captured baseline (rather than just nulling the cache)
+  // is what makes the check in verifyCleanTestState_ meaningful for a test
+  // that legitimately started with a populated cache.
+  if (sandboxBefore && sandboxBefore.configCache) {
+    try { restoreConfigCache_(sandboxBefore.configCache); } catch (e) { /* best effort */ }
+  }
+
   // Anything the teardown steps above logged is still buffered; flush and
   // sweep again so no Log row escapes into the NEXT test's baseline.
   flushLog_();
@@ -3789,6 +3893,85 @@ function cleanupTestArtifacts_(testRunId, sandboxBefore) {
  * and monkey-patched mock/global functions are all real cross-test
  * contamination vectors and are all captured here.
  */
+/**
+ * P1 (Codex test-infra round): _configCache (Config.gs) is shared mutable
+ * state and was invisible to the isolation gate. A suite could start with
+ * the cache null, end with it populated, and still report clean; worse, a
+ * test could leave `_configCache.MAX_PER_DAY = 999` while the Config sheet
+ * still read 5, and every later test would silently run against a
+ * configuration that exists nowhere on the sheet. Sheet-content comparison
+ * cannot see this at all — the sheet is untouched; the divergence lives
+ * entirely in memory.
+ *
+ * The baseline model has to distinguish three states, not two:
+ *   - null            nothing cached yet (the suite's own starting state)
+ *   - object, value V cached, agreeing with the sheet
+ *   - object, value W cached, DIVERGING from the sheet
+ * so the signature encodes null-ness and the full key/value content.
+ * Values are strings, numbers, booleans and string arrays (see
+ * coerceConfigValue_), so JSON with sorted keys is a faithful, comparable
+ * rendering.
+ */
+function configCacheSignature_(cache) {
+  if (cache === null || cache === undefined) return 'NULL';
+  var keys = [];
+  for (var k in cache) { if (cache.hasOwnProperty(k)) keys.push(k); }
+  keys.sort();
+  return JSON.stringify(keys.map(function (key) { return [key, cache[key]]; }));
+}
+
+/**
+ * Captures the cache as both a comparable signature and a deep copy, so
+ * teardown can put back EXACTLY what was there — never a hardcoded set of
+ * values, and never the same object reference (a test that mutated the
+ * cache in place would otherwise be "restored" to its own mutation).
+ */
+function captureConfigCache_() {
+  var cache = (typeof _configCache === 'undefined') ? null : _configCache;
+  return {
+    signature: configCacheSignature_(cache),
+    deep: (cache === null || cache === undefined) ? null : JSON.parse(JSON.stringify(cache))
+  };
+}
+
+function restoreConfigCache_(captured) {
+  if (!captured || captured.deep === null) {
+    resetConfigCache_();
+    return;
+  }
+  _configCache = JSON.parse(JSON.stringify(captured.deep));
+}
+
+/**
+ * Reads the Config sheet ignoring whatever is cached, then puts the cache
+ * back exactly as it was. Used for the COHERENCE check below, which is
+ * deliberately independent of the baseline comparison: it catches a cache
+ * that disagrees with the sheet even when the baseline was already
+ * divergent, which a before/after signature diff would happily call
+ * "unchanged".
+ */
+function readConfigFromSheetIgnoringCache_() {
+  var saved = (typeof _configCache === 'undefined') ? null : _configCache;
+  _configCache = null;
+  var fresh;
+  try {
+    fresh = getConfig();
+  } finally {
+    _configCache = saved;
+  }
+  return fresh;
+}
+
+/** @return {string|null} a description of the divergence, or null if coherent. */
+function configCacheCoherenceProblem_() {
+  var cache = (typeof _configCache === 'undefined') ? null : _configCache;
+  if (cache === null || cache === undefined) return null; // nothing cached: nothing to diverge.
+  var cachedSig = configCacheSignature_(cache);
+  var sheetSig = configCacheSignature_(readConfigFromSheetIgnoringCache_());
+  if (cachedSig === sheetSig) return null;
+  return 'cached Config diverges from the Config sheet';
+}
+
 /**
  * P3 (Codex atomicity round): the real content of a shared sheet, as one
  * comparable string. Row-count and marker-based checks let a test leak
@@ -3861,6 +4044,9 @@ function snapshotSandboxState_() {
     'writeRowById_': writeRowById_
   };
 
+  // P1: shared in-memory Config cache — see configCacheSignature_.
+  var configCache = captureConfigCache_();
+
   // P3: real sheet CONTENT, not row counts or markers.
   var sheets = {
     Prospects: sheetContentSignature_(SHEET_NAMES.PROSPECTS),
@@ -3871,7 +4057,8 @@ function snapshotSandboxState_() {
 
   return {
     draftIds: draftIds, threadIds: threadIds, patchables: patchables,
-    gmailState: gmailState, callCounts: callCounts, labelNames: labelNames, sheets: sheets
+    gmailState: gmailState, callCounts: callCounts, labelNames: labelNames, sheets: sheets,
+    configCache: configCache
   };
 }
 
@@ -3934,6 +4121,20 @@ function verifyCleanTestState_(testRunId, sandboxBefore) {
         }
       });
     }
+
+    // P1: the shared in-memory Config cache. Two independent checks,
+    // because they fail on different things: the first catches "this test
+    // changed the cache and did not put it back", the second catches "the
+    // cache no longer agrees with the sheet" even if it was already wrong
+    // before this test ran.
+    if (sandboxBefore.configCache) {
+      if (after.configCache.signature !== sandboxBefore.configCache.signature) {
+        problems.push('_configCache not restored (before=' + sandboxBefore.configCache.signature.slice(0, 120) +
+          ' after=' + after.configCache.signature.slice(0, 120) + ')');
+      }
+    }
+    var coherence = configCacheCoherenceProblem_();
+    if (coherence) problems.push(coherence);
 
     // P3: real sheet CONTENT, so a row written under a foreign Run_ID or
     // without the test marker cannot slip past the checks above.
