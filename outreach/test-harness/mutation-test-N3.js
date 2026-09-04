@@ -251,6 +251,47 @@ function mutationJ_releaseClaimOnFailedCleanup(source) {
     "        } else {");
 }
 
+// --- Mutation K (atomicity round): State written BEFORE the metadata it
+// describes — reintroducing the exact window Codex found, where a failure
+// partway leaves a durable State=DRAFTED row with Draft_ID="". ---
+function mutationK_stateWrittenBeforeMetadata(source) {
+  var s2 = replaceOrThrow(source, 'K1',
+    "    SpreadsheetApp.flush(); // Metadata is durable BEFORE State says it exists.\n" +
+    "  }\n" +
+    "\n" +
+    "  sheet.getRange(rowIndex, SEND_LEDGER_COLUMNS.State).setValue(state);\n" +
+    "  SpreadsheetApp.flush();",
+    "    SpreadsheetApp.flush();\n" +
+    "  }\n" +
+    "  SpreadsheetApp.flush();");
+  return replaceOrThrow(s2, 'K2',
+    "  var cols = [];\n" +
+    "  for (var name in metadataFields) {",
+    "  // MUTATION K: State goes out FIRST, before any metadata.\n" +
+    "  sheet.getRange(rowIndex, SEND_LEDGER_COLUMNS.State).setValue(state);\n" +
+    "  var cols = [];\n" +
+    "  for (var name in metadataFields) {");
+}
+
+// --- Mutation L (atomicity round): a DRAFTED row with a blank Draft_ID is
+// read as "the draft is already gone", authorizing CREATE_NEW. ---
+function mutationL_incompleteDraftedTreatedAsGone(source) {
+  return replaceOrThrow(source, 'L',
+    "  if (!existing.values.Draft_ID) {",
+    "  if (false) { // MUTATION L: incomplete DRAFTED rows fall through to the \"already gone\" path.");
+}
+
+// --- Mutation M (atomicity round): PREVIEW_CLAIMED stops blocking, so an
+// interrupted claim re-opens the key for a duplicate draft. ---
+function mutationM_previewClaimedNotBlocking(source) {
+  return replaceOrThrow(source, 'M',
+    "  return state === LEDGER_STATE.DRAFTED ||\n" +
+    "    state === LEDGER_STATE.PREVIEW_CLAIMED ||\n" +
+    "    state === LEDGER_STATE.PREVIEW_AMBIGUOUS;",
+    "  return state === LEDGER_STATE.DRAFTED ||\n" +
+    "    state === LEDGER_STATE.PREVIEW_AMBIGUOUS; // MUTATION M: PREVIEW_CLAIMED no longer blocks.");
+}
+
 var MUTATIONS = [
   { label: 'A (remove durable-preserve guard)', file: 'Mailer.gs', mutate: mutationA_removeDurablePreserveGuard, mustBeCaughtBy: 'N3_caso2_messageIdRotates' },
   { label: 'B (neuter fingerprint comparison)', file: 'Mailer.gs', mutate: mutationB_neuterFingerprintComparison, mustBeCaughtBy: 'N3_caso3_messageIdStable' },
@@ -261,7 +302,10 @@ var MUTATIONS = [
   { label: 'G (orphan-draft gap reintroduced)', file: 'Mailer.gs', mutate: mutationG_reintroduceOrphanDraftGap, mustBeCaughtBy: 'N3v3_orphanGap_getThread' },
   { label: 'H (preview claim moved after createDraft)', file: 'Mailer.gs', mutate: mutationH_claimAfterCreateDraft, mustBeCaughtBy: 'N3v3_createDraftThrows' },
   { label: 'I (PREVIEW_AMBIGUOUS not blocking)', file: 'Ledger.gs', mutate: mutationI_ambiguousNotBlocking, mustBeCaughtBy: 'N3v3_unc_draftGetId' },
-  { label: 'J (claim released on a FAILED cleanup)', file: 'Mailer.gs', mutate: mutationJ_releaseClaimOnFailedCleanup, mustBeCaughtBy: 'N3v3_unc_draftGetId' }
+  { label: 'J (claim released on a FAILED cleanup)', file: 'Mailer.gs', mutate: mutationJ_releaseClaimOnFailedCleanup, mustBeCaughtBy: 'N3v3_unc_draftGetId' },
+  { label: 'K (State written before Draft_ID)', file: 'Ledger.gs', mutate: mutationK_stateWrittenBeforeMetadata, mustBeCaughtBy: 'N3atomic_metadataWriteFailsNoDraftedState' },
+  { label: 'L (incomplete DRAFTED treated as "gone")', file: 'Mailer.gs', mutate: mutationL_incompleteDraftedTreatedAsGone, mustBeCaughtBy: 'N3atomic_incompleteDraftedBlocksCreateNew' },
+  { label: 'M (PREVIEW_CLAIMED not blocking)', file: 'Ledger.gs', mutate: mutationM_previewClaimedNotBlocking, mustBeCaughtBy: 'N3atomic_stateWriteFailsMetadataDurable' }
 ];
 
 var allPassed = true;

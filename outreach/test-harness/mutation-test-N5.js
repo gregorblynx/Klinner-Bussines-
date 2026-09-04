@@ -138,11 +138,48 @@ function mutationD_claimMovedAfterSend(source) {
   return s;
 }
 
+// --- Mutation E (atomicity round): doFollowUpSend_'s ledger CLAIM moved
+// from BEFORE thread.reply() to AFTER it succeeds — the follow-up analogue
+// of D. With Prospects also failing to record NEEDS_REVIEW, there is then
+// NOTHING durable blocking a second reply to the same thread. ---
+function mutationE_followUpClaimMovedAfterReply(source) {
+  var s = replaceOrThrow(source, 'E1',
+    "    var ledgerRowNum = appendLedgerRow_({\n" +
+    "      Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,\n" +
+    "      Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,\n" +
+    "      Thread_ID: prospect.Thread_ID, Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''\n" +
+    "    });\n" +
+    "\n" +
+    "    var messagesBefore = thread.getMessages().length;",
+    "    // MUTATION E: claim deferred until after the risky Gmail call.\n" +
+    "    var ledgerRowNum = null;\n" +
+    "\n" +
+    "    var messagesBefore = thread.getMessages().length;");
+  s = replaceOrThrow(s, 'E2',
+    "      updateLedgerRow_(ledgerRowNum, {\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: String(replyError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'\n" +
+    "      });",
+    "      if (ledgerRowNum) updateLedgerRow_(ledgerRowNum, { // MUTATION E: no-op — ledgerRowNum is null.\n" +
+    "        State: LEDGER_STATE.AMBIGUOUS,\n" +
+    "        Error: String(replyError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'\n" +
+    "      });");
+  return replaceOrThrow(s, 'E3',
+    "    var messagesAfter = repliedThread.getMessages();",
+    "    ledgerRowNum = ledgerRowNum || appendLedgerRow_({ // MUTATION E: claimed only NOW, after reply() already ran.\n" +
+    "      Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,\n" +
+    "      Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,\n" +
+    "      Thread_ID: prospect.Thread_ID, Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''\n" +
+    "    });\n" +
+    "    var messagesAfter = repliedThread.getMessages();");
+}
+
 var MUTATIONS = [
   { label: 'A (AMBIGUOUS removed from isLiveKeyBlocked_)', file: 'Ledger.gs', mutate: mutationA_removeAmbiguousFromBlockingCheck, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
   { label: 'B (follow-up reply-throw downgraded to FAILED)', file: 'Mailer.gs', mutate: mutationB_followUpReplyThrowDowngradedToFailed, mustBeCaughtBy: 'N5_followUpThrowsDurableBlock' },
   { label: 'C (false SENT inferred from one search match)', file: 'Recon.gs', mutate: mutationC_falseSentInference, mustBeCaughtBy: 'N5_reconSingleMatchAmbiguous' },
-  { label: 'D (claim moved to after send() succeeds)', file: 'Mailer.gs', mutate: mutationD_claimMovedAfterSend, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' }
+  { label: 'D (claim moved to after send() succeeds)', file: 'Mailer.gs', mutate: mutationD_claimMovedAfterSend, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
+  { label: 'E (follow-up claim moved to after reply() succeeds)', file: 'Mailer.gs', mutate: mutationE_followUpClaimMovedAfterReply, mustBeCaughtBy: 'N5_followUpReplyAndProspectsBothThrow' }
 ];
 
 var allPassed = true;

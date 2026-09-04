@@ -10,6 +10,32 @@
  * exactly which tests this covers vs. which require Google real.
  */
 
+/**
+ * P3 (Codex atomicity round): real Sheets tracks a CONTENT extent —
+ * getLastRow() is "the last row that actually holds a value", and writing
+ * blanks into rows past it does not extend it. This mock modelled the
+ * extent as `data.length`, so setValues()-ing a block of empty strings
+ * across rows 2-1000 permanently grew getLastRow() from 1 to 1000 for
+ * every subsequent test, silently shifting where appendRow() landed.
+ * That is exactly the kind of shared-state leak P3 is about, and the
+ * isolation checker surfaced it as soon as it started comparing real
+ * sheet content. Trimming trailing all-blank rows after a write restores
+ * the real semantics; rows containing `false` (a checkbox) or 0 are
+ * values, not blanks, and are deliberately preserved.
+ */
+function trimTrailingBlankRows(sheet) {
+  while (sheet.data.length > 0) {
+    var row = sheet.data[sheet.data.length - 1];
+    var hasValue = false;
+    for (var c = 0; c < row.length; c++) {
+      var v = row[c];
+      if (v !== '' && v !== null && v !== undefined) { hasValue = true; break; }
+    }
+    if (hasValue) return;
+    sheet.data.pop();
+  }
+}
+
 function createInMemorySheet(name) {
   return {
     name: name,
@@ -85,6 +111,7 @@ function createInMemorySheet(name) {
             }
           }
           if (sheet.data.length > sheet.physicalRowCount) sheet.physicalRowCount = sheet.data.length;
+          trimTrailingBlankRows(sheet); // real Sheets never grows the content extent with blanks
           return this;
         },
         setValue: function (value) {
@@ -379,6 +406,52 @@ function createMockGmailApp() {
     return draft;
   }
 
+  /**
+   * Codex atomicity round, P3 — a signature of EVERY piece of shared Gmail
+   * mock state, not just the id lists. The previous isolation check
+   * compared draft ids and thread ids only, so a test could leave behind a
+   * bumped call counter, a created label, or an extra message appended to
+   * a thread that already existed, and the suite still reported "clean".
+   * Each field is a plain comparable string so verifyCleanTestState_ can
+   * diff before/after without any deep-equality machinery.
+   */
+  function stateSignature() {
+    function safe(fn, fallback) {
+      try { return fn(); } catch (e) { return fallback; }
+    }
+    var draftSig = safe(function () {
+      return drafts.map(function (d) {
+        return safe(function () { return d.getId(); }, 'UNREADABLE') + ':' +
+          safe(function () { return String(d.getMessage().getSubject()); }, 'UNREADABLE');
+      }).sort().join('|');
+    }, 'DRAFT_ENUMERATION_FAILED');
+
+    var threadSig = safe(function () {
+      return Object.keys(threads).sort().map(function (tid) {
+        var msgs = safe(function () { return threads[tid].getMessages(); }, null);
+        if (!msgs) return tid + '#UNREADABLE';
+        // Message-LEVEL detail: a reply appended to an already-existing
+        // thread changes this even though the thread id set does not.
+        return tid + '#' + msgs.length + '#' + msgs.map(function (m) {
+          return safe(function () { return m.getId(); }, 'UNREADABLE');
+        }).join(',');
+      }).join('|');
+    }, 'THREAD_ENUMERATION_FAILED');
+
+    var labelSig = safe(function () { return Object.keys(labels).sort().join('|'); }, 'LABEL_ENUMERATION_FAILED');
+
+    var sentSig = safe(function () {
+      return sentIndex.map(function (entry) {
+        return entry.recipientEmail + '>' + safe(function () { return entry.thread.getId(); }, 'UNREADABLE');
+      }).sort().join('|');
+    }, 'SENT_INDEX_ENUMERATION_FAILED');
+
+    var countSig = 'createDraft=' + callCounts.createDraft + ',createDraftReply=' + callCounts.createDraftReply +
+      ',send=' + callCounts.send + ',reply=' + callCounts.reply;
+
+    return { drafts: draftSig, threads: threadSig, labels: labelSig, sentIndex: sentSig, callCounts: countSig };
+  }
+
   return {
     _drafts: drafts,
     _threads: threads,
@@ -387,6 +460,23 @@ function createMockGmailApp() {
     _resetCallCounts: function () {
       callCounts.createDraft = 0; callCounts.createDraftReply = 0; callCounts.send = 0; callCounts.reply = 0;
     },
+    /** P3: full shared-state signature — see stateSignature() above. */
+    _stateSignature: stateSignature,
+    /**
+     * P3: restore the call counters to a previously captured baseline.
+     * Tests that assert exact call counts reset them mid-test; teardown
+     * puts them back to whatever they were when the test started, so a
+     * residual counter is a real, detectable leak rather than the norm.
+     */
+    _setCallCounts: function (values) {
+      callCounts.createDraft = values.createDraft || 0;
+      callCounts.createDraftReply = values.createDraftReply || 0;
+      callCounts.send = values.send || 0;
+      callCounts.reply = values.reply || 0;
+    },
+    _labelNames: function () { return Object.keys(labels).slice(); },
+    /** P3: teardown for a label a test created. */
+    _removeLabelForTest: function (name) { delete labels[name]; },
     /** Test-only: removes a thread seeded by _seedLiveThread so a test leaves no residual mock state. */
     _removeThreadForTest: function (threadId) {
       delete threads[threadId];
