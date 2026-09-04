@@ -1,19 +1,42 @@
 /**
  * Klinner Outreach — Tests.gs
- * F1 test suite. Runs INSIDE Apps Script against a real (ideally dedicated
- * test-copy) bound spreadsheet. Every test row it creates is tagged
- * Source="TEST_F1_AUTOMATED" and is removed by cleanupTestRows_() at the
- * end of the run — including any Suppression rows it created.
  *
- * Run runAllF1Tests() from the Apps Script editor. It requires:
- *   - initializeSheets() to have been run at least once
- *   - Templates populated (the seed templates from SheetRepo.gs are enough)
+ * ============================================================
+ * LOCAL TEST ONLY. NEVER DEPLOY. NEVER RUN AGAINST THE REAL
+ * GOOGLE SHEET OR THE REAL GMAIL MAILBOX.
+ * ============================================================
  *
- * Tests that require creating a REAL Gmail thread first (to exercise the
- * "reply on a real thread" branch of previewStep, or actual reply/bounce
- * detection) are marked NEEDS_LIVE_THREAD and are skipped by default —
- * see the final delivery report for exactly which tests fall in that
- * category and why they cannot be verified from this environment.
+ * This file is excluded from every deployment by .claspignore, and that
+ * exclusion is the protection that matters — but the instructions in this
+ * header used to say the opposite ("Runs INSIDE Apps Script", "Run
+ * runAllF1Tests() from the Apps Script editor"), which is how the file was
+ * originally written and is no longer true. Following that stale advice
+ * would run destructive fixtures — most visibly
+ * test_ghostRowsNeverBecomeProspects_, which overwrites Prospects rows
+ * 2-1000 — against live prospect data, and would create and delete real
+ * Gmail drafts in the real mailbox. Do not do it.
+ *
+ * The suite runs against the Node mock harness ONLY:
+ *
+ *   node test-harness/run-f1-tests.js
+ *
+ * which loads the .gs sources into a sandbox backed by
+ * test-harness/gas-mocks.js (in-memory Sheets, Gmail, Lock and Utilities)
+ * and enforces BOTH gates in its exit code: functional assertions and
+ * per-test isolation. Nothing in this file ever touches Google.
+ *
+ * Fixtures are tagged Source="TEST_F1_AUTOMATED" and torn down per test by
+ * cleanupTestArtifacts_(), whose work verifyCleanTestState_() then
+ * independently verifies against a full pre-test snapshot of the shared
+ * sandbox — sheets, Gmail drafts, threads and their messages, labels, call
+ * counters, the script lock, and the identity of every monkey-patchable
+ * function.
+ *
+ * Behaviour that genuinely cannot be proven against a mock (real Gmail
+ * draft-id/fingerprint round-trips, real concurrent executions, real quota
+ * and search semantics) is NOT faked here. It is enumerated as a
+ * Google-real gate in F1_GOOGLE_CLOSURE_PLAN.md and PRODUCTION_CHECKLIST.md
+ * and must be verified by a human, on Google, before F2.
  */
 
 var TEST_SOURCE_MARKER = 'TEST_F1_AUTOMATED';
