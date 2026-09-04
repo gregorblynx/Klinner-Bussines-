@@ -231,18 +231,92 @@ function releasePreviewClaim_(rowIndex, note) {
 }
 
 /**
+ * N3 (atomicity round): writes a set of ledger fields and THEN the State,
+ * as two separately-flushed durable steps, so State is never visible
+ * before the metadata it describes.
+ *
+ * updateLedgerRow_ writes one setValue() per field and does not flush.
+ * That is fine when every field written is decoration on an already-
+ * correct State (markPreviewClaimAmbiguous_ etc.), but it is NOT fine for
+ * a transition INTO a state whose meaning depends on other columns:
+ * `for (var name in fields)` walks insertion order, so State went out
+ * first, and a failure (or a killed execution) between that write and the
+ * Draft_ID write left a durable row reading State=DRAFTED, Draft_ID=""
+ * — which the next Preview read as "the draft disappeared", superseded,
+ * and duplicated.
+ *
+ * The ordering here makes that unrepresentable:
+ *   1. write every metadata column,
+ *   2. FLUSH (metadata is now durable),
+ *   3. write State,
+ *   4. FLUSH.
+ * Both steps 1-2 are entirely inside columns the OLD state does not
+ * depend on, so a failure anywhere in 1-3 leaves the row in its previous
+ * state, which for a preview claim is PREVIEW_CLAIMED — still blocking.
+ * The metadata columns happen to be contiguous (Thread_ID=9 .. the last
+ * column), so step 1 is a single setValues() range write where possible,
+ * which additionally shrinks the partial-write window inside step 1
+ * itself to one Sheets operation.
+ *
+ * The one thing this cannot rule out is Apps Script dying between step 3's
+ * write and step 4's flush — but that direction is safe: the State write
+ * is simply lost and the row stays PREVIEW_CLAIMED. The invariant we
+ * actually need is one-directional and it holds: IF State reads DRAFTED,
+ * THEN the metadata was already durably persisted before it.
+ */
+function writeLedgerMetadataThenState_(rowIndex, metadataFields, state) {
+  var sheet = getLedgerSheet_();
+
+  var cols = [];
+  for (var name in metadataFields) {
+    if (!metadataFields.hasOwnProperty(name)) continue;
+    var col = SEND_LEDGER_COLUMNS[name];
+    if (!col) throw new Error('Unknown SendLedger column: ' + name);
+    if (col === SEND_LEDGER_COLUMNS.State) {
+      throw new Error('writeLedgerMetadataThenState_: State must be passed as the state argument, not as metadata.');
+    }
+    cols.push({ col: col, value: metadataFields[name] });
+  }
+
+  if (cols.length > 0) {
+    cols.sort(function (a, b) { return a.col - b.col; });
+    var first = cols[0].col;
+    var last = cols[cols.length - 1].col;
+    if (last - first + 1 === cols.length) {
+      // Contiguous: one range write instead of N cell writes.
+      var rowValues = cols.map(function (c) { return c.value; });
+      sheet.getRange(rowIndex, first, 1, cols.length).setValues([rowValues]);
+    } else {
+      cols.forEach(function (c) { sheet.getRange(rowIndex, c.col).setValue(c.value); });
+    }
+    SpreadsheetApp.flush(); // Metadata is durable BEFORE State says it exists.
+  }
+
+  sheet.getRange(rowIndex, SEND_LEDGER_COLUMNS.State).setValue(state);
+  SpreadsheetApp.flush();
+}
+
+/**
  * N3: the happy path — the draft exists, all its metadata was captured,
  * so the claim row itself becomes the DRAFTED row (updated in place, so
  * there is never a window with two active rows or zero active rows for
  * this key).
+ *
+ * State=DRAFTED is deliberately the LAST durable write (see
+ * writeLedgerMetadataThenState_): a DRAFTED row without a Draft_ID is a
+ * state this function structurally cannot produce.
  */
 function finalizePreviewClaimAsDrafted_(rowIndex, fields) {
-  updateLedgerRow_(rowIndex, {
-    State: LEDGER_STATE.DRAFTED,
+  if (!fields || !fields.draftId) {
+    // Defence in depth: the caller already fails closed on a blank
+    // Draft_ID, but never let a DRAFTED row be written without one.
+    throw new Error('finalizePreviewClaimAsDrafted_: refusing to write DRAFTED without a Draft_ID.');
+  }
+  writeLedgerMetadataThenState_(rowIndex, {
     Thread_ID: fields.threadId, Message_ID: fields.messageId, Draft_ID: fields.draftId,
     Confirmed_At: new Date(), Error: '', Draft_Fingerprint: fields.fingerprint,
     Human_Edit_Preserved: false, Human_Edit_Detected_At: ''
-  });
+  }, LEDGER_STATE.DRAFTED);
 }
 
 function supersedeLedgerRow_(rowIndex) {

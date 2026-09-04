@@ -495,6 +495,29 @@ function resolveExistingPreviewDraft_(prospectId, step) {
   if (activeRows.length === 0) return { action: 'CREATE_NEW' };
   var existing = activeRows[0];
 
+  // CASO 12 (N3 atomicity round): DEFENSIVE READ SAFETY. A DRAFTED row is
+  // a claim that a real Gmail draft exists, and Draft_ID is the only
+  // handle we have on it. A DRAFTED row with a blank Draft_ID therefore
+  // means one of two things, and BOTH are dangerous to guess about:
+  // corruption from a partially-applied write, or a legacy/hand-edited
+  // row. Without this guard the code below would look the (blank) id up,
+  // not find it, conclude "the draft is already gone", supersede the row
+  // and authorize CREATE_NEW — creating a duplicate of a draft that may
+  // well still be sitting in Gmail.
+  //
+  // This is deliberately a SECOND, independent protection: the write
+  // ordering in writeLedgerMetadataThenState_ (Ledger.gs) means this code
+  // path can no longer produce such a row, but construction safety only
+  // covers rows THIS code wrote. Read safety covers everything else —
+  // history, manual edits, and any failure mode not yet imagined.
+  if (!existing.values.Draft_ID) {
+    logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, existing.values.Email_Normalized, step,
+      'CORRUPT LEDGER ROW: State=DRAFTED with a blank Draft_ID (row ' + existing.rowIndex + '). ' +
+      'A Gmail draft may exist that this run cannot identify — refusing to treat it as "already gone" ' +
+      'and refusing to create another. Needs manual ADMIN review.');
+    return { action: 'BLOCKED_NEEDS_REVIEW', reason: 'drafted_row_missing_draft_id' };
+  }
+
   var drafts;
   try {
     drafts = GmailApp.getDrafts();
