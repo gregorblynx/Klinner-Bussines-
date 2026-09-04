@@ -2783,6 +2783,93 @@ function n5_setupFollowUpDueProspect_(emailTag, config) {
 }
 
 /**
+ * N5 final coverage gap: proves that an internally inconsistent ledger
+ * containing MORE THAN ONE blocking LIVE row for the exact same
+ * Idempotency_Key still fails closed before any Gmail primitive is
+ * invoked. `states` deliberately contains only states that
+ * isLiveKeyBlocked_ treats as terminal/blocking.
+ */
+function n5_assertMultipleBlockingLiveRowsPreventSend_(emailTag, states) {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_(emailTag);
+    var key = getIdempotencyKey_(p.Prospect_ID, 1);
+
+    states.forEach(function (state, index) {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: p.Prospect_ID,
+        Email_Normalized: p.Email_Normalized, Step: 1, Idempotency_Key: key,
+        Mode: LEDGER_MODE.LIVE, State: state, Thread_ID: '', Message_ID: '', Draft_ID: '',
+        Confirmed_At: state === LEDGER_STATE.SENT ? new Date() : '',
+        Error: 'N5 duplicate-active fixture row ' + (index + 1)
+      });
+    });
+
+    var ledgerSheet = getLedgerSheet_();
+    var ledgerBefore = JSON.stringify(ledgerSheet.getRange(
+      1, 1, ledgerSheet.getLastRow(), SEND_LEDGER_COLUMN_ORDER.length).getValues());
+    var prospectBefore = findRowById_(p.Prospect_ID).values;
+    var draftCountBefore = GmailApp.getDrafts().length;
+    GmailApp._resetCallCounts();
+
+    var outcome = sendStep1(p.Prospect_ID);
+
+    assertEquals_('SKIPPED_ALREADY_CLAIMED', outcome.status,
+      'Multiple blocking LIVE rows for one Idempotency_Key must fail closed.');
+    assertEquals_(0, GmailApp._callCounts.createDraft,
+      'No GmailApp.createDraft() call is allowed for a multiply-blocked LIVE key.');
+    assertEquals_(0, GmailApp._callCounts.send,
+      'No draft.send() call is allowed for a multiply-blocked LIVE key.');
+    assertEquals_(0, GmailApp._callCounts.reply,
+      'No thread.reply() call is allowed for a multiply-blocked LIVE key.');
+    assertEquals_(draftCountBefore, GmailApp.getDrafts().length,
+      'A blocked attempt must not create or remove a Gmail draft.');
+
+    var ledgerAfter = JSON.stringify(ledgerSheet.getRange(
+      1, 1, ledgerSheet.getLastRow(), SEND_LEDGER_COLUMN_ORDER.length).getValues());
+    assertEquals_(ledgerBefore, ledgerAfter,
+      'The blocked attempt must not append, repair, supersede, or otherwise mutate SendLedger.');
+
+    var keyRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Idempotency_Key === key && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(states.length, keyRows.length,
+      'No additional LIVE claim may be created for the multiply-blocked key.');
+    assertEquals_(states.join('|'), keyRows.map(function (r) { return r.values.State; }).join('|'),
+      'Every pre-existing blocking state must remain intact and in place.');
+
+    var prospectAfter = findRowById_(p.Prospect_ID).values;
+    assertEquals_(prospectBefore.Status, prospectAfter.Status,
+      'The prospect must not advance or change Status when the ledger blocks the send.');
+    assertEquals_(prospectBefore.Sequence_Step, prospectAfter.Sequence_Step,
+      'Sequence_Step must not advance when the ledger blocks the send.');
+    assertEquals_(prospectBefore.Step1_Sent_At, prospectAfter.Step1_Sent_At,
+      'Step1_Sent_At must remain untouched when no send occurs.');
+    assertEquals_(prospectBefore.Last_Contacted, prospectAfter.Last_Contacted,
+      'Last_Contacted must remain untouched when no send occurs.');
+    assertEquals_(prospectBefore.Thread_ID, prospectAfter.Thread_ID,
+      'Thread_ID must remain untouched when no send occurs.');
+    assertEquals_(prospectBefore.Last_Message_ID, prospectAfter.Last_Message_ID,
+      'Last_Message_ID must remain untouched when no send occurs.');
+  });
+}
+
+/** Exact blocker scenario: CLAIMED + AMBIGUOUS for one LIVE key. */
+function test_N5_multipleLiveClaimedAndAmbiguousRowsBlockWithoutSend_() {
+  n5_assertMultipleBlockingLiveRowsPreventSend_('n5dupeclaimedambiguous', [
+    LEDGER_STATE.CLAIMED,
+    LEDGER_STATE.AMBIGUOUS
+  ]);
+}
+
+/** Second meaningful inconsistent variant: CLAIMED + SENT for one key. */
+function test_N5_multipleLiveClaimedAndSentRowsBlockWithoutSend_() {
+  n5_assertMultipleBlockingLiveRowsPreventSend_('n5dupeclaimedsent', [
+    LEDGER_STATE.CLAIMED,
+    LEDGER_STATE.SENT
+  ]);
+}
+
+/**
  * N5 items 1, 2, 3, 13: draft.send() throws (ambiguous outcome) — the
  * ledger row must be durably AMBIGUOUS even if the secondary Prospects
  * NEEDS_REVIEW write ALSO fails; a second execution must be blocked from
@@ -3702,6 +3789,8 @@ var F1_TEST_FUNCTIONS = [
   ['N5_followUpReplyAndProspectsBothThrow', test_N5_followUpReplyThrowsAndProspectsWriteThrowsStillBlocksAtLedger_],
   ['N5_followUpMismatchDurableBlock', test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFails_],
   ['N5_followUpNormalExactlyOnce', test_N5_normalConfirmedFollowUpRepliesExactlyOnce_],
+  ['N5_multipleLiveClaimedAmbiguousBlocks', test_N5_multipleLiveClaimedAndAmbiguousRowsBlockWithoutSend_],
+  ['N5_multipleLiveClaimedSentBlocks', test_N5_multipleLiveClaimedAndSentRowsBlockWithoutSend_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

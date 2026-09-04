@@ -6,7 +6,7 @@
  * proves those tests actually catch regressions in the durable-ledger-
  * blocking design, not just that certain source patterns are present.
  *
- * Four mutations, each targeting a distinct structural property Codex's
+ * Six mutations, each targeting a distinct structural property Codex's
  * final audit named explicitly:
  *
  *   A. Remove AMBIGUOUS from isLiveKeyBlocked_'s blocking check (Ledger.gs)
@@ -21,6 +21,11 @@
  *      while a Gmail operation that could have sent is in flight or
  *      throws", the deeper architectural property the whole durable-
  *      blocking design depends on.
+ *   E. doFollowUpSend_'s ledger CLAIM moved from BEFORE thread.reply() to
+ *      AFTER it succeeds — the follow-up equivalent of D.
+ *   F. isLiveKeyBlocked_ deliberately ignores a key when it finds MORE
+ *      THAN ONE blocking LIVE row — singles still block, so only the new
+ *      duplicate-active adversarial coverage can catch this regression.
  *
  * Run: node test-harness/mutation-test-N5.js
  */
@@ -174,12 +179,33 @@ function mutationE_followUpClaimMovedAfterReply(source) {
     "    var messagesAfter = repliedThread.getMessages();");
 }
 
+// --- Mutation F (final N5 coverage gap): make duplicate-active ledger
+// corruption permissive while preserving the normal single-row guard.
+// Existing one-row N5 tests therefore remain green; the dedicated
+// CLAIMED+AMBIGUOUS adversarial test must be what kills this mutant. ---
+function mutationF_ignoreMultipleBlockingLiveRows(source) {
+  return replaceOrThrow(source, 'F',
+    "function isLiveKeyBlocked_(prospectId, step) {\n" +
+    "  var key = getIdempotencyKey_(prospectId, step);\n" +
+    "  var rows = readAllLedgerRows_();\n",
+    "function isLiveKeyBlocked_(prospectId, step) {\n" +
+    "  var key = getIdempotencyKey_(prospectId, step);\n" +
+    "  var rows = readAllLedgerRows_();\n" +
+    "  var blockingMatches = rows.filter(function (row) {\n" +
+    "    var v = row.values;\n" +
+    "    return v.Idempotency_Key === key && v.Mode === LEDGER_MODE.LIVE &&\n" +
+    "      (v.State === LEDGER_STATE.CLAIMED || v.State === LEDGER_STATE.SENT || v.State === LEDGER_STATE.AMBIGUOUS);\n" +
+    "  }).length;\n" +
+    "  if (blockingMatches > 1) return false; // MUTATION F: corrupt duplicate-active keys are incorrectly reopened.\n");
+}
+
 var MUTATIONS = [
   { label: 'A (AMBIGUOUS removed from isLiveKeyBlocked_)', file: 'Ledger.gs', mutate: mutationA_removeAmbiguousFromBlockingCheck, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
   { label: 'B (follow-up reply-throw downgraded to FAILED)', file: 'Mailer.gs', mutate: mutationB_followUpReplyThrowDowngradedToFailed, mustBeCaughtBy: 'N5_followUpThrowsDurableBlock' },
   { label: 'C (false SENT inferred from one search match)', file: 'Recon.gs', mutate: mutationC_falseSentInference, mustBeCaughtBy: 'N5_reconSingleMatchAmbiguous' },
   { label: 'D (claim moved to after send() succeeds)', file: 'Mailer.gs', mutate: mutationD_claimMovedAfterSend, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
-  { label: 'E (follow-up claim moved to after reply() succeeds)', file: 'Mailer.gs', mutate: mutationE_followUpClaimMovedAfterReply, mustBeCaughtBy: 'N5_followUpReplyAndProspectsBothThrow' }
+  { label: 'E (follow-up claim moved to after reply() succeeds)', file: 'Mailer.gs', mutate: mutationE_followUpClaimMovedAfterReply, mustBeCaughtBy: 'N5_followUpReplyAndProspectsBothThrow' },
+  { label: 'F (multiple blocking LIVE rows incorrectly reopen key)', file: 'Ledger.gs', mutate: mutationF_ignoreMultipleBlockingLiveRows, mustBeCaughtBy: 'N5_multipleLiveClaimedAmbiguousBlocks' }
 ];
 
 var allPassed = true;
