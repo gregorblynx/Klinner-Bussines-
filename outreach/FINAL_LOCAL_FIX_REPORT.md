@@ -1,5 +1,14 @@
 # Final local fix round — after Codex re-audit
 
+> **Superseded in part.** The round below was audited and returned FAIL:
+> the `PREVIEW_CLAIMED -> DRAFTED` transition described in §1 was not
+> atomic (`updateLedgerRow_` wrote `State` before `Draft_ID` and never
+> flushed), the isolation checker of §8 was still blind to Gmail call
+> counters, labels, and messages appended to an existing thread, and the
+> partial-write case had no test. All four are closed in
+> [FINAL_ATOMICITY_FIX_REPORT.md](FINAL_ATOMICITY_FIX_REPORT.md), which is
+> the authoritative current status. Everything else below still holds.
+
 All blockers from the re-audit closed locally. Nothing pushed, nothing touched on Google.
 
 ## 1. N3 preview claim design
