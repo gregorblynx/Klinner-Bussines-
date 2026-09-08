@@ -2725,7 +2725,7 @@ function test_finding8_liveHelpersAreNotGlobalEntryPoints_() {
  * wall-clock time this test happens to run at. Every touched Config value
  * is restored exactly, in `finally`, whether or not `fn` throws.
  */
-function withLiveModeEnabledForTest_(fn) {
+function withLiveModeEnabledForTest_(fn, extraOverrides) {
   var sheet = getSheet_(SHEET_NAMES.CONFIG);
   var lastRow = sheet.getLastRow();
   var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
@@ -2733,6 +2733,13 @@ function withLiveModeEnabledForTest_(fn) {
   for (var i = 0; i < values.length; i++) rowByKey[values[i][0]] = i + 2;
 
   var overrides = { DRY_RUN: 'FALSE', SEND_START_HOUR: '0', SEND_END_HOUR: '24', SEND_DAYS: 'MON,TUE,WED,THU,FRI,SAT,SUN' };
+  // Optional per-test Config overrides (e.g. MAX_PER_RUN for batch tests).
+  // Restored by the same finally block as everything else below.
+  if (extraOverrides) {
+    for (var k in extraOverrides) {
+      if (extraOverrides.hasOwnProperty(k)) overrides[k] = extraOverrides[k];
+    }
+  }
   PENDING_F0_REQUIRED_KEYS.forEach(function (key) { overrides[key] = 'test-resolved-' + key.toLowerCase() + '@example.com'; });
 
   var keysToTouch = Object.keys(overrides);
@@ -3112,6 +3119,158 @@ function test_N6_postSendPersistenceFailureFallbackAlsoFailsExactIncidentReprodu
     assertEquals_(1, GmailApp._callCounts.send,
       'CRITICAL: total real Gmail sends must be EXACTLY 1 — a total Prospects persistence outage must never cause a duplicate LIVE email.');
   });
+}
+
+/**
+ * N6 BATCH (independent adversarial review of 4a0f8fd): the single-prospect
+ * tests above prove doStep1Send_ handles its own persistence failure. They
+ * say NOTHING about what sendBatch does NEXT.
+ *
+ * The forbidden sequence this test exists to make impossible:
+ *   A Gmail sent -> A ledger SENT -> A Prospects persistence fails
+ *   -> sendBatch continues -> B Gmail sent
+ *
+ * A post-send persistence failure means the mechanism that RECORDS sends is
+ * broken. Continuing the batch compounds unrecorded real emails, one per
+ * remaining candidate. It must be a HARD STOP for the whole batch.
+ *
+ * Deliberately ordering-independent: whichever prospect the queue happens to
+ * process first becomes the "victim"; the other must be provably untouched.
+ * The victim's fallback write is ALSO made to fail, because the batch stop
+ * must NOT depend on the best-effort fallback succeeding.
+ */
+function test_N6_batchHardStopsAfterPostSendPersistenceFailure_() {
+  withLiveModeEnabledForTest_(function () {
+    var a = n5_setupReadyProspect_('n6batcha');
+    var b = n5_setupReadyProspect_('n6batchb');
+    var ids = [a.Prospect_ID, b.Prospect_ID];
+
+    GmailApp._resetCallCounts();
+    // Confine the batch to exactly these two prospects. Without this the
+    // batch would also pick up any other eligible row in the sandbox, making
+    // the test depend on queue ordering, MAX_PER_RUN and the daily budget —
+    // and orderQueue_ sorts a blank Date_Added to the epoch, so leftover
+    // fixtures (present whenever cleanup is deliberately disabled by
+    // verify-isolation-enforcement.js) would always sort ahead of these two.
+    var originalIsEligible = isEligibleForNextStep_;
+    isEligibleForNextStep_ = function (prospectValues, config, now) {
+      if (ids.indexOf(prospectValues.Prospect_ID) === -1) return false;
+      return originalIsEligible(prospectValues, config, now);
+    };
+
+    var originalWriteRowById = writeRowById_;
+    var victimId = null;
+    var sendsAtVictimFailure = null;
+    writeRowById_ = function (prospectId, fields, options) {
+      if (victimId === null && fields.hasOwnProperty('Sequence_Step') && ids.indexOf(prospectId) !== -1) {
+        victimId = prospectId; // First prospect to reach its post-send write.
+        // Snapshot the send counter at the exact moment of the failure. The
+        // assertion below is a DELTA from here, which makes this test immune
+        // to any unrelated prospect the queue may have processed earlier
+        // (e.g. leftover fixtures when cleanup is deliberately disabled by
+        // verify-isolation-enforcement.js).
+        sendsAtVictimFailure = GmailApp._callCounts.send;
+      }
+      if (prospectId === victimId) {
+        // Both the full write AND the NEEDS_REVIEW fallback fail — the
+        // batch stop must hold without any fallback assistance.
+        throw new Error('N6 simulated: Prospects persistence outage during a batch.');
+      }
+      return originalWriteRowById(prospectId, fields, options);
+    };
+
+    try {
+      sendBatch();
+    } finally {
+      writeRowById_ = originalWriteRowById;
+      isEligibleForNextStep_ = originalIsEligible;
+    }
+
+    assert_(victimId !== null, 'Precondition: the batch must have actually attempted a post-send write for one of the two prospects.');
+    var otherId = ids[0] === victimId ? ids[1] : ids[0];
+
+    // THE core assertion: ZERO further Gmail sends after the persistence
+    // failure. Expressed as a delta from the moment of failure, so it proves
+    // exactly the property under test regardless of what preceded it.
+    assertEquals_(sendsAtVictimFailure, GmailApp._callCounts.send,
+      'CRITICAL: after a post-send persistence failure the batch MUST hard-stop — not one further Gmail send is allowed.');
+
+    // The victim: real send, durable ledger SENT, still blocked.
+    var victimLedger = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === victimId && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, victimLedger.length, 'The victim must have exactly one LIVE ledger row.');
+    assertEquals_(LEDGER_STATE.SENT, victimLedger[0].values.State, 'The victim ledger row must be durably SENT.');
+    assert_(isLiveKeyBlocked_(victimId, 1), 'The victim key must remain blocked against any duplicate send.');
+    // The DURABLE marker: the Log sheet is trimmed by trimLog_, so the
+    // authoritative ledger row itself must carry the incident permanently.
+    assert_(String(victimLedger[0].values.Error).indexOf('POST_SEND_PERSISTENCE_FAILURE') !== -1,
+      'The ledger row must permanently record the persistence failure in its Error column. Got: ' + victimLedger[0].values.Error);
+
+    // The other prospect: provably untouched at EVERY layer.
+    var otherLedger = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === otherId && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(0, otherLedger.length,
+      'The second prospect must have NO LIVE ledger row at all — the batch must stop before it is even claimed.');
+    var otherAfter = findRowById_(otherId).values;
+    assertEquals_(STATUS.READY, otherAfter.Status, 'The second prospect must remain READY, completely untouched.');
+    assertEquals_('', otherAfter.Thread_ID, 'The second prospect must have no Thread_ID.');
+    assertEquals_('', otherAfter.Step1_Sent_At, 'The second prospect must have no Step1_Sent_At.');
+
+    // The abort must be explicitly observable, not inferred from absence.
+    // Read the Log SHEET, not _logBuffer: sendBatch() ends with flushLog_(),
+    // which empties the buffer into the sheet.
+    var logSheet = getSheet_(SHEET_NAMES.LOG);
+    var loggedAbort = false;
+    if (logSheet.getLastRow() >= 2) {
+      logSheet.getRange(2, LOG_COLUMNS.Detail, logSheet.getLastRow() - 1, 1).getValues().forEach(function (row) {
+        if (String(row[0]).indexOf('BATCH ABORTED') !== -1) loggedAbort = true;
+      });
+    }
+    assert_(loggedAbort, 'The batch abort must be explicitly logged, not silent.');
+  }, { MAX_PER_RUN: '2', MAX_PER_DAY: '5' });
+}
+
+/**
+ * N6 BATCH: the hard stop must NOT fire on an ordinary skip. A batch where
+ * the first candidate is simply ineligible must still process the rest —
+ * otherwise the stop would silently throttle normal operation to one
+ * prospect per run.
+ */
+function test_N6_batchDoesNotStopOnOrdinaryOutcomes_() {
+  withLiveModeEnabledForTest_(function () {
+    var a = n5_setupReadyProspect_('n6batchnorma');
+    var b = n5_setupReadyProspect_('n6batchnormb');
+    var ids = [a.Prospect_ID, b.Prospect_ID];
+    GmailApp._resetCallCounts();
+
+    // Confine the batch to these two — see the sibling test's comment.
+    var originalIsEligible = isEligibleForNextStep_;
+    isEligibleForNextStep_ = function (prospectValues, config, now) {
+      if (ids.indexOf(prospectValues.Prospect_ID) === -1) return false;
+      return originalIsEligible(prospectValues, config, now);
+    };
+    try {
+      sendBatch();
+    } finally {
+      isEligibleForNextStep_ = originalIsEligible;
+    }
+
+    // Asserted per-prospect (not on a global counter) so the test is immune
+    // to unrelated eligible rows — see the sibling test's comment.
+    [a.Prospect_ID, b.Prospect_ID].forEach(function (id) {
+      var after = findRowById_(id).values;
+      assertEquals_(STATUS.IN_SEQUENCE, after.Status,
+        'BOTH prospects must advance normally — the hard stop must not fire on ordinary outcomes.');
+      var rows = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === id && r.values.Mode === LEDGER_MODE.LIVE;
+      });
+      assertEquals_(1, rows.length, 'Each prospect must have exactly one LIVE ledger row.');
+      assertEquals_(LEDGER_STATE.SENT, rows[0].values.State, 'Each prospect must be durably SENT.');
+      assertEquals_('', String(rows[0].values.Error), 'A healthy send must leave no error marker on the ledger row.');
+    });
+  }, { MAX_PER_RUN: '2', MAX_PER_DAY: '5' });
 }
 
 /**
@@ -4000,6 +4159,8 @@ var F1_TEST_FUNCTIONS = [
   ['N6_postSendPersistenceFallbackSucceeds', test_N6_postSendPersistenceFailureFallbackSucceeds_],
   ['N6_postSendPersistenceExactIncidentReproduction', test_N6_postSendPersistenceFailureFallbackAlsoFailsExactIncidentReproduction_],
   ['N6_cadenceThrowForcesNeedsReview', test_N6_cadenceThrowAfterConfirmedSendForcesNeedsReview_],
+  ['N6_batchHardStopsAfterPersistenceFailure', test_N6_batchHardStopsAfterPostSendPersistenceFailure_],
+  ['N6_batchDoesNotStopOnOrdinaryOutcomes', test_N6_batchDoesNotStopOnOrdinaryOutcomes_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

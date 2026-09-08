@@ -1157,6 +1157,22 @@ var executeLiveSendForStep_;
         Thread_ID: thread.getId(), Last_Message_ID: message.getId(), Next_Action_Date: nextActionDate || ''
       }, { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
     } catch (persistError) {
+      // N6 (independent review): stamp the DURABLE marker on the
+      // authoritative ledger row FIRST. Without this the only record of the
+      // failure is the Log sheet, which trimLog_ prunes to LOG_MAX_ROWS —
+      // so an unreconciled incident would eventually become invisible. State
+      // stays SENT (untouched): this annotates the row, it never reopens it.
+      // Best-effort by necessity — the Sheets write path is what just failed.
+      try {
+        updateLedgerRow_(ledgerRowNum, {
+          Error: 'POST_SEND_PERSISTENCE_FAILURE: send CONFIRMED, Prospects write failed (' + persistError +
+            '). Prospects may still read its pre-send state. Reconcile Prospects FROM THIS ROW; never resend.'
+        });
+      } catch (markerError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
+          'POST_SEND_PERSISTENCE_FAILURE: could not even stamp the ledger Error marker: ' + markerError +
+          '. The row is still durably SENT (blocking), but the Log is now the only record of the failure.');
+      }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
         'POST_SEND_PERSISTENCE_FAILURE: Gmail send is CONFIRMED (Thread_ID=' + thread.getId() + ', Message_ID=' +
         message.getId() + ', SendLedger row ' + ledgerRowNum + '=SENT) but the full Prospects write failed: ' +
@@ -1324,6 +1340,18 @@ var executeLiveSendForStep_;
     try {
       writeRowById_(prospectId, fields, { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
     } catch (persistError) {
+      // N6: durable marker on the authoritative row first — see the matching
+      // comment in doStep1Send_. State stays SENT; this only annotates.
+      try {
+        updateLedgerRow_(ledgerRowNum, {
+          Error: 'POST_SEND_PERSISTENCE_FAILURE: reply CONFIRMED, Prospects write failed (' + persistError +
+            '). Prospects may still read its pre-send state. Reconcile Prospects FROM THIS ROW; never resend.'
+        });
+      } catch (markerError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'POST_SEND_PERSISTENCE_FAILURE: could not even stamp the ledger Error marker: ' + markerError +
+          '. The row is still durably SENT (blocking), but the Log is now the only record of the failure.');
+      }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
         'POST_SEND_PERSISTENCE_FAILURE: Gmail reply is CONFIRMED (Message_ID=' + sentMessage.getId() +
         ', SendLedger row ' + ledgerRowNum + '=SENT) but the full Prospects write failed: ' + persistError +
@@ -1447,18 +1475,49 @@ function sendBatch() {
   var rows = readAllProspects().filter(function (r) { return isEligibleForNextStep_(r.values, config, now); });
   var ordered = orderQueue_(rows).slice(0, config.MAX_PER_RUN);
 
-  ordered.forEach(function (r, idx) {
+  // N6 (independent review of the post-send persistence fix): this loop was
+  // a forEach that DISCARDED each send's return value — so a
+  // SENT_PERSISTENCE_FAILED outcome was invisible here and the batch rolled
+  // straight on to the next prospect. That is the compounding case:
+  //
+  //   A Gmail sent -> A ledger SENT -> A Prospects persistence fails
+  //   -> batch continues -> B Gmail sent -> B persistence fails too -> ...
+  //
+  // A post-send persistence failure means the mechanism that RECORDS sends
+  // is broken, so every further send in this run would be another real,
+  // unrecorded email. It is a HARD STOP for the whole batch — a plain `for`
+  // loop, because forEach cannot break.
+  //
+  // Deliberately NOT a hard stop: ordinary skips, quota aborts, and thrown
+  // AMBIGUOUS outcomes. Those all still RECORD correctly in the ledger
+  // (CLAIMED/AMBIGUOUS are durably blocking), so the run may safely
+  // continue — stopping on them would silently throttle normal operation.
+  for (var i = 0; i < ordered.length; i++) {
+    var r = ordered[i];
     var step = getNextStepNumber_(r.values, config);
-    if (!step) return;
+    if (!step) continue;
+
+    var outcome = null;
     try {
-      if (step === 1) sendStep1(r.values.Prospect_ID); else sendFollowUp(r.values.Prospect_ID, step);
+      outcome = step === 1 ? sendStep1(r.values.Prospect_ID) : sendFollowUp(r.values.Prospect_ID, step);
     } catch (e) {
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, r.values.Prospect_ID, r.values.Email_Normalized, step, String(e));
     }
-    if (idx < ordered.length - 1) {
+
+    if (outcome && outcome.status === 'SENT_PERSISTENCE_FAILED') {
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, r.values.Prospect_ID, r.values.Email_Normalized, step,
+        'BATCH ABORTED after a POST_SEND_PERSISTENCE_FAILURE for this prospect (SendLedger row ' +
+        outcome.ledgerRowNum + ' is durably SENT). ' + (ordered.length - i - 1) + ' remaining candidate(s) in this ' +
+        'run were NOT contacted and were NOT claimed. Refusing to send further real email while Prospects ' +
+        'persistence is failing — each additional send would be another unrecorded LIVE email. Reconcile from ' +
+        'SendLedger before resuming; consider setting PAUSE_ALL=TRUE if triggers are installed.');
+      break;
+    }
+
+    if (i < ordered.length - 1) {
       Utilities.sleep((config.MIN_SLEEP_SECONDS + Math.random() * (config.MAX_SLEEP_SECONDS - config.MIN_SLEEP_SECONDS)) * 1000);
     }
-  });
+  }
 
   flushLog_();
 }

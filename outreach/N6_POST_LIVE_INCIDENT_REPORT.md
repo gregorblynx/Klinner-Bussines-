@@ -167,6 +167,44 @@ Diff shown to the user in full before this report; not yet committed.
 3. Once this fix is reviewed/approved and pushed (a future, separate round): re-run `repairSendLedgerColumns()`-style idempotent verification is not needed here (unrelated schema), but a **dry run of the reconciliation write** should be reviewed before it's applied to the real Acme row.
 4. Only after both of the above: apply the Acme reconciliation write (§10), then confirm `isLiveKeyBlocked_`-equivalent behavior by attempting **nothing** — do not re-run `sendStep1` for Acme; the ledger `SENT` row must remain the only record of that send, permanently.
 
+---
+
+# Addendum — independent adversarial review of 4a0f8fd
+
+The review found the fix above **incomplete**. It correctly hardened `doStep1Send_`/`doFollowUpSend_` in isolation, but said nothing about what `sendBatch` does *next* — and `sendBatch` discarded every send's return value inside a `forEach`, so `SENT_PERSISTENCE_FAILED` was invisible to it.
+
+**Proven, not argued**: a two-prospect batch test written against 4a0f8fd failed with `expected 1, got 2` — prospect B received a real Gmail send after prospect A's persistence failed. That is the compounding case: a broken *recording* mechanism plus a batch that keeps going produces one unrecorded real email per remaining candidate.
+
+## Corrections applied
+
+1. **Batch hard stop** (`sendBatch`) — `forEach` → `for` loop; the send's return value is now captured, and `SENT_PERSISTENCE_FAILED` logs a `BATCH ABORTED` line (naming the ledger row and how many candidates were skipped) and `break`s. Deliberately *not* a hard stop for ordinary skips, quota aborts, or thrown AMBIGUOUS outcomes — those all still record correctly in the ledger, and stopping on them would silently throttle normal operation to one prospect per run.
+2. **Durable ledger marker** — the persistence failure previously left the authoritative row's `Error` column blank, so the *only* record was the Log sheet, which `trimLog_` prunes to `LOG_MAX_ROWS`. An unreconciled incident would eventually become invisible. Both functions now stamp `POST_SEND_PERSISTENCE_FAILURE: ...` into the ledger row's `Error` column. `State` stays `SENT` — this annotates the row, it never reopens it. Best-effort and wrapped, since the Sheets write path is precisely what just failed.
+
+Reconciliation is now deterministic: find every row where `State=SENT` and `Error` contains `POST_SEND_PERSISTENCE_FAILURE`.
+
+## Verified properties
+
+- Prospect B: **zero** Gmail invocations — proven structurally, not just by counter. B has no LIVE ledger row at all, and the claim is written *before* any Gmail call, so no ledger row ⟹ no Gmail call.
+- Prospect A: exactly one Gmail send; ledger `SENT`; key still blocked.
+- The hard stop does **not** depend on the `NEEDS_REVIEW` fallback: the test makes the fallback fail too.
+- Mutation G (hard stop disabled) is caught by **exactly one** test — the new batch test — confirming no pre-existing test covered this.
+
+## Fallback safety assessment
+
+The `Status=NEEDS_REVIEW` fallback *can* fail through the same path as the original write: both call `findRowById_` and its identity guard, and both pass through `authorizeWrite_` (including its `getConfig()` read). It is strictly *more likely* to succeed (one allow-listed column instead of seven, and it never calls `computeNextActionDate_`), but it is genuinely best-effort. That is acceptable, because safety rests on three things that are all independent of it: the durable ledger `SENT` state, the ledger `Error` marker, and the batch hard stop.
+
+## Future-run behavior (ledger SENT + Prospects READY)
+
+Confirmed safe by inspection and test: `canSend_` passes (the row still looks eligible), then `isLiveKeyBlocked_` returns true on the `SENT` row → `SKIPPED_ALREADY_CLAIMED`, no resend. No code path reopens it: `findStaleLiveClaims_` selects only `State === CLAIMED`, and Recon's only ledger write is `AMBIGUOUS`.
+
+**One observability gap remains, and it is not fixed here**: `SKIPPED_ALREADY_CLAIMED` returns with **no log call at all**. So on every subsequent run the stuck prospect is skipped in complete silence. The durable ledger `Error` marker now compensates (it never expires), but the run-time signal is absent by design of that early return.
+
+## Durable PAUSE — recommendation, not implemented
+
+The hard stop protects *one* batch. With triggers installed, the next scheduled run starts fresh and would hit the same broken persistence path, compounding at trigger cadence. Options considered: auto-setting `PAUSE_ALL=TRUE` (correct response to "we cannot record sends", but it is a Config write on the very path that is failing, and one transient error would halt the whole system until manually cleared), or a start-of-batch scan for unresolved `POST_SEND_PERSISTENCE_FAILURE` markers (now possible thanks to the durable marker, but it adds a full ledger scan to every run).
+
+**Recommendation**: do not add either yet. Keep `PAUSE_ALL=TRUE` and `triggers=0` until Acme is reconciled, and treat "unattended operation requires an automatic durable pause" as a **prerequisite for installing triggers**, decided once the real proximate exception is known. This is flagged as a gating decision, not silently deferred.
+
 ## Final verdict
 
 ## FIX READY FOR REVIEW — NO DEPLOYMENT PERFORMED

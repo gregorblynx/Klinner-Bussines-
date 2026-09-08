@@ -201,13 +201,25 @@ function mutationF_ignoreMultipleBlockingLiveRows(source) {
     "  if (blockingMatches > 1) return false; // MUTATION F: corrupt duplicate-active keys are incorrectly reopened.\n");
 }
 
+// --- Mutation G (independent review of the post-send persistence fix):
+// disable sendBatch's hard stop, so a post-send persistence failure lets the
+// batch roll on to the next prospect and send it a real email. Every
+// single-prospect N5/N6 test stays green under this mutation — only the
+// two-prospect batch test can kill it. ---
+function mutationG_batchDoesNotHardStop(source) {
+  return replaceOrThrow(source, 'G',
+    "    if (outcome && outcome.status === 'SENT_PERSISTENCE_FAILED') {",
+    "    if (false && outcome && outcome.status === 'SENT_PERSISTENCE_FAILED') { // MUTATION G: hard stop disabled.");
+}
+
 var MUTATIONS = [
   { label: 'A (AMBIGUOUS removed from isLiveKeyBlocked_)', file: 'Ledger.gs', mutate: mutationA_removeAmbiguousFromBlockingCheck, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
   { label: 'B (follow-up reply-throw downgraded to FAILED)', file: 'Mailer.gs', mutate: mutationB_followUpReplyThrowDowngradedToFailed, mustBeCaughtBy: 'N5_followUpThrowsDurableBlock' },
   { label: 'C (false SENT inferred from one search match)', file: 'Recon.gs', mutate: mutationC_falseSentInference, mustBeCaughtBy: 'N5_reconSingleMatchAmbiguous' },
   { label: 'D (claim moved to after send() succeeds)', file: 'Mailer.gs', mutate: mutationD_claimMovedAfterSend, mustBeCaughtBy: 'N5_step1ThrowsDurableBlock' },
   { label: 'E (follow-up claim moved to after reply() succeeds)', file: 'Mailer.gs', mutate: mutationE_followUpClaimMovedAfterReply, mustBeCaughtBy: 'N5_followUpReplyAndProspectsBothThrow' },
-  { label: 'F (multiple blocking LIVE rows incorrectly reopen key)', file: 'Ledger.gs', mutate: mutationF_ignoreMultipleBlockingLiveRows, mustBeCaughtBy: 'N5_multipleLiveClaimedAmbiguousBlocks' }
+  { label: 'F (multiple blocking LIVE rows incorrectly reopen key)', file: 'Ledger.gs', mutate: mutationF_ignoreMultipleBlockingLiveRows, mustBeCaughtBy: 'N5_multipleLiveClaimedAmbiguousBlocks' },
+  { label: 'G (batch does not hard-stop on persistence failure)', file: 'Mailer.gs', mutate: mutationG_batchDoesNotHardStop, mustBeCaughtBy: 'N6_batchHardStopsAfterPersistenceFailure' }
 ];
 
 var allPassed = true;
