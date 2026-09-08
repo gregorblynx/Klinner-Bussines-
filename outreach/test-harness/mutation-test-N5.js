@@ -126,18 +126,20 @@ function mutationD_claimMovedAfterSend(source) {
     "        Error: String(sendError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'\n" +
     "      });");
   s = replaceOrThrow(s, 'D3',
+    "    var confirmedAt = new Date();\n" +
     "    updateLedgerRow_(ledgerRowNum, {\n" +
-    "      State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: new Date()\n" +
+    "      State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: confirmedAt\n" +
     "    });",
+    "    var confirmedAt = new Date();\n" +
     "    if (ledgerRowNum) {\n" +
     "      updateLedgerRow_(ledgerRowNum, {\n" +
-    "        State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: new Date()\n" +
+    "        State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: confirmedAt\n" +
     "      });\n" +
     "    } else {\n" +
-    "      appendLedgerRow_({ // MUTATION D: claimed only NOW, after send() already succeeded.\n" +
+    "      ledgerRowNum = appendLedgerRow_({ // MUTATION D: claimed only NOW, after send() already succeeded.\n" +
     "        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,\n" +
     "        Step: 1, Idempotency_Key: getIdempotencyKey_(prospectId, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.SENT,\n" +
-    "        Thread_ID: thread.getId(), Message_ID: message.getId(), Draft_ID: '', Confirmed_At: new Date(), Error: ''\n" +
+    "        Thread_ID: thread.getId(), Message_ID: message.getId(), Draft_ID: '', Confirmed_At: confirmedAt, Error: ''\n" +
     "      });\n" +
     "    }");
   return s;

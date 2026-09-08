@@ -2954,6 +2954,212 @@ function test_N5_normalConfirmedStep1SendsExactlyOnce_() {
 }
 
 /**
+ * N6 (post-LIVE incident, 2026-09-08 — Acme Plumbing LLC, Prospect_ID
+ * 2f4d0c6c-ccd7-420b-8dd3-22c915a792f4): reproduces the exact failure —
+ * Gmail send CONFIRMED, ledger reaches SENT, and the Prospects write
+ * throws. Two variants: the minimal NEEDS_REVIEW fallback write succeeds
+ * (this test), or it ALSO fails, an exact reproduction of the real
+ * incident (the next test below). Both must show: the ledger is the
+ * durable, authoritative record; the same idempotency key stays blocked;
+ * exactly one real Gmail send ever happens, even across a retry; and the
+ * failure is observable in the log — never silently indistinguishable
+ * from "not sent yet".
+ */
+function test_N6_postSendPersistenceFailureFallbackSucceeds_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_('n6persistfallback');
+    var prospectBefore = findRowById_(p.Prospect_ID).values;
+    assertEquals_(STATUS.READY, prospectBefore.Status, 'Precondition: a freshly-validated prospect must start READY.');
+
+    GmailApp._resetCallCounts();
+    var originalWriteRowById = writeRowById_;
+    var fullWriteAttempts = 0;
+    writeRowById_ = function (prospectId, fields, options) {
+      if (fields.hasOwnProperty('Sequence_Step')) {
+        // The full post-send field set — this is the exact write that
+        // failed in the real incident.
+        fullWriteAttempts++;
+        throw new Error('N6 simulated: Prospects write failed (e.g. transient Sheets API error).');
+      }
+      return originalWriteRowById(prospectId, fields, options); // The minimal NEEDS_REVIEW fallback — allowed through.
+    };
+
+    var outcome;
+    try {
+      outcome = sendStep1(p.Prospect_ID);
+    } finally {
+      writeRowById_ = originalWriteRowById;
+    }
+
+    assertEquals_(1, fullWriteAttempts, 'The full post-send write must have been attempted exactly once.');
+    assertEquals_('SENT_PERSISTENCE_FAILED', outcome.status,
+      'A CONFIRMED Gmail send whose Prospects write fails must be reported distinctly from a normal SENT.');
+    assert_(!!outcome.threadId && !!outcome.messageId, 'The confirmed Thread_ID/Message_ID must be reported back to the caller for reconciliation.');
+
+    // The ledger is the durable, authoritative record — Gmail send + SENT
+    // confirmation are NOT contingent on Prospects persistence succeeding.
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length, 'Exactly one LIVE ledger row must exist.');
+    assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State, 'The ledger row must be durably SENT — this is the authoritative record of a real send.');
+    assert_(!!ledgerRows[0].values.Thread_ID && !!ledgerRows[0].values.Message_ID, 'Thread_ID/Message_ID must be recorded in the ledger regardless of the Prospects failure.');
+
+    // The minimal fallback got through: Status flips to NEEDS_REVIEW (a
+    // human will notice), but nothing else — this is NOT a substitute for
+    // full reconciliation, only a visibility signal.
+    var prospectAfter = findRowById_(p.Prospect_ID).values;
+    assertEquals_(STATUS.NEEDS_REVIEW, prospectAfter.Status, 'The minimal fallback write must flip Status to NEEDS_REVIEW so a human notices.');
+    assertEquals_(prospectBefore.Sequence_Step, prospectAfter.Sequence_Step, 'The fallback write must NOT fabricate Sequence_Step — only full reconciliation from the ledger may.');
+    assertEquals_(prospectBefore.Step1_Sent_At, prospectAfter.Step1_Sent_At, 'The fallback write must NOT fabricate Step1_Sent_At.');
+    assertEquals_(prospectBefore.Thread_ID, prospectAfter.Thread_ID, 'The fallback write must NOT fabricate Thread_ID — the ledger, not a guess, is authoritative for that.');
+
+    assertEquals_(1, GmailApp._callCounts.send, 'Exactly one real Gmail send must have occurred.');
+
+    var loggedFailure = _logBuffer.some(function (row) {
+      return row[5] === p.Prospect_ID && String(row[8]).indexOf('POST_SEND_PERSISTENCE_FAILURE') !== -1;
+    });
+    assert_(loggedFailure, 'The persistence failure must be observable in the log, not silently swallowed.');
+
+    // The ledger-level guard must independently hold regardless of which
+    // Prospects state resulted from the fallback.
+    assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The ledger-level block must hold independent of Prospects state.');
+
+    // Retry: NEEDS_REVIEW status means canSend_'s own eligibility check
+    // now short-circuits BEFORE the ledger check ever runs (a second,
+    // independent reason the key can't resend) — either SKIPPED reason is
+    // an acceptable exit as long as nothing was actually sent again.
+    var draftCountBefore = GmailApp.getDrafts().length;
+    var second = sendStep1(p.Prospect_ID);
+    assert_(second.status === 'SKIPPED_ALREADY_CLAIMED' || second.status === 'SKIPPED_NOT_ELIGIBLE',
+      'A retry must be blocked one way or another, not resend. Got: ' + second.status);
+    assertEquals_(draftCountBefore, GmailApp.getDrafts().length, 'A blocked retry must not create any new draft.');
+    assertEquals_(1, GmailApp._callCounts.send, 'Total real Gmail sends across the original attempt AND the retry must be EXACTLY 1.');
+  });
+}
+
+/**
+ * N6: exact reproduction of the real incident — BOTH the full write and
+ * the minimal fallback write fail (total Prospects persistence outage).
+ * Prospects must show ZERO change from its pre-send state — exactly what
+ * was observed on 2026-09-08 (Status=READY, Sequence_Step/Step1_Sent_At/
+ * Last_Contacted/Next_Action_Date all blank) — while the ledger alone
+ * still proves the send happened and still blocks any retry.
+ */
+function test_N6_postSendPersistenceFailureFallbackAlsoFailsExactIncidentReproduction_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_('n6persistdouble');
+    var prospectBefore = findRowById_(p.Prospect_ID).values;
+
+    GmailApp._resetCallCounts();
+    var originalWriteRowById = writeRowById_;
+    var writeAttempts = 0;
+    writeRowById_ = function () {
+      writeAttempts++;
+      throw new Error('N6 simulated: total Prospects persistence outage (full write AND fallback both fail).');
+    };
+
+    var outcome;
+    try {
+      outcome = sendStep1(p.Prospect_ID);
+    } finally {
+      writeRowById_ = originalWriteRowById;
+    }
+
+    assertEquals_(2, writeAttempts, 'Both the full write and the minimal fallback write must have been attempted.');
+    assertEquals_('SENT_PERSISTENCE_FAILED', outcome.status);
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(1, ledgerRows.length);
+    assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State,
+      'EXACT incident reproduction: the ledger reaches SENT even though Prospects persistence totally failed.');
+
+    // EXACT incident reproduction: Prospects shows NO change whatsoever —
+    // indistinguishable from "never sent" if the ledger were not consulted.
+    var prospectAfter = findRowById_(p.Prospect_ID).values;
+    assertEquals_(prospectBefore.Status, prospectAfter.Status, 'EXACT incident symptom: Status must remain unchanged (READY) when persistence totally fails.');
+    assertEquals_(prospectBefore.Sequence_Step, prospectAfter.Sequence_Step, 'EXACT incident symptom: Sequence_Step must remain unchanged.');
+    assertEquals_(prospectBefore.Step1_Sent_At, prospectAfter.Step1_Sent_At, 'EXACT incident symptom: Step1_Sent_At must remain unchanged.');
+    assertEquals_(prospectBefore.Last_Contacted, prospectAfter.Last_Contacted, 'EXACT incident symptom: Last_Contacted must remain unchanged.');
+    assertEquals_(prospectBefore.Thread_ID, prospectAfter.Thread_ID, 'EXACT incident symptom: Thread_ID must remain unchanged.');
+    assertEquals_(prospectBefore.Next_Action_Date, prospectAfter.Next_Action_Date, 'EXACT incident symptom: Next_Action_Date must remain unchanged.');
+
+    // The failure must still be fully traceable from the log even though
+    // Prospects shows nothing — this is what makes reconciliation possible
+    // without ever reopening the send key.
+    var sawPrimaryFailure = false, sawFallbackFailure = false;
+    _logBuffer.forEach(function (row) {
+      if (row[5] !== p.Prospect_ID) return;
+      var detail = String(row[8]);
+      if (detail.indexOf('POST_SEND_PERSISTENCE_FAILURE') !== -1 && detail.indexOf('Attempting a minimal fallback') !== -1) sawPrimaryFailure = true;
+      if (detail.indexOf('fallback write ALSO failed') !== -1) sawFallbackFailure = true;
+    });
+    assert_(sawPrimaryFailure, 'The primary persistence failure must be logged with enough detail to reconcile from SendLedger.');
+    assert_(sawFallbackFailure, 'The fallback failure must ALSO be logged — this is the worst case and must be the loudest.');
+
+    // N5 cross-check (explicitly required): the durable ledger-level
+    // block must hold regardless of Prospects being completely untouched.
+    assert_(isLiveKeyBlocked_(p.Prospect_ID, 1),
+      'N5 guarantee must still hold here: isLiveKeyBlocked_ blocks on the ledger SENT state alone, independent of Prospects.');
+
+    var draftCountBefore = GmailApp.getDrafts().length;
+    var second = sendStep1(p.Prospect_ID);
+    assertEquals_('SKIPPED_ALREADY_CLAIMED', second.status,
+      'A retry must be blocked at the ledger level even when Prospects looks exactly like a never-sent prospect.');
+    assertEquals_(draftCountBefore, GmailApp.getDrafts().length);
+    assertEquals_(1, GmailApp._callCounts.send,
+      'CRITICAL: total real Gmail sends must be EXACTLY 1 — a total Prospects persistence outage must never cause a duplicate LIVE email.');
+  });
+}
+
+/**
+ * N6: computeNextActionDate_ itself throwing (cadence math failure) after
+ * a CONFIRMED send is a distinct path from the Prospects-write failure
+ * above — the write would otherwise SUCCEED, but must be forced to
+ * NEEDS_REVIEW rather than silently entering IN_SEQUENCE with a blank
+ * Next_Action_Date (which would strand the prospect with no future
+ * eligibility, a different but equally silent failure mode).
+ */
+function test_N6_cadenceThrowAfterConfirmedSendForcesNeedsReview_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_('n6cadencethrow');
+    GmailApp._resetCallCounts();
+
+    var originalComputeNextActionDate = computeNextActionDate_;
+    computeNextActionDate_ = function () {
+      throw new Error('N6 simulated: cadence math failure (e.g. dateFromWallClock_ non-convergence).');
+    };
+
+    var outcome;
+    try {
+      outcome = sendStep1(p.Prospect_ID);
+    } finally {
+      computeNextActionDate_ = originalComputeNextActionDate;
+    }
+
+    assertEquals_('SENT', outcome.status, 'A cadence-math failure must NOT be reported as a persistence failure — the Prospects write itself still succeeds.');
+
+    var ledgerRows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === p.Prospect_ID && r.values.Step === 1 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State);
+
+    var prospectAfter = findRowById_(p.Prospect_ID).values;
+    assertEquals_(STATUS.NEEDS_REVIEW, prospectAfter.Status,
+      'A thrown cadence calculation must force NEEDS_REVIEW, never a silent IN_SEQUENCE with no Next_Action_Date.');
+    assertEquals_('', prospectAfter.Next_Action_Date, 'Next_Action_Date must be blank, not a guessed/partial value.');
+    assertEquals_(1, Number(prospectAfter.Sequence_Step), 'Sequence_Step must still advance — the send itself is real and confirmed.');
+
+    var loggedFailure = _logBuffer.some(function (row) {
+      return row[5] === p.Prospect_ID && String(row[8]).indexOf('computeNextActionDate_ threw') !== -1;
+    });
+    assert_(loggedFailure, 'The cadence failure must be observable in the log.');
+  });
+}
+
+/**
  * N5 items 4, 5: thread.reply() throws (ambiguous outcome) — durable
  * ledger block; a second execution must not reply again.
  */
@@ -3791,6 +3997,9 @@ var F1_TEST_FUNCTIONS = [
   ['N5_followUpNormalExactlyOnce', test_N5_normalConfirmedFollowUpRepliesExactlyOnce_],
   ['N5_multipleLiveClaimedAmbiguousBlocks', test_N5_multipleLiveClaimedAndAmbiguousRowsBlockWithoutSend_],
   ['N5_multipleLiveClaimedSentBlocks', test_N5_multipleLiveClaimedAndSentRowsBlockWithoutSend_],
+  ['N6_postSendPersistenceFallbackSucceeds', test_N6_postSendPersistenceFailureFallbackSucceeds_],
+  ['N6_postSendPersistenceExactIncidentReproduction', test_N6_postSendPersistenceFailureFallbackAlsoFailsExactIncidentReproduction_],
+  ['N6_cadenceThrowForcesNeedsReview', test_N6_cadenceThrowAfterConfirmedSendForcesNeedsReview_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

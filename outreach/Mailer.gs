@@ -1093,15 +1093,90 @@ var executeLiveSendForStep_;
     var thread = message.getThread();
     applyOutreachLabel_(thread, config);
 
+    // N6 (post-LIVE incident, 2026-09-08 — Acme Plumbing LLC): ONE captured
+    // instant, reused everywhere below. The old code called `new Date()`
+    // four separate times across Confirmed_At/Last_Contacted/Step1_Sent_At/
+    // the cadence calculation — each a few milliseconds apart. Not the
+    // incident's root cause, but a real inconsistency in what "the real
+    // send time" (I15) means once there are four slightly different
+    // timestamps claiming to be it.
+    var confirmedAt = new Date();
     updateLedgerRow_(ledgerRowNum, {
-      State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: new Date()
+      State: LEDGER_STATE.SENT, Thread_ID: thread.getId(), Message_ID: message.getId(), Confirmed_At: confirmedAt
     });
 
-    writeRowById_(prospectId, {
-      Status: STATUS.IN_SEQUENCE, Sequence_Step: 1, Last_Contacted: new Date(),
-      Step1_Sent_At: new Date(), Thread_ID: thread.getId(), Last_Message_ID: message.getId(),
-      Next_Action_Date: computeNextActionDate_(1, new Date(), config) || ''
-    }, { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+    // ------------------------------------------------------------------
+    // N6: Gmail send is now CONFIRMED (message.getId() proves it) and the
+    // ledger is already durably SENT above. From this point on, NOTHING
+    // that happens next may ever be allowed to look like "this email was
+    // never sent" — not to isLiveKeyBlocked_ (already fail-closed: SENT
+    // blocks retry regardless of what follows), and not to a human reading
+    // Prospects.
+    //
+    // The incident: computeNextActionDate_/writeRowById_ below can throw
+    // (cadence math, a Prospects schema/authorization guard, a transient
+    // Sheets error) — this used to be completely unprotected. The
+    // exception propagated out of doStep1Send_, past executeLiveSendForStep_
+    // (only a lock-release `finally`, no catch), past performLiveSend_,
+    // past sendStep1, and was finally caught by sendBatch()'s generic
+    // per-row `try/catch`, which logs it identically to an ordinary skip.
+    // Net effect: a real email went out, SendLedger correctly recorded
+    // SENT, and Prospects silently stayed at Status=READY forever — not
+    // merely stale, but PERMANENTLY stuck, because canSend_/
+    // isEligibleForNextStep_ gate on Prospects.Status and nothing ever
+    // advances it again (correctly: isLiveKeyBlocked_ also permanently
+    // refuses to let this key send again, so no duplicate — but no
+    // progress either).
+    //
+    // Fix: catch the Prospects write specifically. The ledger SENT row
+    // (already durable) remains the single source of truth — this block's
+    // job is only to make the failure LOUD and to leave the prospect in a
+    // state a human will actually notice (NEEDS_REVIEW), never silently
+    // indistinguishable from "not sent yet".
+    // ------------------------------------------------------------------
+    // NOTE: computeNextActionDate_ legitimately returns null when step 1 IS
+    // the last step (MAX_STEPS=1) — that is NOT an error. `cadenceThrew` is
+    // tracked separately so that legitimate case still gets exactly the
+    // pre-existing behavior (Status=IN_SEQUENCE, blank Next_Action_Date),
+    // unchanged. Only an actual thrown exception forces NEEDS_REVIEW.
+    var nextActionDate = null;
+    var cadenceThrew = false;
+    try {
+      nextActionDate = computeNextActionDate_(1, confirmedAt, config);
+    } catch (cadenceError) {
+      cadenceThrew = true;
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
+        'computeNextActionDate_ threw after a CONFIRMED send (Thread_ID=' + thread.getId() + ', Message_ID=' +
+        message.getId() + '): ' + cadenceError + '. Falling back to blank Next_Action_Date; Status will be forced to NEEDS_REVIEW.');
+    }
+
+    try {
+      writeRowById_(prospectId, {
+        Status: cadenceThrew ? STATUS.NEEDS_REVIEW : STATUS.IN_SEQUENCE,
+        Sequence_Step: 1, Last_Contacted: confirmedAt, Step1_Sent_At: confirmedAt,
+        Thread_ID: thread.getId(), Last_Message_ID: message.getId(), Next_Action_Date: nextActionDate || ''
+      }, { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+    } catch (persistError) {
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
+        'POST_SEND_PERSISTENCE_FAILURE: Gmail send is CONFIRMED (Thread_ID=' + thread.getId() + ', Message_ID=' +
+        message.getId() + ', SendLedger row ' + ledgerRowNum + '=SENT) but the full Prospects write failed: ' +
+        persistError + '. Attempting a minimal fallback write (Status=NEEDS_REVIEW only).');
+      try {
+        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+      } catch (fallbackError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, 1,
+          'POST_SEND_PERSISTENCE_FAILURE: the minimal NEEDS_REVIEW fallback write ALSO failed: ' + fallbackError +
+          '. Prospects for ' + prospectId + ' may still read its PRE-SEND state despite a CONFIRMED LIVE send ' +
+          '(SendLedger row ' + ledgerRowNum + ', Thread_ID=' + thread.getId() + ', Message_ID=' + message.getId() +
+          '). NEEDS MANUAL RECONCILIATION FROM SENDLEDGER — never automatic retry; isLiveKeyBlocked_ already ' +
+          'permanently blocks this key because the ledger row is SENT.');
+      }
+      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, prospectId, prospect.Email_Normalized, 1,
+        'LIVE step 1 sent (Gmail + SendLedger CONFIRMED); Prospects persistence failed and needs manual ' +
+        'reconciliation from SendLedger row ' + ledgerRowNum + '.');
+      return { status: 'SENT_PERSISTENCE_FAILED', ledgerRowNum: ledgerRowNum, threadId: thread.getId(), messageId: message.getId() };
+    }
 
     logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, prospectId, prospect.Email_Normalized, 1, 'LIVE step 1 sent.');
     return { status: 'SENT' };
@@ -1219,16 +1294,57 @@ var executeLiveSendForStep_;
     var sentMessage = messagesAfter[messagesAfter.length - 1];
 
     applyOutreachLabel_(repliedThread, config);
-    updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.SENT, Message_ID: sentMessage.getId(), Confirmed_At: new Date() });
+    // N6 (post-LIVE incident, 2026-09-08): one captured instant — see
+    // doStep1Send_'s matching comment above for why.
+    var confirmedAt = new Date();
+    updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.SENT, Message_ID: sentMessage.getId(), Confirmed_At: confirmedAt });
 
+    // N6: same fix as doStep1Send_ — Gmail's reply is CONFIRMED and the
+    // ledger is already durably SENT above, so a failure from here on must
+    // never look like "nothing was sent". See doStep1Send_'s docstring
+    // comment for the full incident writeup; this is the identical defect
+    // shape (computeNextActionDate_/writeRowById_ unprotected after
+    // ledger SENT), so it gets the identical fix.
     var stepColName = 'Step' + step + '_Sent_At';
-    var fields = { Sequence_Step: step, Last_Contacted: new Date(), Last_Message_ID: sentMessage.getId() };
-    fields[stepColName] = new Date();
-    var nextDate = computeNextActionDate_(step, new Date(), config);
-    fields.Status = nextDate ? STATUS.IN_SEQUENCE : STATUS.SEQUENCE_DONE;
+    var nextDate = null;
+    var cadenceThrew = false;
+    try {
+      nextDate = computeNextActionDate_(step, confirmedAt, config);
+    } catch (cadenceError) {
+      cadenceThrew = true;
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'computeNextActionDate_ threw after a CONFIRMED reply (Message_ID=' + sentMessage.getId() +
+        '): ' + cadenceError + '. Falling back to blank Next_Action_Date; Status will be forced to NEEDS_REVIEW.');
+    }
+    var fields = { Sequence_Step: step, Last_Contacted: confirmedAt, Last_Message_ID: sentMessage.getId() };
+    fields[stepColName] = confirmedAt;
+    fields.Status = cadenceThrew ? STATUS.NEEDS_REVIEW : (nextDate ? STATUS.IN_SEQUENCE : STATUS.SEQUENCE_DONE);
     fields.Next_Action_Date = nextDate || '';
 
-    writeRowById_(prospectId, fields, { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+    try {
+      writeRowById_(prospectId, fields, { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+    } catch (persistError) {
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'POST_SEND_PERSISTENCE_FAILURE: Gmail reply is CONFIRMED (Message_ID=' + sentMessage.getId() +
+        ', SendLedger row ' + ledgerRowNum + '=SENT) but the full Prospects write failed: ' + persistError +
+        '. Attempting a minimal fallback write (Status=NEEDS_REVIEW only).');
+      try {
+        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+      } catch (fallbackError) {
+        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+          'POST_SEND_PERSISTENCE_FAILURE: the minimal NEEDS_REVIEW fallback write ALSO failed: ' + fallbackError +
+          '. Prospects for ' + prospectId + ' may still read its PRE-SEND state despite a CONFIRMED LIVE reply ' +
+          '(SendLedger row ' + ledgerRowNum + ', Message_ID=' + sentMessage.getId() + '). NEEDS MANUAL ' +
+          'RECONCILIATION FROM SENDLEDGER — never automatic retry; isLiveKeyBlocked_ already permanently ' +
+          'blocks this key because the ledger row is SENT.');
+      }
+      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, prospectId, prospect.Email_Normalized, step,
+        'LIVE step ' + step + ' sent (Gmail + SendLedger CONFIRMED); Prospects persistence failed and needs ' +
+        'manual reconciliation from SendLedger row ' + ledgerRowNum + '.');
+      return { status: 'SENT_PERSISTENCE_FAILED', ledgerRowNum: ledgerRowNum, messageId: sentMessage.getId() };
+    }
+
     logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, prospectId, prospect.Email_Normalized, step, 'LIVE step ' + step + ' sent.');
     return { status: 'SENT' };
   }
