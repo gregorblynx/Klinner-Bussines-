@@ -69,8 +69,42 @@ function applyUnsubscribeEffects_(prospectId, origin, operation) {
   return { success: true, suppressionAdded: suppressionResult.added };
 }
 
-/** ADMIN menu action: "Process unsubscribe for selected row". */
+/**
+ * ADMIN menu action: "Process unsubscribe for selected row".
+ *
+ * The menu is the operator's explicit unsubscribe intent.  It must be a
+ * complete operation: requiring the operator to pre-edit
+ * Do_Not_Contact_Reason="unsubscribe" made this entry point unusable for a
+ * normal READY/REPLIED row, because applyUnsubscribeEffects_ deliberately
+ * rejects calls that do not already carry that intent marker.
+ *
+ * Establish the marker through the existing ADMIN_UNSUBSCRIBE write boundary
+ * first, then delegate the permanent stop + Suppression guarantee to the
+ * shared helper.  The ordering is fail-closed in either partial-failure case:
+ * once the intent write succeeds, Do_Not_Contact_Reason itself blocks every
+ * eligibility/send path; once Suppression exists, it independently blocks
+ * every future send.  Errors still propagate to the menu wrapper, so a
+ * partial failure is never reported as success and nightly reconciliation can
+ * complete any row left with the durable unsubscribe intent marker.
+ */
 function processUnsubscribeForSelectedRow(prospectId) {
+  var found = findRowById_(prospectId);
+  if (!found) throw new Error('processUnsubscribeForSelectedRow: Prospect_ID not found: ' + prospectId);
+
+  // Validate that a durable email-scope Suppression can actually be created
+  // before changing the row.  This avoids recording an unsubscribe intent
+  // that can never be completed because the prospect has no usable address.
+  var emailNormalized = found.values.Email_Normalized || normalizeEmail_(found.values.Email);
+  if (!emailNormalized) {
+    throw new Error('processUnsubscribeForSelectedRow: prospect ' + prospectId + ' has no usable email to suppress.');
+  }
+
+  var intentWrite = writeRowById_(prospectId, { Do_Not_Contact_Reason: DNC_REASON.UNSUBSCRIBE },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_UNSUBSCRIBE });
+  if (!intentWrite || intentWrite.success !== true) {
+    throw new Error('processUnsubscribeForSelectedRow: failed to persist administrative unsubscribe intent for ' + prospectId + '.');
+  }
+
   var result = applyUnsubscribeEffects_(prospectId, ORIGIN.ADMIN, OPERATION.ADMIN_UNSUBSCRIBE);
   flushLog_();
   return result;

@@ -599,6 +599,198 @@ function test_T34_originSeparation_() {
 }
 
 /**
+ * Administrative-unsubscribe regression: the official menu entry point is
+ * itself the operator's unsubscribe intent. A READY or REPLIED prospect
+ * must not require a manual pre-edit of Do_Not_Contact_Reason, and replay
+ * must remain idempotent on the durable Suppression triple.
+ */
+function test_adminUnsubscribeCompletesFromBlankReasonAndIsIdempotent_() {
+  var gmailBefore = JSON.stringify(GmailApp._callCounts);
+  var ledgerBefore = readAllLedgerRows_().length;
+
+  function createFixture(label, status, replied) {
+    var email = testUniqueEmail_(label);
+    var repliedAt = replied ? new Date('2026-09-09T16:27:00.000Z') : '';
+    var row = addTestProspectRow_({
+      Email: email,
+      Problem_Found: 'Controlled administrative unsubscribe regression.',
+      Status: status,
+      Replied: replied,
+      Replied_At: repliedAt,
+      Do_Not_Contact_Reason: '',
+      Stop_Contact: false,
+      Next_Action_Date: replied ? '' : new Date('2026-09-12T15:00:00.000Z')
+    });
+    var id = Utilities.getUuid();
+    var normalized = normalizeEmail_(email);
+    assignNewProspectIdAndFields_(row, {
+      Prospect_ID: id,
+      Date_Added: new Date(),
+      Email_Normalized: normalized,
+      Domain: extractDomain_(normalized),
+      Domain_Type: DOMAIN_TYPE.CORPORATE
+    }, { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+    // Track before the production call so teardown remains safe even if an
+    // assertion or a later stage of the operation throws.
+    _testCreatedSuppressionValues.push(normalized);
+    return { row: row, id: id, email: normalized, repliedAt: repliedAt };
+  }
+
+  var replied = createFixture('admin-unsub-replied', STATUS.REPLIED, true);
+  var repliedBefore = getTestProspectByRow_(replied.row);
+  assertEquals_('', repliedBefore.Do_Not_Contact_Reason,
+    'Precondition: a normal REPLY must not itself become an unsubscribe.');
+  assertEquals_(false, !!findSuppressionEntry_(replied.email, SUPPRESSION_SCOPE.EMAIL),
+    'Precondition: ReplySync semantics must not create permanent Suppression for a normal reply.');
+
+  var first = processUnsubscribeForSelectedRow(replied.id);
+  assertEquals_(true, first.success, 'Official administrative unsubscribe must succeed for a REPLIED prospect with blank DNC reason.');
+  assertEquals_(true, first.suppressionAdded, 'First administrative unsubscribe must create the durable Suppression row.');
+
+  var repliedAfter = getTestProspectByRow_(replied.row);
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, repliedAfter.Do_Not_Contact_Reason,
+    'Administrative unsubscribe must persist Do_Not_Contact_Reason=unsubscribe itself.');
+  assertEquals_(true, repliedAfter.Stop_Contact, 'Administrative unsubscribe must set Stop_Contact=TRUE.');
+  assertEquals_(STATUS.STOPPED, repliedAfter.Status, 'Administrative unsubscribe must set Status=STOPPED.');
+  assertEquals_('', repliedAfter.Next_Action_Date, 'Administrative unsubscribe must clear Next_Action_Date.');
+  assertEquals_(true, repliedAfter.Replied, 'Permanent unsubscribe must preserve the historical Replied=TRUE fact.');
+  assertEquals_(replied.repliedAt.getTime(), new Date(repliedAfter.Replied_At).getTime(),
+    'Permanent unsubscribe must preserve the historical Replied_At timestamp.');
+
+  var exactRows = readAllSuppression_().filter(function (s) {
+    return s.Value === replied.email && s.Scope === SUPPRESSION_SCOPE.EMAIL && s.Reason === DNC_REASON.UNSUBSCRIBE;
+  });
+  assertEquals_(1, exactRows.length, 'Exactly one email-scope/unsubscribe Suppression row must exist.');
+  assertEquals_('operator', exactRows[0].Added_By, 'The official menu action must attribute Suppression to the operator.');
+  assertEquals_(false, isEligibleForNextStep_(repliedAfter, getConfig(), new Date()),
+    'A permanently unsubscribed prospect must be excluded by production eligibility.');
+  assertEquals_(false, canSend_(repliedAfter, 2, getConfig(), new Date('2030-01-01T00:00:00.000Z')),
+    'A permanently unsubscribed prospect must be rejected by the hard LIVE send guard.');
+
+  var replay2 = processUnsubscribeForSelectedRow(replied.id);
+  var replay3 = processUnsubscribeForSelectedRow(replied.id);
+  assertEquals_(false, replay2.suppressionAdded, 'Second administrative unsubscribe must be an idempotent no-op for Suppression.');
+  assertEquals_(false, replay3.suppressionAdded, 'Third administrative unsubscribe must be an idempotent no-op for Suppression.');
+  exactRows = readAllSuppression_().filter(function (s) {
+    return s.Value === replied.email && s.Scope === SUPPRESSION_SCOPE.EMAIL && s.Reason === DNC_REASON.UNSUBSCRIBE;
+  });
+  assertEquals_(1, exactRows.length, 'Replay must never duplicate the exact unsubscribe Suppression row.');
+
+  var ready = createFixture('admin-unsub-ready', STATUS.READY, false);
+  var readyResult = processUnsubscribeForSelectedRow(ready.id);
+  var readyAfter = getTestProspectByRow_(ready.row);
+  assertEquals_(true, readyResult.success, 'Official administrative unsubscribe must also succeed for a READY prospect with blank DNC reason.');
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, readyAfter.Do_Not_Contact_Reason, 'READY prospect must receive the same durable unsubscribe intent.');
+  assertEquals_(STATUS.STOPPED, readyAfter.Status, 'READY prospect must become STOPPED.');
+  assert_(!!findSuppressionEntry_(ready.email, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE),
+    'READY prospect must receive its exact durable email-scope/unsubscribe Suppression row.');
+
+  assertEquals_(gmailBefore, JSON.stringify(GmailApp._callCounts),
+    'Administrative unsubscribe must not invoke any Gmail primitive.');
+  assertEquals_(ledgerBefore, readAllLedgerRows_().length,
+    'Administrative unsubscribe must not create or mutate LIVE ledger rows.');
+}
+
+/**
+ * Partial failures must be visible and fail closed. No branch is allowed to
+ * return success unless the complete administrative unsubscribe procedure
+ * finished, while any durable intent already written must keep blocking sends.
+ */
+function test_adminUnsubscribeFailuresAreVisibleAndFailClosed_() {
+  var gmailBefore = JSON.stringify(GmailApp._callCounts);
+  var ledgerBefore = readAllLedgerRows_().length;
+
+  var missingThrew = false;
+  try {
+    processUnsubscribeForSelectedRow('missing-admin-unsubscribe-id');
+  } catch (e) { missingThrew = true; }
+  assertEquals_(true, missingThrew, 'An invalid selected row must be rejected visibly.');
+
+  var noEmailRow = addTestProspectRow_({ Email: '', Email_Normalized: '', Status: STATUS.READY, Problem_Found: 'x' });
+  var noEmailId = Utilities.getUuid();
+  assignNewProspectIdAndFields_(noEmailRow, { Prospect_ID: noEmailId, Date_Added: new Date() },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+  var noEmailThrew = false;
+  try {
+    processUnsubscribeForSelectedRow(noEmailId);
+  } catch (e2) { noEmailThrew = true; }
+  assertEquals_(true, noEmailThrew, 'A selected row without a suppressible email must be rejected visibly.');
+  assertEquals_('', getTestProspectByRow_(noEmailRow).Do_Not_Contact_Reason,
+    'Prevalidation failure must not claim an unsubscribe intent that can never be completed.');
+
+  var suppressionEmail = testUniqueEmail_('admin-unsub-suppression-fail');
+  var suppressionNormalized = normalizeEmail_(suppressionEmail);
+  var suppressionRow = addTestProspectRow_({ Email: suppressionEmail, Status: STATUS.READY, Problem_Found: 'x' });
+  var suppressionId = Utilities.getUuid();
+  assignNewProspectIdAndFields_(suppressionRow, {
+    Prospect_ID: suppressionId, Date_Added: new Date(), Email_Normalized: suppressionNormalized,
+    Domain: extractDomain_(suppressionNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE
+  }, { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+  _testCreatedSuppressionValues.push(suppressionNormalized);
+
+  var suppressionSheet = getSheet_(SHEET_NAMES.SUPPRESSION);
+  var originalAppendRow = suppressionSheet.appendRow;
+  var suppressionFailureThrew = false;
+  try {
+    suppressionSheet.appendRow = function () { throw new Error('TEST_INJECTED_SUPPRESSION_WRITE_FAILURE'); };
+    processUnsubscribeForSelectedRow(suppressionId);
+  } catch (e3) {
+    suppressionFailureThrew = String(e3 && e3.message || e3).indexOf('TEST_INJECTED_SUPPRESSION_WRITE_FAILURE') !== -1;
+  } finally {
+    suppressionSheet.appendRow = originalAppendRow;
+  }
+  assertEquals_(true, suppressionFailureThrew, 'Suppression write failure must propagate; the menu must not report false success.');
+  assertEquals_(false, !!findSuppressionEntry_(suppressionNormalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE),
+    'A failed Suppression append must not fabricate a durable Suppression row.');
+  var suppressionAfter = getTestProspectByRow_(suppressionRow);
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, suppressionAfter.Do_Not_Contact_Reason,
+    'If Suppression persistence fails, the already-durable unsubscribe intent must remain as a fail-closed send block.');
+  assertEquals_(false, canSend_(suppressionAfter, 1, getConfig(), new Date()),
+    'The durable unsubscribe intent must independently block LIVE after Suppression failure.');
+
+  var stateEmail = testUniqueEmail_('admin-unsub-state-fail');
+  var stateNormalized = normalizeEmail_(stateEmail);
+  var stateRow = addTestProspectRow_({ Email: stateEmail, Status: STATUS.READY, Problem_Found: 'x' });
+  var stateId = Utilities.getUuid();
+  assignNewProspectIdAndFields_(stateRow, {
+    Prospect_ID: stateId, Date_Added: new Date(), Email_Normalized: stateNormalized,
+    Domain: extractDomain_(stateNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE
+  }, { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+  _testCreatedSuppressionValues.push(stateNormalized);
+
+  var originalWriteRowById = writeRowById_;
+  var targetWriteCalls = 0;
+  var stateFailureThrew = false;
+  try {
+    writeRowById_ = function (prospectId, fields, options) {
+      if (prospectId === stateId) {
+        targetWriteCalls++;
+        if (targetWriteCalls === 2) throw new Error('TEST_INJECTED_PROSPECT_STATE_WRITE_FAILURE');
+      }
+      return originalWriteRowById(prospectId, fields, options);
+    };
+    processUnsubscribeForSelectedRow(stateId);
+  } catch (e4) {
+    stateFailureThrew = String(e4 && e4.message || e4).indexOf('TEST_INJECTED_PROSPECT_STATE_WRITE_FAILURE') !== -1;
+  } finally {
+    writeRowById_ = originalWriteRowById;
+  }
+  assertEquals_(true, stateFailureThrew, 'Prospect-state write failure must propagate; the menu must not report false success.');
+  assertEquals_(false, !!findSuppressionEntry_(stateNormalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE),
+    'Failure before Suppression creation must not fabricate a completed unsubscribe.');
+  var stateAfter = getTestProspectByRow_(stateRow);
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, stateAfter.Do_Not_Contact_Reason,
+    'A state-write failure after intent persistence must retain the fail-closed unsubscribe marker.');
+  assertEquals_(false, canSend_(stateAfter, 1, getConfig(), new Date()),
+    'The retained intent marker must prevent a send even though the full state transition failed.');
+
+  assertEquals_(gmailBefore, JSON.stringify(GmailApp._callCounts),
+    'Every administrative unsubscribe failure path must avoid Gmail completely.');
+  assertEquals_(ledgerBefore, readAllLedgerRows_().length,
+    'Every administrative unsubscribe failure path must leave SendLedger unchanged.');
+}
+
+/**
  * Codex finding #1, negative cases: writing a column outside an operation's
  * allow-list must be rejected for EVERY combination, not just the ones T34
  * happens to exercise. Each of Step1_Sent_At/Status/DNC/Thread_ID is tried
@@ -4098,6 +4290,8 @@ var F1_TEST_FUNCTIONS = [
   ['T29_T30_T31_T32', test_T29_T30_T31_T32_unsubscribeAndResetGuards_],
   ['T33', test_T33_validateAllRowsPersistsUnderDryRun_],
   ['T34', test_T34_originSeparation_],
+  ['adminUnsubscribeCompleteAndIdempotent', test_adminUnsubscribeCompletesFromBlankReasonAndIsIdempotent_],
+  ['adminUnsubscribeFailuresFailClosed', test_adminUnsubscribeFailuresAreVisibleAndFailClosed_],
   ['T35', test_T35_digestSkipsSendWhenAdminEmailPending_],
   ['finding1_writeBoundary', test_finding1_writeBoundaryRejectsOutOfScopeColumns_],
   ['N4_systemCannotSetUnsubscribe', test_N4_systemOperationsCannotSetUnsubscribeReason_],
