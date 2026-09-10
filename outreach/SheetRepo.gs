@@ -309,10 +309,10 @@ function getSeedTemplates_() {
   var note4 = 'Step 4 — breakup. No pressure, door left open. +7 business days.';
 
   var body1 = 'Hi {{Contact_Name|there}},\n\n' +
-    "I was looking at {{Business_Name}}'s online presence in {{City}}, {{State}} and noticed {{Problem_Found}}.\n\n" +
+    'I was looking at {{Business_Name}} and noticed {{Problem_Found}}.\n\n' +
     '{{Personalization_Line|}}\n\n' +
-    'Would it be worth a quick look?\n\n' +
-    'Best,\n{{Sender_Name}}\n\n' +
+    'Would you be open to a quick conversation to see if we could be useful when you need additional coverage?\n\n' +
+    'Best,\n{{Sender_Name}}\nklinnercleaning.com\n\n' +
     '{{Physical_Address}}\n{{Unsubscribe_Line}}';
 
   var body2 = 'Hi {{Contact_Name|there}},\n\n' +

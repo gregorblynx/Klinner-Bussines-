@@ -3910,6 +3910,39 @@ function test_finding14_whitespaceOnlyFieldsCountAsBlank_() {
   assertEquals_('Line: default text', rendered, 'A whitespace-only value for a field WITH a fallback must use the fallback (finding #14).');
 }
 
+/** Step-1 production copy: reusable merge fields, website, CTA and F0 footer all render exactly. */
+function test_step1WebsiteAndApprovedManageCopy_() {
+  var config = Object.assign({}, getConfig(), {
+    SENDER_NAME: 'Klinner Cleaning & Maintenance',
+    PHYSICAL_ADDRESS: '526 Grove Creek Ave, Nashville, TN 37214',
+    UNSUBSCRIBE_LINE: 'If you\'d prefer not to receive further emails from Klinner, reply "unsubscribe" and we\'ll remove you from future outreach.'
+  });
+  var prospect = {
+    Business_Name: 'Manage My Nashville Property',
+    Contact_Name: '',
+    City: 'Nashville',
+    State: 'TN',
+    Problem_Found: 'your team manages short-term rentals and includes professional cleaning as part of the operation',
+    Personalization_Line: 'Klinner Cleaning & Maintenance provides local cleaning support in Nashville, including turnover cleaning and flexible backup when your regular team needs extra capacity.'
+  };
+  var rendered = renderTemplateForStep_(1, prospect, config);
+  var expectedBody = 'Hi there,\n\n' +
+    'I was looking at Manage My Nashville Property and noticed your team manages short-term rentals and includes professional cleaning as part of the operation.\n\n' +
+    'Klinner Cleaning & Maintenance provides local cleaning support in Nashville, including turnover cleaning and flexible backup when your regular team needs extra capacity.\n\n' +
+    'Would you be open to a quick conversation to see if we could be useful when you need additional coverage?\n\n' +
+    'Best,\nKlinner Cleaning & Maintenance\nklinnercleaning.com\n\n' +
+    '526 Grove Creek Ave, Nashville, TN 37214\n' +
+    'If you\'d prefer not to receive further emails from Klinner, reply "unsubscribe" and we\'ll remove you from future outreach.';
+
+  assertEquals_('A quick note about Manage My Nashville Property', rendered.subject,
+    'Step-1 subject must preserve the reusable Business_Name merge field.');
+  assertEquals_(expectedBody, rendered.body,
+    'Step-1 must render the approved Manage copy, website, clear CTA and compliance footer exactly.');
+  assert_(rendered.body.indexOf('{{') === -1 && rendered.body.indexOf('PENDING_F0') === -1 &&
+    rendered.body.indexOf('TEST EDIT') === -1 && rendered.body.indexOf('KLINNER PREVIEW') === -1,
+    'Rendered production copy must contain no broken variables, F0 placeholders or test/preview markers.');
+}
+
 /**
  * Google-real diagnostic fix: confirmed on the real "Klinner Outreach —
  * F1 Test" Sheet that numeric-looking Config values (MAX_PER_DAY etc.)
@@ -4367,6 +4400,7 @@ var F1_TEST_FUNCTIONS = [
   ['finding12_protectionPolicy', test_finding12_protectionEditorPolicyNeverThrows_],
   ['finding13_publicDomainToggle', test_finding13_publicDomainPolicyToggleIsConsulted_],
   ['finding14_whitespaceBlank', test_finding14_whitespaceOnlyFieldsCountAsBlank_],
+  ['step1WebsiteApprovedManageCopy', test_step1WebsiteAndApprovedManageCopy_],
   ['configValuePlainTextFormat', test_configValueColumnIsPlainTextFormatted_],
   ['N3_repairSendLedgerColumns', test_N3_repairSendLedgerColumnsIsIdempotentAndAdditive_],
   ['ghostRowsNeverBecomeProspects', test_ghostRowsNeverBecomeProspects_],
