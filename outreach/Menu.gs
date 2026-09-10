@@ -16,6 +16,8 @@ function onOpen() {
     .addItem('Delete Klinner preview drafts', 'menu_deletePreviewDrafts_')
     .addSeparator()
     .addItem('Check LIVE readiness (F0)', 'menu_checkLiveReadiness_')
+    .addItem('Arm one-shot LIVE config…', 'menu_armLiveConfig_')
+    .addItem('Restore SAFE config', 'menu_restoreSafeLiveConfig_')
     .addItem('Send now (LIVE)', 'menu_sendNowLive_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
@@ -106,6 +108,41 @@ function menu_checkLiveReadiness_() {
       lines.push('F0 config: ' + r.pendingF0Keys.length + ' key(s) still PENDING_F0: ' + r.pendingF0Keys.join(', '));
     }
     ui.alert('Check LIVE readiness (F0)', lines.join('\n'), ui.ButtonSet.OK);
+  });
+}
+
+/** Exact, programmatic LIVE arming. This changes Config only and never sends. */
+function menu_armLiveConfig_() {
+  guardedMenuAction_(function (ui) {
+    var response = ui.prompt('Arm one-shot LIVE config',
+      'Approved MAX_PER_DAY (positive integer). This does NOT send email:', ui.ButtonSet.OK_CANCEL);
+    if (response.getSelectedButton() !== ui.Button.OK) return;
+    var raw = response.getResponseText().trim();
+    if (!/^[1-9][0-9]*$/.test(raw)) {
+      throw new Error('MAX_PER_DAY must be a positive integer with no extra characters.');
+    }
+    var cap = Number(raw);
+    var confirm = ui.alert('Confirm LIVE Config arm',
+      'Config only — no email will be sent by this action.\n\n' +
+      'DRY_RUN=FALSE\nPAUSE_ALL=FALSE\nMAX_PER_DAY=' + cap + '\nMAX_PER_RUN=1\n\nContinue?',
+      ui.ButtonSet.YES_NO);
+    if (confirm !== ui.Button.YES) return;
+    var state = armLiveConfig(cap);
+    ui.alert('LIVE Config armed',
+      'Exact read-back verified:\nDRY_RUN=' + state.DRY_RUN + '\nPAUSE_ALL=' + state.PAUSE_ALL +
+      '\nMAX_PER_DAY=' + state.MAX_PER_DAY + '\nMAX_PER_RUN=' + state.MAX_PER_RUN,
+      ui.ButtonSet.OK);
+  });
+}
+
+/** Exact, programmatic SAFE restoration. PAUSE_ALL is restored first. */
+function menu_restoreSafeLiveConfig_() {
+  guardedMenuAction_(function (ui) {
+    var state = restoreSafeLiveConfig();
+    ui.alert('SAFE Config restored',
+      'Exact read-back verified:\nDRY_RUN=' + state.DRY_RUN + '\nPAUSE_ALL=' + state.PAUSE_ALL +
+      '\nMAX_PER_DAY=' + state.MAX_PER_DAY + '\nMAX_PER_RUN=' + state.MAX_PER_RUN,
+      ui.ButtonSet.OK);
   });
 }
 

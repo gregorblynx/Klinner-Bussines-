@@ -3981,6 +3981,136 @@ function test_configValueColumnIsPlainTextFormatted_() {
   assertEquals_('@', sheet.getRange(maxPerDayRow, 2).getNumberFormat(), 'Format must still be plain text after the repair helper runs.');
 }
 
+function captureLiveControlRawForTest_() {
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var out = {};
+  for (var i = 0; i < LIVE_CONTROL_KEYS_.length; i++) {
+    var key = LIVE_CONTROL_KEYS_[i];
+    out[key] = sheet.getRange(findUniqueConfigRow_(key), 2).getValue();
+  }
+  return out;
+}
+
+function restoreLiveControlRawForTest_(snapshot) {
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  for (var i = 0; i < LIVE_CONTROL_KEYS_.length; i++) {
+    var key = LIVE_CONTROL_KEYS_[i];
+    sheet.getRange(findUniqueConfigRow_(key), 2).setValue(snapshot[key]);
+  }
+  resetConfigCache_();
+}
+
+function test_liveConfigControlExactArmAndSafeRestoreNoSideEffects_() {
+  var baseline = captureLiveControlRawForTest_();
+  var originalWrite = writeLiveControlValueExact_;
+  var gmailBefore = JSON.stringify(GmailApp._callCounts);
+  var sentBefore = MailApp._sent.length;
+  var prospectsBefore = JSON.stringify(getSheet_(SHEET_NAMES.PROSPECTS).data);
+  var ledgerBefore = JSON.stringify(getSheet_(SHEET_NAMES.SEND_LEDGER).data);
+  try {
+    restoreSafeLiveConfig();
+    var armOrder = [];
+    writeLiveControlValueExact_ = function (key, value) {
+      armOrder.push(key + '=' + value);
+      return originalWrite(key, value);
+    };
+    var armed = armLiveConfig(3);
+    writeLiveControlValueExact_ = originalWrite;
+    assertEquals_(false, armed.PAUSE_ALL, 'ARMED must disable PAUSE_ALL last.');
+    assertEquals_(false, armed.DRY_RUN, 'ARMED must set DRY_RUN=FALSE.');
+    assertEquals_(3, armed.MAX_PER_DAY, 'ARMED must use the exact approved daily cap.');
+    assertEquals_(1, armed.MAX_PER_RUN, 'ARMED must force MAX_PER_RUN=1.');
+    assertEquals_('PAUSE_ALL=true|MAX_PER_RUN=1|MAX_PER_DAY=3|DRY_RUN=false|PAUSE_ALL=false', armOrder.join('|'),
+      'ARMED write order must keep PAUSE_ALL TRUE until the final write.');
+
+    var restoreOrder = [];
+    writeLiveControlValueExact_ = function (key, value) {
+      restoreOrder.push(key + '=' + value);
+      return originalWrite(key, value);
+    };
+    var safe = restoreSafeLiveConfig();
+    writeLiveControlValueExact_ = originalWrite;
+    assertEquals_(true, safe.PAUSE_ALL, 'SAFE must restore PAUSE_ALL=TRUE.');
+    assertEquals_(true, safe.DRY_RUN, 'SAFE must restore DRY_RUN=TRUE.');
+    assertEquals_(1, safe.MAX_PER_DAY, 'SAFE must restore MAX_PER_DAY=1.');
+    assertEquals_(1, safe.MAX_PER_RUN, 'SAFE must preserve MAX_PER_RUN=1.');
+    assertEquals_('PAUSE_ALL=true|DRY_RUN=true|MAX_PER_DAY=1|MAX_PER_RUN=1', restoreOrder.join('|'),
+      'SAFE restoration must write PAUSE_ALL=TRUE first.');
+    assertEquals_(gmailBefore, JSON.stringify(GmailApp._callCounts), 'Config controls must invoke no Gmail primitive.');
+    assertEquals_(sentBefore, MailApp._sent.length, 'Config controls must send no MailApp email.');
+    assertEquals_(prospectsBefore, JSON.stringify(getSheet_(SHEET_NAMES.PROSPECTS).data), 'Config controls must not mutate Prospects.');
+    assertEquals_(ledgerBefore, JSON.stringify(getSheet_(SHEET_NAMES.SEND_LEDGER).data), 'Config controls must not mutate SendLedger.');
+  } finally {
+    writeLiveControlValueExact_ = originalWrite;
+    restoreLiveControlRawForTest_(baseline);
+  }
+}
+
+function test_liveConfigControlRejectsMalformedValuesWithoutWrites_() {
+  var baseline = captureLiveControlRawForTest_();
+  var boolRejected = false;
+  var intRejected = false;
+  try {
+    try { normalizeLiveControlValue_('PAUSE_ALL', 'FALSEFALSE'); } catch (e) { boolRejected = true; }
+    try { armLiveConfig('3x'); } catch (e2) { intRejected = true; }
+    assert_(boolRejected, 'Malformed boolean input must be rejected.');
+    assert_(intRejected, 'Malformed integer input must be rejected before any write.');
+    assertEquals_(JSON.stringify(baseline), JSON.stringify(captureLiveControlRawForTest_()),
+      'Malformed input must leave every LIVE control cell unchanged.');
+  } finally {
+    restoreLiveControlRawForTest_(baseline);
+  }
+}
+
+function test_liveConfigControlPartialArmAndReadBackFailureFailClosed_() {
+  var baseline = captureLiveControlRawForTest_();
+  var originalWrite = writeLiveControlValueExact_;
+  try {
+    restoreSafeLiveConfig();
+    var corruptedOnce = false;
+    writeLiveControlValueExact_ = function (key, value) {
+      var result = originalWrite(key, value);
+      if (!corruptedOnce && key === 'MAX_PER_DAY' && value === 3) {
+        corruptedOnce = true;
+        getSheet_(SHEET_NAMES.CONFIG).getRange(findUniqueConfigRow_(key), 2).setValue('3oops');
+        resetConfigCache_();
+      }
+      return result;
+    };
+    var threw = false;
+    try { armLiveConfig(3); } catch (e) { threw = true; }
+    assert_(threw, 'A corrupted read-back must abort arming.');
+    assertLiveControlStateExact_({ PAUSE_ALL: true, DRY_RUN: true, MAX_PER_DAY: 1, MAX_PER_RUN: 1 },
+      'Partial-arm recovery');
+  } finally {
+    writeLiveControlValueExact_ = originalWrite;
+    restoreLiveControlRawForTest_(baseline);
+  }
+}
+
+function test_liveConfigControlRestorationFailureIsLoudAndPaused_() {
+  var baseline = captureLiveControlRawForTest_();
+  var originalWrite = writeLiveControlValueExact_;
+  try {
+    restoreSafeLiveConfig();
+    armLiveConfig(3);
+    writeLiveControlValueExact_ = function (key, value) {
+      if (key === 'DRY_RUN' && value === true) throw new Error('Simulated SAFE restoration write failure.');
+      return originalWrite(key, value);
+    };
+    var message = '';
+    try { restoreSafeLiveConfig(); } catch (e) { message = String(e.message || e); }
+    assert_(message.indexOf('SAFE Config restoration FAILED') !== -1,
+      'Restoration failure must be surfaced loudly, not reported as success.');
+    assertEquals_(true, readLiveControlValueExact_('PAUSE_ALL').value,
+      'PAUSE_ALL must already be TRUE before any later restoration step can fail.');
+  } finally {
+    writeLiveControlValueExact_ = originalWrite;
+    try { restoreSafeLiveConfig(); } catch (ignored) {}
+    restoreLiveControlRawForTest_(baseline);
+  }
+}
+
 /**
  * N3 V2 schema migration: repairSendLedgerColumns_ (SheetRepo.gs) must be
  * additive-only (never touch columns A-M or any data row) and idempotent
@@ -4402,6 +4532,10 @@ var F1_TEST_FUNCTIONS = [
   ['finding14_whitespaceBlank', test_finding14_whitespaceOnlyFieldsCountAsBlank_],
   ['step1WebsiteApprovedManageCopy', test_step1WebsiteAndApprovedManageCopy_],
   ['configValuePlainTextFormat', test_configValueColumnIsPlainTextFormatted_],
+  ['liveConfigExactArmSafeRestore', test_liveConfigControlExactArmAndSafeRestoreNoSideEffects_],
+  ['liveConfigRejectsMalformed', test_liveConfigControlRejectsMalformedValuesWithoutWrites_],
+  ['liveConfigPartialArmFailsClosed', test_liveConfigControlPartialArmAndReadBackFailureFailClosed_],
+  ['liveConfigRestoreFailureLoud', test_liveConfigControlRestorationFailureIsLoudAndPaused_],
   ['N3_repairSendLedgerColumns', test_N3_repairSendLedgerColumnsIsIdempotentAndAdditive_],
   ['ghostRowsNeverBecomeProspects', test_ghostRowsNeverBecomeProspects_],
   ['ghostRowFixtureNonDestructive', test_ghostRowFixtureIsNonDestructive_],

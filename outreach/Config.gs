@@ -99,6 +99,163 @@ function resetConfigCache_() {
   _configCache = null;
 }
 
+// ---------------------------------------------------------------------------
+// Exact operator control for one-shot LIVE arming / safe restoration
+// ---------------------------------------------------------------------------
+
+var LIVE_CONTROL_KEYS_ = ['PAUSE_ALL', 'DRY_RUN', 'MAX_PER_DAY', 'MAX_PER_RUN'];
+
+/** Returns the unique Config row for `key`; duplicates are unsafe and fail closed. */
+function findUniqueConfigRow_(key) {
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var lastRow = sheet.getLastRow();
+  var matches = [];
+  if (lastRow >= 2) {
+    var keys = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < keys.length; i++) {
+      if (String(keys[i][0] || '').trim() === key) matches.push(i + 2);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error('Config control blocked: expected exactly one row for ' + key + ', found ' + matches.length + '.');
+  }
+  return matches[0];
+}
+
+/** Strict serializer. Unlike getConfig(), malformed FALSE-like strings are rejected. */
+function normalizeLiveControlValue_(key, value) {
+  if (LIVE_CONTROL_KEYS_.indexOf(key) === -1) {
+    throw new Error('Config control blocked: unsupported key ' + key + '.');
+  }
+  if (key === 'PAUSE_ALL' || key === 'DRY_RUN') {
+    if (typeof value !== 'boolean') {
+      throw new Error('Config control blocked: ' + key + ' must be the boolean true or false.');
+    }
+    return value ? 'TRUE' : 'FALSE';
+  }
+  if (typeof value !== 'number' || !isFinite(value) || Math.floor(value) !== value || value < 1) {
+    throw new Error('Config control blocked: ' + key + ' must be a positive integer.');
+  }
+  return String(value);
+}
+
+/** Reads one control value and requires a canonical raw representation. */
+function readLiveControlValueExact_(key) {
+  var row = findUniqueConfigRow_(key);
+  var raw = String(getSheet_(SHEET_NAMES.CONFIG).getRange(row, 2).getValue()).trim();
+  if (key === 'PAUSE_ALL' || key === 'DRY_RUN') {
+    if (raw !== 'TRUE' && raw !== 'FALSE') {
+      throw new Error('Config control blocked: ' + key + ' contains malformed raw value "' + raw + '".');
+    }
+    return { key: key, raw: raw, value: raw === 'TRUE' };
+  }
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error('Config control blocked: ' + key + ' contains malformed raw value "' + raw + '".');
+  }
+  return { key: key, raw: raw, value: Number(raw) };
+}
+
+/** Writes one control cell exactly, flushes, then verifies raw AND typed read-back. */
+function writeLiveControlValueExact_(key, value) {
+  var expectedRaw = normalizeLiveControlValue_(key, value);
+  var row = findUniqueConfigRow_(key);
+  var cell = getSheet_(SHEET_NAMES.CONFIG).getRange(row, 2);
+  cell.setNumberFormat('@');
+  cell.setValue(expectedRaw);
+  SpreadsheetApp.flush();
+  resetConfigCache_();
+
+  var actual = readLiveControlValueExact_(key);
+  if (actual.raw !== expectedRaw || actual.value !== value) {
+    throw new Error('Config control read-back failed for ' + key + ': expected ' + expectedRaw + ', got ' + actual.raw + '.');
+  }
+  return actual;
+}
+
+function readLiveControlStateExact_() {
+  return {
+    PAUSE_ALL: readLiveControlValueExact_('PAUSE_ALL').value,
+    DRY_RUN: readLiveControlValueExact_('DRY_RUN').value,
+    MAX_PER_DAY: readLiveControlValueExact_('MAX_PER_DAY').value,
+    MAX_PER_RUN: readLiveControlValueExact_('MAX_PER_RUN').value
+  };
+}
+
+function assertLiveControlStateExact_(expected, label) {
+  var actual = readLiveControlStateExact_();
+  for (var i = 0; i < LIVE_CONTROL_KEYS_.length; i++) {
+    var key = LIVE_CONTROL_KEYS_[i];
+    if (actual[key] !== expected[key]) {
+      throw new Error((label || 'Config control') + ' verification failed: ' + key +
+        ' expected ' + expected[key] + ', got ' + actual[key] + '.');
+    }
+  }
+  return actual;
+}
+
+/** Internal restore body. Caller must already hold the script lock. */
+function restoreSafeLiveConfigUnlocked_() {
+  // Master kill switch FIRST. Every later failure therefore remains fail closed.
+  writeLiveControlValueExact_('PAUSE_ALL', true);
+  writeLiveControlValueExact_('DRY_RUN', true);
+  writeLiveControlValueExact_('MAX_PER_DAY', 1);
+  writeLiveControlValueExact_('MAX_PER_RUN', 1);
+  return assertLiveControlStateExact_({
+    PAUSE_ALL: true, DRY_RUN: true, MAX_PER_DAY: 1, MAX_PER_RUN: 1
+  }, 'SAFE Config');
+}
+
+/**
+ * Establishes the exact one-shot LIVE control state without sending email.
+ * Requires the canonical SAFE state as its starting point. PAUSE_ALL is
+ * disabled LAST. Any failure attempts an immediate SAFE restoration before
+ * surfacing the error; a failed restoration is reported explicitly.
+ */
+function armLiveConfig(approvedMaxPerDay) {
+  normalizeLiveControlValue_('MAX_PER_DAY', approvedMaxPerDay); // validate before any write
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('LIVE Config arm blocked: script lock busy.');
+  try {
+    assertLiveControlStateExact_({
+      PAUSE_ALL: true, DRY_RUN: true, MAX_PER_DAY: 1, MAX_PER_RUN: 1
+    }, 'Pre-arm SAFE Config');
+
+    writeLiveControlValueExact_('PAUSE_ALL', true);
+    writeLiveControlValueExact_('MAX_PER_RUN', 1);
+    writeLiveControlValueExact_('MAX_PER_DAY', approvedMaxPerDay);
+    writeLiveControlValueExact_('DRY_RUN', false);
+    writeLiveControlValueExact_('PAUSE_ALL', false); // LAST safety switch disabled
+
+    return assertLiveControlStateExact_({
+      PAUSE_ALL: false, DRY_RUN: false,
+      MAX_PER_DAY: approvedMaxPerDay, MAX_PER_RUN: 1
+    }, 'ARMED Config');
+  } catch (armError) {
+    try {
+      restoreSafeLiveConfigUnlocked_();
+    } catch (restoreError) {
+      throw new Error('LIVE Config arm failed: ' + String(armError.message || armError) +
+        ' SAFE RESTORATION ALSO FAILED: ' + String(restoreError.message || restoreError));
+    }
+    throw new Error('LIVE Config arm failed closed and SAFE state was restored: ' + String(armError.message || armError));
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Public operator-safe restoration. Does not touch Gmail, Ledger or Prospects. */
+function restoreSafeLiveConfig() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('SAFE Config restoration blocked: script lock busy.');
+  try {
+    return restoreSafeLiveConfigUnlocked_();
+  } catch (e) {
+    throw new Error('SAFE Config restoration FAILED: ' + String(e.message || e));
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /** True if the given Config key currently holds the PENDING_F0 sentinel. */
 function isPendingF0_(key) {
   var config = getConfig();
