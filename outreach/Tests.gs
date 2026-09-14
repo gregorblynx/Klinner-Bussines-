@@ -2970,15 +2970,17 @@ function n5_setupFollowUpDueProspect_(emailTag, config) {
   var email = testUniqueEmail_(emailTag);
   var emailNormalized = normalizeEmail_(email);
   var thread = GmailApp._seedLiveThread(email, config.SENDER_EMAIL || 'outreach-test@example.com');
+  var priorMessageId = thread.getMessages()[0].getId();
   _testCreatedThreadIds_.push(thread.getId()); // P4: tracked for teardown.
   var past = new Date(); past.setDate(past.getDate() - 3);
   var row = addTestProspectRow_({
     Prospect_ID: Utilities.getUuid(), Email: email, Email_Normalized: emailNormalized,
     Domain: extractDomain_(emailNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE,
     Problem_Found: 'x', Status: STATUS.IN_SEQUENCE, Sequence_Step: 1,
-    Step1_Sent_At: past, Last_Contacted: past, Next_Action_Date: past, Thread_ID: thread.getId()
+    Step1_Sent_At: past, Last_Contacted: past, Next_Action_Date: past,
+    Thread_ID: thread.getId(), Last_Message_ID: priorMessageId
   });
-  return { p: getTestProspectByRow_(row), thread: thread };
+  return { p: getTestProspectByRow_(row), thread: thread, priorMessageId: priorMessageId };
 }
 
 /**
@@ -3714,6 +3716,168 @@ function test_N5_normalConfirmedFollowUpRepliesExactlyOnce_() {
     assert_(second.status !== 'SENT', 'A second execution must never actually send.');
     assertEquals_(messagesBefore + 1, setup.thread.getMessages().length, 'No second reply must have been sent.');
   });
+}
+
+/** Follow-up API: an outbound-only thread must explicitly target the Prospect, never its sender. */
+function test_followUpApiOutboundOnlyThreadUsesExplicitProspectRecipient_() {
+  withLiveModeEnabledForTest_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('api-explicit-to', config);
+    GmailApp._resetCallCounts();
+
+    var outcome = sendFollowUp(setup.p.Prospect_ID, 2);
+    assertEquals_('SENT', outcome.status);
+    assertEquals_(1, GmailApp._callCounts.apiSend, 'Advanced Gmail messages.send must be invoked exactly once.');
+    assertEquals_(0, GmailApp._callCounts.reply, 'GmailThread.reply must never be invoked.');
+
+    var messages = setup.thread.getMessages();
+    assertEquals_(2, messages.length, 'Exactly one follow-up message must be added.');
+    var sent = messages[1];
+    assertEquals_(setup.p.Email_Normalized, normalizeEmail_(sent.getTo()), 'To must be the prospect, never the executing sender.');
+    assertEquals_(config.SENDER_EMAIL, extractEmailForFingerprint_(sent.getFrom()));
+    assertEquals_(setup.thread.getId(), sent._threadId, 'The existing Gmail threadId must be preserved.');
+    assertEquals_('<mock-' + setup.priorMessageId + '@example.test>', sent._headers['In-Reply-To']);
+    assert_(sent._headers.References.indexOf(sent._headers['In-Reply-To']) !== -1,
+      'References must include the previous RFC Message-ID.');
+  });
+}
+
+/** A mismatch between raw Email and Email_Normalized must fail before claim and before Gmail. */
+function test_followUpApiExplicitRecipientMismatchFailsBeforeSend_() {
+  withLiveModeEnabledForTest_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('api-to-mismatch', config);
+    var found = findRowById_(setup.p.Prospect_ID);
+    getSheet_(SHEET_NAMES.PROSPECTS).getRange(found.rowIndex, PROSPECTS_COLUMNS.Email).setValue('different-recipient@example.net');
+    GmailApp._resetCallCounts();
+
+    var outcome = sendFollowUp(setup.p.Prospect_ID, 2);
+    assertEquals_('NEEDS_REVIEW_FOLLOWUP_METADATA', outcome.status);
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'Recipient mismatch must block before Gmail messages.send.');
+    var rows = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === setup.p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    });
+    assertEquals_(0, rows.length, 'A pre-send validation failure must not create a LIVE claim.');
+  });
+}
+
+function test_followUpApiSendExceptionIsAmbiguousAndNeverRetried_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n5_setupFollowUpDueProspect_('api-send-throws', getConfig());
+    GmailApp._resetCallCounts();
+    var originalSend = Gmail.Users.Messages.send;
+    Gmail.Users.Messages.send = function () {
+      GmailApp._callCounts.apiSend++;
+      throw new Error('Simulated uncertain Gmail API messages.send failure.');
+    };
+    var threw = false;
+    try { sendFollowUp(setup.p.Prospect_ID, 2); } catch (e) { threw = true; }
+    finally { Gmail.Users.Messages.send = originalSend; }
+    assert_(threw, 'The uncertain send exception must be surfaced.');
+
+    var row = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === setup.p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    })[0];
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, row.values.State);
+    assertEquals_(1, GmailApp._callCounts.apiSend);
+    var replay = sendFollowUp(setup.p.Prospect_ID, 2);
+    assert_(replay.status !== 'SENT');
+    assertEquals_(1, GmailApp._callCounts.apiSend, 'Replay of an AMBIGUOUS key must make zero additional send calls.');
+  });
+}
+
+function test_followUpApiWrongReturnedRecipientBecomesAmbiguous_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n5_setupFollowUpDueProspect_('api-wrong-to', getConfig());
+    GmailApp._resetCallCounts();
+    var originalGet = Gmail.Users.Messages.get;
+    Gmail.Users.Messages.get = function (userId, messageId, options) {
+      var resource = originalGet(userId, messageId, options);
+      if (messageId !== setup.priorMessageId) {
+        resource.payload.headers.forEach(function (h) { if (h.name === 'To') h.value = 'jhessyca@example.test'; });
+      }
+      return resource;
+    };
+    var threw = false;
+    try { sendFollowUp(setup.p.Prospect_ID, 2); } catch (e) { threw = true; }
+    finally { Gmail.Users.Messages.get = originalGet; }
+    assert_(threw, 'A returned message with the wrong To must be ambiguous.');
+    var row = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === setup.p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    })[0];
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, row.values.State);
+    assertEquals_(1, GmailApp._callCounts.apiSend, 'Verification failure must never retry SEND.');
+  });
+}
+
+function test_followUpApiReturnedThreadMismatchBecomesAmbiguous_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n5_setupFollowUpDueProspect_('api-wrong-thread', getConfig());
+    GmailApp._resetCallCounts();
+    var originalSend = Gmail.Users.Messages.send;
+    Gmail.Users.Messages.send = function (resource, userId) {
+      var result = originalSend(resource, userId);
+      result.threadId = 'wrong-thread-id';
+      return result;
+    };
+    var threw = false;
+    try { sendFollowUp(setup.p.Prospect_ID, 2); } catch (e) { threw = true; }
+    finally { Gmail.Users.Messages.send = originalSend; }
+    assert_(threw, 'A returned threadId mismatch must be ambiguous.');
+    var row = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === setup.p.Prospect_ID && r.values.Step === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    })[0];
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, row.values.State);
+    assertEquals_(1, GmailApp._callCounts.apiSend);
+  });
+}
+
+function test_followUpApiMetadataReadRetriesWithoutResending_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n5_setupFollowUpDueProspect_('api-read-retry', getConfig());
+    GmailApp._resetCallCounts();
+    var originalGet = Gmail.Users.Messages.get;
+    var transientFailures = 0;
+    Gmail.Users.Messages.get = function (userId, messageId, options) {
+      if (messageId !== setup.priorMessageId && transientFailures < 2) {
+        transientFailures++;
+        GmailApp._callCounts.apiGet++;
+        throw new Error('Simulated eventual-consistency read miss.');
+      }
+      return originalGet(userId, messageId, options);
+    };
+    var outcome;
+    try { outcome = sendFollowUp(setup.p.Prospect_ID, 2); }
+    finally { Gmail.Users.Messages.get = originalGet; }
+    assertEquals_('SENT', outcome.status);
+    assertEquals_(2, transientFailures, 'Two bounded read failures must be tolerated.');
+    assertEquals_(1, GmailApp._callCounts.apiSend, 'Read retries must never retry the SEND.');
+  });
+}
+
+function test_followUpApiExistingAmbiguousKeyBlocksAllGmailCalls_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n5_setupFollowUpDueProspect_('api-existing-ambiguous', getConfig());
+    appendLedgerRow_({
+      Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: setup.p.Prospect_ID,
+      Email_Normalized: setup.p.Email_Normalized, Step: 2,
+      Idempotency_Key: getIdempotencyKey_(setup.p.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE,
+      State: LEDGER_STATE.AMBIGUOUS, Thread_ID: setup.thread.getId(), Message_ID: '', Draft_ID: '',
+      Confirmed_At: '', Error: 'controlled ambiguity'
+    });
+    GmailApp._resetCallCounts();
+    var outcome = sendFollowUp(setup.p.Prospect_ID, 2);
+    assertEquals_('SKIPPED_ALREADY_CLAIMED', outcome.status);
+    assertEquals_(0, GmailApp._callCounts.apiGet, 'Ledger guard must run before Gmail metadata reads.');
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'AMBIGUOUS must block Gmail send.');
+  });
+}
+
+function test_step2TemplateIncludesWebsite_() {
+  var template = getActiveTemplateForStep_(2);
+  assert_(template && template.Active === true);
+  assert_(String(template.Body || '').indexOf('klinnercleaning.com') !== -1,
+    'The reusable Step-2 template must include the Klinner website.');
 }
 
 /**
@@ -4507,10 +4671,13 @@ var F1_TEST_FUNCTIONS = [
   ['finding8_liveEntryPoint', test_finding8_liveHelpersAreNotGlobalEntryPoints_],
   ['N5_step1ThrowsDurableBlock', test_N5_step1SendThrowsDurablyBlocksLedgerEvenIfProspectsWriteFails_],
   ['N5_step1NormalExactlyOnce', test_N5_normalConfirmedStep1SendsExactlyOnce_],
-  ['N5_followUpThrowsDurableBlock', test_N5_followUpReplyThrowsDurablyBlocksLedger_],
-  ['N5_followUpReplyAndProspectsBothThrow', test_N5_followUpReplyThrowsAndProspectsWriteThrowsStillBlocksAtLedger_],
-  ['N5_followUpMismatchDurableBlock', test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFails_],
-  ['N5_followUpNormalExactlyOnce', test_N5_normalConfirmedFollowUpRepliesExactlyOnce_],
+  ['N5_followUpThrowsDurableBlock', test_followUpApiSendExceptionIsAmbiguousAndNeverRetried_],
+  ['N5_followUpExplicitRecipient', test_followUpApiOutboundOnlyThreadUsesExplicitProspectRecipient_],
+  ['N5_followUpRecipientMismatchPreSend', test_followUpApiExplicitRecipientMismatchFailsBeforeSend_],
+  ['N5_followUpWrongReturnedRecipient', test_followUpApiWrongReturnedRecipientBecomesAmbiguous_],
+  ['N5_followUpReturnedThreadMismatch', test_followUpApiReturnedThreadMismatchBecomesAmbiguous_],
+  ['N5_followUpMetadataReadRetries', test_followUpApiMetadataReadRetriesWithoutResending_],
+  ['N5_followUpExistingAmbiguousBlocks', test_followUpApiExistingAmbiguousKeyBlocksAllGmailCalls_],
   ['N5_multipleLiveClaimedAmbiguousBlocks', test_N5_multipleLiveClaimedAndAmbiguousRowsBlockWithoutSend_],
   ['N5_multipleLiveClaimedSentBlocks', test_N5_multipleLiveClaimedAndSentRowsBlockWithoutSend_],
   ['N6_postSendPersistenceFallbackSucceeds', test_N6_postSendPersistenceFailureFallbackSucceeds_],
@@ -4531,6 +4698,7 @@ var F1_TEST_FUNCTIONS = [
   ['finding13_publicDomainToggle', test_finding13_publicDomainPolicyToggleIsConsulted_],
   ['finding14_whitespaceBlank', test_finding14_whitespaceOnlyFieldsCountAsBlank_],
   ['step1WebsiteApprovedManageCopy', test_step1WebsiteAndApprovedManageCopy_],
+  ['step2Website', test_step2TemplateIncludesWebsite_],
   ['configValuePlainTextFormat', test_configValueColumnIsPlainTextFormatted_],
   ['liveConfigExactArmSafeRestore', test_liveConfigControlExactArmAndSafeRestoreNoSideEffects_],
   ['liveConfigRejectsMalformed', test_liveConfigControlRejectsMalformedValuesWithoutWrites_],
@@ -4841,7 +5009,8 @@ function snapshotSandboxState_() {
     if (GmailApp._callCounts) {
       callCounts = {
         createDraft: GmailApp._callCounts.createDraft, createDraftReply: GmailApp._callCounts.createDraftReply,
-        send: GmailApp._callCounts.send, reply: GmailApp._callCounts.reply
+        send: GmailApp._callCounts.send, reply: GmailApp._callCounts.reply,
+        apiSend: GmailApp._callCounts.apiSend, apiGet: GmailApp._callCounts.apiGet
       };
     }
   } catch (e) { gmailState = { drafts: 'GMAIL_STATE_FAILED', threads: '', labels: '', sentIndex: '', callCounts: '' }; }
@@ -4858,6 +5027,8 @@ function snapshotSandboxState_() {
     'GmailApp.getDrafts': GmailApp.getDrafts,
     'GmailApp.search': GmailApp.search,
     'GmailApp.getThreadById': GmailApp.getThreadById,
+    'Gmail.Users.Messages.send': Gmail.Users.Messages.send,
+    'Gmail.Users.Messages.get': Gmail.Users.Messages.get,
     'appendLedgerRow_': appendLedgerRow_,
     'updateLedgerRow_': updateLedgerRow_,
     'writeLedgerMetadataThenState_': writeLedgerMetadataThenState_,

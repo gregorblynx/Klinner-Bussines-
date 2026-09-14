@@ -335,6 +335,16 @@ function createMockUtilities() {
       throw new Error('Mock Utilities.formatDate: unsupported pattern "' + pattern + '"');
     },
     sleep: function () { /* no-op in tests */ },
+    base64EncodeWebSafe: function (value) {
+      return Buffer.from(String(value), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
+    },
+    base64DecodeWebSafe: function (value) {
+      var standard = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+      return Array.prototype.slice.call(Buffer.from(standard, 'base64'));
+    },
+    newBlob: function (bytes) {
+      return { getDataAsString: function () { return Buffer.from(bytes).toString('utf8'); } };
+    },
     /**
      * Real Apps Script Utilities.computeDigest(algorithm, value, charset)
      * returns a signed byte array (-128..127). Node's crypto gives unsigned
@@ -363,18 +373,29 @@ function createMockGmailApp() {
   var threadCounter = 0;
   var labels = {};
   var threads = {}; // id -> thread mock, for _seedLiveThread / getThreadById
+  var messagesById = {}; // Gmail internal id -> message; backs the Advanced Gmail service.
   var sentIndex = []; // {recipientEmail, thread} — backs search(), populated by draft.send()
   // N3/N5 (Codex re-audit): real call counters for the three Gmail side
   // effects that can create/send something. Behavioral tests assert EXACT
   // counts ("exactly one send ever happened"), which is a far stronger
   // proof than inspecting resulting state — state can look identical
   // whether an operation ran once or twice-with-one-failure.
-  var callCounts = { createDraft: 0, createDraftReply: 0, send: 0, reply: 0 };
+  var callCounts = { createDraft: 0, createDraftReply: 0, send: 0, reply: 0, apiSend: 0, apiGet: 0 };
 
-  function makeMessage(from, to, subject, body) {
+  function makeMessage(from, to, subject, body, metadata) {
     messageCounter++;
     var id = 'msg-' + messageCounter;
-    return {
+    metadata = metadata || {};
+    var message = {
+      _id: id,
+      _threadId: metadata.threadId || '',
+      _headers: {
+        From: from, To: to, Subject: subject,
+        'Message-ID': metadata.rfcMessageId || ('<mock-' + id + '@example.test>'),
+        'In-Reply-To': metadata.inReplyTo || '', References: metadata.references || '',
+        'X-Klinner-Body-SHA256': metadata.bodyHash || ''
+      },
+      _body: body,
       getId: function () { return id; },
       getFrom: function () { return from; },
       getTo: function () { return to; },
@@ -385,6 +406,8 @@ function createMockGmailApp() {
         return 'From: ' + from + '\r\nTo: ' + to + '\r\nSubject: ' + subject + '\r\n\r\n' + body;
       }
     };
+    messagesById[id] = message;
+    return message;
   }
 
   function makeDraft(to, subject, body, thread) {
@@ -473,7 +496,7 @@ function createMockGmailApp() {
     }, 'SENT_INDEX_ENUMERATION_FAILED');
 
     var countSig = 'createDraft=' + callCounts.createDraft + ',createDraftReply=' + callCounts.createDraftReply +
-      ',send=' + callCounts.send + ',reply=' + callCounts.reply;
+      ',send=' + callCounts.send + ',reply=' + callCounts.reply + ',apiSend=' + callCounts.apiSend + ',apiGet=' + callCounts.apiGet;
 
     return { drafts: draftSig, threads: threadSig, labels: labelSig, sentIndex: sentSig, callCounts: countSig };
   }
@@ -485,6 +508,7 @@ function createMockGmailApp() {
     _callCounts: callCounts,
     _resetCallCounts: function () {
       callCounts.createDraft = 0; callCounts.createDraftReply = 0; callCounts.send = 0; callCounts.reply = 0;
+      callCounts.apiSend = 0; callCounts.apiGet = 0;
     },
     /** P3: full shared-state signature — see stateSignature() above. */
     _stateSignature: stateSignature,
@@ -499,12 +523,18 @@ function createMockGmailApp() {
       callCounts.createDraftReply = values.createDraftReply || 0;
       callCounts.send = values.send || 0;
       callCounts.reply = values.reply || 0;
+      callCounts.apiSend = values.apiSend || 0;
+      callCounts.apiGet = values.apiGet || 0;
     },
     _labelNames: function () { return Object.keys(labels).slice(); },
     /** P3: teardown for a label a test created. */
     _removeLabelForTest: function (name) { delete labels[name]; },
     /** Test-only: removes a thread seeded by _seedLiveThread so a test leaves no residual mock state. */
     _removeThreadForTest: function (threadId) {
+      var doomed = threads[threadId];
+      if (doomed && doomed.getMessages) {
+        doomed.getMessages().forEach(function (m) { delete messagesById[m.getId()]; });
+      }
       delete threads[threadId];
       for (var i = sentIndex.length - 1; i >= 0; i--) {
         if (sentIndex[i].thread && sentIndex[i].thread.getId() === threadId) sentIndex.splice(i, 1);
@@ -548,7 +578,7 @@ function createMockGmailApp() {
     _seedLiveThread: function (recipientEmail, senderEmail) {
       threadCounter++;
       var threadId = 'live-thread-' + threadCounter;
-      var messages = [makeMessage(senderEmail, recipientEmail, 'A quick note', 'Original outreach body.')];
+      var messages = [makeMessage(senderEmail, recipientEmail, 'A quick note', 'Original outreach body.', { threadId: threadId })];
       var thread = {
         getId: function () { return threadId; },
         getMessages: function () { return messages.slice(); },
@@ -567,7 +597,68 @@ function createMockGmailApp() {
       };
       threads[threadId] = thread;
       return thread;
+    },
+    _messagesById: messagesById,
+    _makeApiSentMessage: function (fields, threadId) {
+      var message = makeMessage(fields.From, fields.To, fields.Subject, fields.body, {
+        threadId: threadId, inReplyTo: fields['In-Reply-To'], references: fields.References,
+        bodyHash: fields['X-Klinner-Body-SHA256']
+      });
+      message._threadId = threadId;
+      if (!threads[threadId]) throw new Error('Mock Gmail API: unknown threadId ' + threadId);
+      var existing = threads[threadId];
+      var current = existing.getMessages();
+      current.push(message);
+      existing.getMessages = function () { return current.slice(); };
+      sentIndex.push({ recipientEmail: String(fields.To || '').toLowerCase(), thread: existing });
+      return message;
     }
+  };
+}
+
+function createMockGmailAdvancedService(gmailApp) {
+  function parseRaw(raw) {
+    var standard = String(raw || '').replace(/-/g, '+').replace(/_/g, '/');
+    var source = Buffer.from(standard, 'base64').toString('utf8');
+    var split = source.split(/\r?\n\r?\n/);
+    var headerLines = split.shift().split(/\r?\n/);
+    var headers = {};
+    headerLines.forEach(function (line) {
+      var colon = line.indexOf(':');
+      if (colon > 0) headers[line.slice(0, colon)] = line.slice(colon + 1).trim();
+    });
+    headers.body = split.join('\n\n');
+    return headers;
+  }
+
+  function resourceFor(message) {
+    return {
+      id: message._id,
+      threadId: message._threadId,
+      payload: {
+        body: { data: Buffer.from(String(message._body || ''), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_') },
+        headers: Object.keys(message._headers).filter(function (name) { return message._headers[name] !== ''; }).map(function (name) {
+          return { name: name, value: message._headers[name] };
+        })
+      }
+    };
+  }
+
+  return {
+    Users: { Messages: {
+      send: function (resource) {
+        gmailApp._callCounts.apiSend++;
+        var fields = parseRaw(resource.raw);
+        var message = gmailApp._makeApiSentMessage(fields, resource.threadId);
+        return { id: message._id, threadId: message._threadId };
+      },
+      get: function (userId, messageId) {
+        gmailApp._callCounts.apiGet++;
+        var message = gmailApp._messagesById[messageId];
+        if (!message) throw new Error('Mock Gmail API: message not found: ' + messageId);
+        return resourceFor(message);
+      }
+    } }
   };
 }
 
@@ -641,11 +732,12 @@ function buildSandbox() {
   sandbox.SpreadsheetApp = createMockSpreadsheetApp();
   sandbox.Utilities = createMockUtilities();
   sandbox.GmailApp = createMockGmailApp();
+  sandbox.Gmail = createMockGmailAdvancedService(sandbox.GmailApp);
   sandbox.LockService = createMockLockService();
   sandbox.ScriptApp = createMockScriptApp();
   sandbox.Session = {
     getScriptTimeZone: function () { return 'America/Chicago'; },
-    getEffectiveUser: function () { return { getEmail: function () { return 'test-runner@example.com'; } }; }
+    getEffectiveUser: function () { return { getEmail: function () { return 'test-resolved-sender_email@example.com'; } }; }
   };
   sandbox.MailApp = {
     _sent: [],

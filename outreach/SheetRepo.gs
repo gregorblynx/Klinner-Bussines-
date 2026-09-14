@@ -317,7 +317,7 @@ function getSeedTemplates_() {
 
   var body2 = 'Hi {{Contact_Name|there}},\n\n' +
     'Following up on my note about {{Business_Name}} — happy to send over what I found if useful.\n\n' +
-    'Best,\n{{Sender_Name}}\n\n' +
+    'Best,\n{{Sender_Name}}\nklinnercleaning.com\n\n' +
     '{{Physical_Address}}\n{{Unsubscribe_Line}}';
 
   var body3 = 'Hi {{Contact_Name|there}},\n\n' +

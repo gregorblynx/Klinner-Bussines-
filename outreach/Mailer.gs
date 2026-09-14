@@ -4,7 +4,7 @@
  *
  * SAFETY MODEL (read before touching this file):
  *   1. previewStep()/previewQueue() are safe BY CONSTRUCTION: they never
- *      call GmailApp...send(), GmailThread.reply(), or writeRowById_() with
+ *      call GmailApp...send(), Gmail API messages.send, or writeRowById_() with
  *      origin=PIPELINE. There is no DRY_RUN check that could be bypassed —
  *      the send/reply calls simply do not appear anywhere in that code path.
  *   2. LIVE sending has exactly ONE real entry point: executeLiveSendForStep_,
@@ -1199,121 +1199,226 @@ var executeLiveSendForStep_;
   }
 
   /**
-   * Follow-up send (step 2+). Codex finding #11: GmailApp.getThreadById()
-   * returning null (broken/deleted thread reference) is handled explicitly
-   * — the prospect is stopped into NEEDS_REVIEW rather than either
-   * throwing an ambiguous exception or silently doing nothing.
-   * Codex finding #7: GmailThread.reply(body) returns the GmailThread
-   * itself, NOT a GmailMessage — it has no .getId() that means "message
-   * id". The real, documented way to get the message that reply() just
-   * created is GmailThread.getMessages(), whose last element is that new
-   * message (reply() is synchronous and this is the only outbound call in
-   * this critical section, so nothing else can have appended a message
-   * in between). No Message_ID is invented.
+   * Google-real Step-2 incident (2026-09-11): GmailThread.reply() replies
+   * to the sender of the last message. In an outbound-only thread that
+   * sender was the executing Jhessyca account, so the controlled follow-up
+   * went back to Jhessyca instead of to the Prospect. The old immediate
+   * getMessages().length check also observed stale thread state and marked
+   * the attempt AMBIGUOUS even though the message appeared later.
    *
-   * ==========================================================================
-   * N5 CLOSED, round 2 (Codex final audit — was: BLOCKER BEFORE FIRST LIVE
-   * EMAIL). This function is still unreachable in F1 (DRY_RUN=TRUE + 5
-   * unresolved PENDING_F0 keys both block performLiveSend_ before this
-   * code can ever run) but every ambiguous outcome below now durably
-   * blocks the ledger row itself (LEDGER_STATE.AMBIGUOUS — see
-   * Constants.gs/Ledger.gs), not merely a secondary Prospects write.
-   *
-   * TWO ambiguous outcomes are handled identically, both ending in
-   * AMBIGUOUS:
-   *   1. thread.reply() itself THROWS — we don't know if Gmail published
-   *      the reply before/during/after the throw.
-   *   2. thread.reply() RETURNS but the message-count guard below trips
-   *      ("nothing else can have appended a message in between" assumes no
-   *      inbound reply lands in the narrow window between reply()
-   *      returning and the immediately-following getMessages() call — if
-   *      one does, messagesAfter.length is off by more than 1). reply()
-   *      DID return successfully here, so a message was almost certainly
-   *      sent — we just cannot prove which one is ours.
-   *
-   * Round 1 (previous audit) marked both cases LEDGER_STATE.FAILED, which
-   * isLiveKeyBlocked_ (Ledger.gs) does NOT treat as blocking — FAILED
-   * means "we KNOW nothing was sent", which is false for an ambiguous
-   * outcome. Round 1 then relied ENTIRELY on a second write
-   * (Prospects.Status=NEEDS_REVIEW) to prevent a retry — if THAT write
-   * also failed (Sheets API error, quota, anything), the prospect could
-   * stay eligible and a later sendBatch run could send a SECOND real
-   * follow-up. Round 2 closes this at the source: the ledger row is marked
-   * AMBIGUOUS (a durably blocking state, enforced by isLiveKeyBlocked_
-   * regardless of what happens to Prospects), and the Prospects
-   * NEEDS_REVIEW write is now purely a secondary, operational signal.
-   * ==========================================================================
+   * The replacement below never asks Gmail to infer a recipient. It uses
+   * Gmail API messages.send with explicit To/threadId/RFC reply headers,
+   * then verifies the exact returned message by its Gmail internal id.
+   * The SEND is never retried; bounded retries are limited to messages.get
+   * reads needed to tolerate Gmail's eventual-consistency window.
+   */
+  function gmailApiHeader_(messageResource, name) {
+    var headers = messageResource && messageResource.payload && messageResource.payload.headers || [];
+    var target = String(name || '').toLowerCase();
+    for (var i = 0; i < headers.length; i++) {
+      if (String(headers[i].name || '').toLowerCase() === target) return String(headers[i].value || '').trim();
+    }
+    return '';
+  }
+
+  function safeMimeHeader_(value, label) {
+    var s = String(value || '').trim();
+    if (!s || /[\r\n]/.test(s)) throw new Error('Follow-up blocked: invalid ' + label + ' header.');
+    return s;
+  }
+
+  function normalizedSingleAddress_(headerValue) {
+    var s = String(headerValue || '').trim();
+    if (!s || /[,;]/.test(s)) return '';
+    var match = /<([^<>]+)>/.exec(s);
+    return normalizeEmail_(match ? match[1] : s);
+  }
+
+  function decodedApiMessageBody_(messageResource) {
+    var data = messageResource && messageResource.payload && messageResource.payload.body && messageResource.payload.body.data;
+    if (!data) return '';
+    return Utilities.newBlob(Utilities.base64DecodeWebSafe(data)).getDataAsString('UTF-8');
+  }
+
+  function buildExplicitFollowUpMessage_(prospect, rendered, config, priorMessage) {
+    var recipient = normalizeEmail_(prospect.Email_Normalized);
+    if (!isValidEmailSyntax_(recipient) || recipient !== normalizeEmail_(prospect.Email)) {
+      throw new Error('Follow-up blocked: Email and Email_Normalized do not resolve to the same valid recipient.');
+    }
+
+    var sender = normalizeEmail_(config.SENDER_EMAIL);
+    var effectiveSender = normalizeEmail_(Session.getEffectiveUser().getEmail());
+    if (!isValidEmailSyntax_(sender) || effectiveSender !== sender) {
+      throw new Error('Follow-up blocked: effective user (' + effectiveSender + ') does not match SENDER_EMAIL (' + sender + ').');
+    }
+
+    var subject = safeMimeHeader_(gmailApiHeader_(priorMessage, 'Subject'), 'Subject');
+    var priorRfcMessageId = safeMimeHeader_(gmailApiHeader_(priorMessage, 'Message-ID'), 'previous Message-ID');
+    var priorReferences = gmailApiHeader_(priorMessage, 'References');
+    if (/[\r\n]/.test(priorReferences)) throw new Error('Follow-up blocked: invalid previous References header.');
+    var references = (priorReferences ? priorReferences + ' ' : '') + priorRfcMessageId;
+    var bodyHash = computeDraftFingerprint_(recipient, subject, rendered.body);
+    var fromHeader = safeMimeHeader_(config.SENDER_NAME, 'sender name') + ' <' + sender + '>';
+    var replyTo = normalizeEmail_(safeMimeHeader_(config.REPLY_TO, 'Reply-To'));
+    if (!isValidEmailSyntax_(replyTo)) throw new Error('Follow-up blocked: invalid Reply-To address.');
+
+    var mime = [
+      'From: ' + fromHeader,
+      'To: ' + recipient,
+      'Reply-To: ' + replyTo,
+      'Subject: ' + subject,
+      'In-Reply-To: ' + priorRfcMessageId,
+      'References: ' + references,
+      'X-Klinner-Body-SHA256: ' + bodyHash,
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      String(rendered.body || '')
+    ].join('\r\n');
+
+    return {
+      resource: { raw: Utilities.base64EncodeWebSafe(mime, Utilities.Charset.UTF_8).replace(/=+$/, ''), threadId: prospect.Thread_ID },
+      recipient: recipient, sender: sender, subject: subject, priorRfcMessageId: priorRfcMessageId,
+      references: references, bodyHash: bodyHash, body: String(rendered.body || '')
+    };
+  }
+
+  function verifyExplicitFollowUpMessage_(messageId, expected) {
+    var lastError = null;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        var actual = Gmail.Users.Messages.get('me', messageId, { format: 'full' });
+        var actualTo = normalizedSingleAddress_(gmailApiHeader_(actual, 'To'));
+        var actualFrom = normalizedSingleAddress_(gmailApiHeader_(actual, 'From'));
+        var actualBody = decodedApiMessageBody_(actual).replace(/\r\n/g, '\n');
+        var expectedBody = expected.body.replace(/\r\n/g, '\n');
+        if (actual.id === messageId && actual.threadId === expected.threadId &&
+            actualTo === expected.recipient && actualFrom === expected.sender &&
+            gmailApiHeader_(actual, 'Subject') === expected.subject &&
+            gmailApiHeader_(actual, 'In-Reply-To') === expected.priorRfcMessageId &&
+            gmailApiHeader_(actual, 'References') === expected.references &&
+            gmailApiHeader_(actual, 'X-Klinner-Body-SHA256') === expected.bodyHash &&
+            actualBody === expectedBody) {
+          return actual;
+        }
+        lastError = new Error('returned Gmail message metadata/body did not match the explicitly authorized follow-up');
+      } catch (readError) {
+        lastError = readError;
+      }
+      if (attempt < 3) Utilities.sleep(attempt * 500);
+    }
+    throw lastError || new Error('follow-up verification failed');
+  }
+
+  function markFollowUpAmbiguous_(ledgerRowNum, prospectId, prospect, step, error) {
+    updateLedgerRow_(ledgerRowNum, {
+      State: LEDGER_STATE.AMBIGUOUS,
+      Error: String(error) + ' (ambiguous outcome after Gmail API send invocation — durably blocked; SEND is never retried)'
+    });
+    try {
+      writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+        { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+    } catch (writeError) {
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'doFollowUpSend_: NEEDS_REVIEW write failed after an ambiguous Gmail API send: ' + writeError +
+        '. The ledger AMBIGUOUS row remains authoritative and blocks retry.');
+    }
+  }
+
+  /**
+   * Step 2+ uses the Advanced Gmail API, never GmailThread.reply(). The
+   * recipient comes only from the freshly re-read Prospect row. The stored
+   * Last_Message_ID is a Gmail INTERNAL message id (GmailMessage.getId()),
+   * not the RFC Message-ID header; the latter is fetched as metadata and
+   * used for In-Reply-To/References. Gmail API messages.send receives the
+   * exact existing threadId and explicit RFC headers. Its SEND call occurs
+   * exactly once. Only bounded, read-only messages.get calls may retry.
    */
   function doFollowUpSend_(prospectId, step, prospect, rendered, config) {
-    var thread = GmailApp.getThreadById(prospect.Thread_ID);
-    if (!thread) {
+    if (!prospect.Thread_ID || !prospect.Last_Message_ID) {
       writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
         { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-        'LIVE Thread_ID "' + prospect.Thread_ID + '" no longer resolves (deleted/moved?). ' +
-        'Stopped this prospect into NEEDS_REVIEW rather than risk a reply landing in the wrong place.');
+        'LIVE follow-up blocked: Thread_ID or Last_Message_ID is missing/unresolvable.');
       return { status: 'NEEDS_REVIEW_THREAD_NOT_FOUND' };
     }
 
+    var priorMessage;
+    var prepared;
+    try {
+      priorMessage = Gmail.Users.Messages.get('me', prospect.Last_Message_ID, { format: 'metadata' });
+      if (!priorMessage || priorMessage.threadId !== prospect.Thread_ID) {
+        throw new Error('stored Last_Message_ID does not belong to the stored Thread_ID');
+      }
+      prepared = buildExplicitFollowUpMessage_(prospect, rendered, config, priorMessage);
+    } catch (preSendError) {
+      writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
+        { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
+      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'LIVE follow-up blocked before claim/send: ' + preSendError);
+      return { status: 'NEEDS_REVIEW_FOLLOWUP_METADATA' };
+    }
+
     var ledgerRowNum = appendLedgerRow_({
-      Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prospect.Email_Normalized,
+      Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: prospectId, Email_Normalized: prepared.recipient,
       Step: step, Idempotency_Key: getIdempotencyKey_(prospectId, step), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,
       Thread_ID: prospect.Thread_ID, Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
     });
 
-    var messagesBefore = thread.getMessages().length;
-    var repliedThread;
+    // Final fresh row/suppression/state check after the durable claim and
+    // immediately before the one permitted Gmail SEND invocation. A
+    // script lock prevents another script execution, but it cannot prevent
+    // an operator from editing the Sheet, so never rely only on the earlier
+    // read in executeLiveSendForStep_. A failure here is definitively
+    // pre-send and may therefore be marked FAILED (not AMBIGUOUS).
+    var finalFound = findRowById_(prospectId);
+    var finalProspect = finalFound && finalFound.values;
+    if (!finalProspect || !canSend_(finalProspect, step, config, new Date()) ||
+        normalizeEmail_(finalProspect.Email_Normalized) !== prepared.recipient ||
+        normalizeEmail_(finalProspect.Email) !== prepared.recipient ||
+        String(finalProspect.Thread_ID || '') !== String(prospect.Thread_ID) ||
+        String(finalProspect.Last_Message_ID || '') !== String(prospect.Last_Message_ID)) {
+      updateLedgerRow_(ledgerRowNum, {
+        State: LEDGER_STATE.FAILED,
+        Error: 'PRE_SEND_REVALIDATION_FAILED: prospect state/recipient/thread changed after claim; Gmail was not invoked.'
+      });
+      return { status: 'SKIPPED_PRE_SEND_REVALIDATION' };
+    }
+
+    var sentResource;
     try {
-      repliedThread = thread.reply(rendered.body); // Returns GmailThread, not GmailMessage — see docstring.
-    } catch (replyError) {
-      // N5: reply() itself threw — durably block first (ledger), Prospects
-      // NEEDS_REVIEW second, purely as an operational signal. See docstring.
-      updateLedgerRow_(ledgerRowNum, {
-        State: LEDGER_STATE.AMBIGUOUS,
-        Error: String(replyError) + ' (ambiguous outcome — durably blocked in the ledger, never automatically retryable)'
-      });
-      try {
-        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
-          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
-      } catch (writeError) {
-        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-          'doFollowUpSend_: the Prospects NEEDS_REVIEW write ALSO failed after reply() threw: ' + writeError +
-          ' — this is a SECONDARY signal only; the ledger AMBIGUOUS state (already written above) still blocks retry regardless. NEEDS MANUAL REVIEW.');
-      }
-      throw replyError;
+      sentResource = Gmail.Users.Messages.send(prepared.resource, 'me');
+    } catch (sendError) {
+      markFollowUpAmbiguous_(ledgerRowNum, prospectId, prospect, step, sendError);
+      throw sendError;
     }
 
-    var messagesAfter = repliedThread.getMessages();
-    if (messagesAfter.length !== messagesBefore + 1) {
-      // N5: ambiguous outcome — never invent a Message_ID, and never leave
-      // this automatically retryable. Durably block the ledger row itself
-      // FIRST (AMBIGUOUS, not FAILED — see docstring); Prospects
-      // NEEDS_REVIEW is a secondary, operational signal only.
-      updateLedgerRow_(ledgerRowNum, {
-        State: LEDGER_STATE.AMBIGUOUS,
-        Error: 'Unexpected message count after reply() — ambiguous outcome, durably blocked in the ledger.'
-      });
-      try {
-        writeRowById_(prospectId, { Status: STATUS.NEEDS_REVIEW },
-          { origin: ORIGIN.PIPELINE, operation: OPERATION.PIPELINE_SEND });
-      } catch (writeError) {
-        logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-          'doFollowUpSend_: the Prospects NEEDS_REVIEW write ALSO failed after an ambiguous reply() outcome: ' + writeError +
-          ' — this is a SECONDARY signal only; the ledger AMBIGUOUS state (already written above) still blocks retry regardless. NEEDS MANUAL REVIEW.');
+    var sentMessageId = sentResource && String(sentResource.id || '');
+    try {
+      if (!sentMessageId || sentResource.threadId !== prospect.Thread_ID) {
+        throw new Error('Gmail API send returned a missing message id or mismatched threadId');
       }
-      logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-        'doFollowUpSend_: could not reliably identify the message reply() just created ' +
-        '(expected ' + (messagesBefore + 1) + ' messages, found ' + messagesAfter.length + '). ' +
-        'Ambiguous — may have actually sent. Durably blocked in SendLedger (AMBIGUOUS), not retried automatically.');
-      throw new Error('doFollowUpSend_: ambiguous outcome after reply() — durably blocked in SendLedger, see Log.');
+      verifyExplicitFollowUpMessage_(sentMessageId, {
+        threadId: prospect.Thread_ID, recipient: prepared.recipient, sender: prepared.sender,
+        subject: prepared.subject, priorRfcMessageId: prepared.priorRfcMessageId,
+        references: prepared.references, bodyHash: prepared.bodyHash, body: prepared.body
+      });
+    } catch (verifyError) {
+      markFollowUpAmbiguous_(ledgerRowNum, prospectId, prospect, step, verifyError);
+      throw new Error('doFollowUpSend_: Gmail API send outcome is ambiguous after exact-message verification: ' + verifyError);
     }
-    var sentMessage = messagesAfter[messagesAfter.length - 1];
 
-    applyOutreachLabel_(repliedThread, config);
-    // N6 (post-LIVE incident, 2026-09-08): one captured instant — see
-    // doStep1Send_'s matching comment above for why.
     var confirmedAt = new Date();
-    updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.SENT, Message_ID: sentMessage.getId(), Confirmed_At: confirmedAt });
+    updateLedgerRow_(ledgerRowNum, { State: LEDGER_STATE.SENT, Message_ID: sentMessageId, Confirmed_At: confirmedAt });
+    try {
+      var confirmedThread = GmailApp.getThreadById(prospect.Thread_ID);
+      if (confirmedThread) applyOutreachLabel_(confirmedThread, config);
+      else throw new Error('confirmed thread was not yet visible through GmailApp');
+    } catch (labelError) {
+      logEvent_(LOG_LEVEL.WARN, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
+        'Follow-up was confirmed SENT but applying the Gmail label failed: ' + labelError);
+    }
 
     // N6: same fix as doStep1Send_ — Gmail's reply is CONFIRMED and the
     // ledger is already durably SENT above, so a failure from here on must
@@ -1329,10 +1434,10 @@ var executeLiveSendForStep_;
     } catch (cadenceError) {
       cadenceThrew = true;
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-        'computeNextActionDate_ threw after a CONFIRMED reply (Message_ID=' + sentMessage.getId() +
+        'computeNextActionDate_ threw after a CONFIRMED reply (Message_ID=' + sentMessageId +
         '): ' + cadenceError + '. Falling back to blank Next_Action_Date; Status will be forced to NEEDS_REVIEW.');
     }
-    var fields = { Sequence_Step: step, Last_Contacted: confirmedAt, Last_Message_ID: sentMessage.getId() };
+    var fields = { Sequence_Step: step, Last_Contacted: confirmedAt, Last_Message_ID: sentMessageId };
     fields[stepColName] = confirmedAt;
     fields.Status = cadenceThrew ? STATUS.NEEDS_REVIEW : (nextDate ? STATUS.IN_SEQUENCE : STATUS.SEQUENCE_DONE);
     fields.Next_Action_Date = nextDate || '';
@@ -1353,7 +1458,7 @@ var executeLiveSendForStep_;
           '. The row is still durably SENT (blocking), but the Log is now the only record of the failure.');
       }
       logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
-        'POST_SEND_PERSISTENCE_FAILURE: Gmail reply is CONFIRMED (Message_ID=' + sentMessage.getId() +
+        'POST_SEND_PERSISTENCE_FAILURE: Gmail API follow-up is CONFIRMED (Message_ID=' + sentMessageId +
         ', SendLedger row ' + ledgerRowNum + '=SENT) but the full Prospects write failed: ' + persistError +
         '. Attempting a minimal fallback write (Status=NEEDS_REVIEW only).');
       try {
@@ -1363,14 +1468,14 @@ var executeLiveSendForStep_;
         logEvent_(LOG_LEVEL.ERROR, LOG_EVENT.ERROR, prospectId, prospect.Email_Normalized, step,
           'POST_SEND_PERSISTENCE_FAILURE: the minimal NEEDS_REVIEW fallback write ALSO failed: ' + fallbackError +
           '. Prospects for ' + prospectId + ' may still read its PRE-SEND state despite a CONFIRMED LIVE reply ' +
-          '(SendLedger row ' + ledgerRowNum + ', Message_ID=' + sentMessage.getId() + '). NEEDS MANUAL ' +
+          '(SendLedger row ' + ledgerRowNum + ', Message_ID=' + sentMessageId + '). NEEDS MANUAL ' +
           'RECONCILIATION FROM SENDLEDGER — never automatic retry; isLiveKeyBlocked_ already permanently ' +
           'blocks this key because the ledger row is SENT.');
       }
       logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, prospectId, prospect.Email_Normalized, step,
         'LIVE step ' + step + ' sent (Gmail + SendLedger CONFIRMED); Prospects persistence failed and needs ' +
         'manual reconciliation from SendLedger row ' + ledgerRowNum + '.');
-      return { status: 'SENT_PERSISTENCE_FAILED', ledgerRowNum: ledgerRowNum, messageId: sentMessage.getId() };
+      return { status: 'SENT_PERSISTENCE_FAILED', ledgerRowNum: ledgerRowNum, messageId: sentMessageId };
     }
 
     logEvent_(LOG_LEVEL.INFO, LOG_EVENT.SENT, prospectId, prospect.Email_Normalized, step, 'LIVE step ' + step + ' sent.');

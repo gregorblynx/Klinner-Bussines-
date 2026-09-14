@@ -64,7 +64,7 @@ var SCOPE_REQUIREMENTS = [
   { api: 'SpreadsheetApp (sheets read/write)', pattern: /SpreadsheetApp\.(getActiveSpreadsheet|getRange|newDataValidation|getActiveSheet)/, scope: 'https://www.googleapis.com/auth/spreadsheets' },
   { api: 'GmailApp.createDraft / GmailThread.createDraftReply / GmailDraft.deleteDraft', pattern: /(GmailApp\.createDraft|\.createDraftReply\(|\.deleteDraft\()/, scope: 'https://www.googleapis.com/auth/gmail.compose' },
   { api: 'GmailApp.getThreadById / .search / GmailThread.addLabel / label read-modify', pattern: /(GmailApp\.getThreadById|GmailApp\.search|\.addLabel\(|GmailApp\.(createLabel|getUserLabelByName))/, scope: 'https://www.googleapis.com/auth/gmail.modify' },
-  { api: 'GmailDraft.send / GmailThread.reply (actual sending)', pattern: /(\.send\(\)|\.reply\()/, scope: 'https://www.googleapis.com/auth/gmail.send' },
+  { api: 'GmailDraft.send / Advanced Gmail messages.send (actual sending)', pattern: /(\.send\(\)|Gmail\.Users\.Messages\.send)/, scope: 'https://www.googleapis.com/auth/gmail.send' },
   { api: 'MailApp.sendEmail (daily digest)', pattern: /MailApp\.sendEmail/, scope: 'https://www.googleapis.com/auth/script.send_mail' },
   { api: 'ScriptApp.newTrigger / getProjectTriggers / deleteTrigger', pattern: /ScriptApp\.(newTrigger|getProjectTriggers|deleteTrigger)/, scope: 'https://www.googleapis.com/auth/script.scriptapp' },
   { api: 'SpreadsheetApp.getUi (menu, alerts, prompts)', pattern: /SpreadsheetApp\.getUi\(\)/, scope: 'https://www.googleapis.com/auth/script.container.ui' }
@@ -80,7 +80,8 @@ SCOPE_REQUIREMENTS.forEach(function (req) {
   );
 });
 
-// --- Finding #7: GmailThread.reply() returns GmailThread, not GmailMessage.
+// --- Step-2 Google-real incident: never infer a follow-up recipient via
+// GmailThread.reply(); use the Advanced Gmail API with explicit RFC fields.
 
 // The old bug: `var message = thread.reply(...)` then `message.getId()` as
 // if it were a GmailMessage. Assert that specific mis-assignment pattern
@@ -92,29 +93,29 @@ check(
 
 // Assert the fix pattern is present: reply()'s return value is read via
 // getMessages(), and the last element is what gets used as the sent message.
-check(
-  'finding7: reply() result is used via getMessages() (fix pattern present)',
-  /repliedThread\s*=\s*thread\.reply\(/.test(MAILER_SOURCE) &&
-  /messagesAfter\s*=\s*repliedThread\.getMessages\(\)/.test(MAILER_SOURCE) &&
-  /messagesAfter\[messagesAfter\.length\s*-\s*1\]/.test(MAILER_SOURCE)
-);
+check('step2: Advanced Gmail service is enabled in appsscript.json',
+  !!(APPSSCRIPT_JSON.dependencies && APPSSCRIPT_JSON.dependencies.enabledAdvancedServices || []).some(function (s) {
+    return s.userSymbol === 'Gmail' && s.serviceId === 'gmail' && s.version === 'v1';
+  }));
 
 // Assert the code explicitly documents which real API it relies on and why
 // (required by the finding: "Documenta exactamente qué API se utiliza").
-check(
-  'finding7: fix is documented inline with the real API it depends on',
-  /GmailThread\.reply\(body\) returns the GmailThread/.test(MAILER_SOURCE) &&
-  /NOT a GmailMessage/.test(MAILER_SOURCE) &&
-  MAILER_SOURCE.indexOf('GmailThread.getMessages()') !== -1
-);
+check('step2: recipient is explicit and thread RFC headers are constructed',
+  MAILER_SOURCE.indexOf("'To: ' + recipient") !== -1 &&
+  MAILER_SOURCE.indexOf("'In-Reply-To: ' + priorRfcMessageId") !== -1 &&
+  MAILER_SOURCE.indexOf("'References: ' + references") !== -1 &&
+  /resource:\s*\{\s*raw:.*threadId:\s*prospect\.Thread_ID/.test(MAILER_SOURCE));
 
 // Assert no Message_ID is ever fabricated — every Message_ID write must
 // trace back to a real message object's .getId().
-check(
-  'finding7: no invented Message_ID — sentMessage always comes from a real message object',
-  /var\s+sentMessage\s*=\s*messagesAfter\[messagesAfter\.length\s*-\s*1\];/.test(MAILER_SOURCE) &&
-  /Message_ID:\s*sentMessage\.getId\(\)/.test(MAILER_SOURCE)
-);
+check('step2: Message_ID comes from messages.send and is verified by exact messages.get',
+  /sentResource\s*=\s*Gmail\.Users\.Messages\.send/.test(MAILER_SOURCE) &&
+  /sentMessageId\s*=\s*sentResource/.test(MAILER_SOURCE) &&
+  /Gmail\.Users\.Messages\.get\('me',\s*messageId/.test(MAILER_SOURCE) &&
+  /Message_ID:\s*sentMessageId/.test(MAILER_SOURCE));
+
+check('step2: GmailThread.reply is absent from executable source',
+  !/^\s*(?!\*|\/\/).*\bthread\.reply\(/m.test(MAILER_SOURCE));
 
 // --- N5: LIVE send concurrency/ambiguous-outcome hardening.
 // Round 1 verified this statically (findings #7/#8's established method,
