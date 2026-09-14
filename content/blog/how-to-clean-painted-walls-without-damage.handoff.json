@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "category": "educational",
+  "publicationDate": "2026-09-15",
+  "topic": {
+    "articleTitle": "How to Clean Painted Walls Without Damaging the Finish",
+    "primaryKeyword": "how to clean painted walls",
+    "searchIntent": "Informational guidance for homeowners who want to remove dust, fingerprints, scuffs, and light residue from painted walls without dulling or damaging the finish",
+    "relatedService": "Deep Cleaning",
+    "targetAudience": "Homeowners, renters, and household decision-makers looking for safe, practical wall-cleaning guidance",
+    "seoValue": "This evergreen topic answers a common home-care question that is distinct from the existing move-in, move-out, and Airbnb turnover articles. It can attract early-stage informational traffic while creating relevant paths to deep and recurring cleaning services.",
+    "estimatedDifficulty": "Medium",
+    "priority": "High"
+  },
+  "contentStrategy": "Create a cautious, finish-aware wall-cleaning guide that helps readers identify the type of mark, test a cleaning method, work in the correct order, and recognize when additional scrubbing could cause damage. Emphasize practical decision-making rather than universal product claims, and connect wall care naturally to broader deep-cleaning and recurring-maintenance needs.",
+  "primaryKeyword": "how to clean painted walls",
+  "secondaryKeywords": [
+    "how to wash walls",
+    "clean walls without removing paint",
+    "how to clean scuff marks off walls",
+    "cleaning flat paint walls",
+    "cleaning matte painted walls",
+    "cleaning satin painted walls",
+    "painted wall cleaning tips"
+  ],
+  "searchIntent": "Informational guidance for homeowners who want to remove dust, fingerprints, scuffs, and light residue from painted walls without dulling or damaging the finish",
+  "seoTitle": "How to Clean Painted Walls Without Damaging Paint",
+  "metaDescription": "Learn how to clean painted walls safely, remove common marks, test the finish, and avoid methods that can dull, streak, or damage the paint.",
+  "suggestedSlug": "how-to-clean-painted-walls-without-damage",
+  "h1": "How to Clean Painted Walls Without Damaging the Finish",
+  "internalLinks": [
+    {
+      "url": "/deep-cleaning.html",
+      "anchorText": "deep cleaning checklist",
+      "rationale": "Helps readers place wall care within a broader detailed cleaning sequence."
+    },
+    {
+      "url": "/recurring-cleaning.html",
+      "anchorText": "recurring cleaning plan",
+      "rationale": "Provides a relevant next step for readers interested in maintaining everyday household surfaces after a detailed reset."
+    }
+  ],
+  "cta": "**Want help with a more detailed home reset? [Request a deep cleaning quote](/index.html#quote).**",
+  "image": {
+    "brief": "Illustrative editorial scene of a homeowner gently wiping a neutral painted interior wall with a microfiber cloth, with a small bucket and folded towels nearby. Show soft natural light, a tidy residential room, and careful surface cleaning without branding, text, or dramatic before-and-after effects.",
+    "recommendedDimensions": "1600 × 900 pixels, landscape",
+    "suggestedFilename": "how-to-clean-painted-walls-without-damage-editorial.webp",
+    "altText": "Person gently cleaning a painted interior wall with a microfiber cloth",
+    "publicationStatus": "generated-editorial-image-awaiting-review",
+    "path": "/images/blog/how-to-clean-painted-walls-without-damage-editorial.webp",
+    "assetType": "AI-generated editorial illustration",
+    "disclosure": "Illustrative AI-generated image. Not a photo of a Klinner project."
+  },
+  "blogExcerpt": "Learn a cautious step-by-step method for cleaning painted walls, removing common marks, testing the finish, and avoiding damage from excess moisture or scrubbing.",
+  "socialMediaPost": "Not every wall mark needs a stronger cleaner. Learn how to dust, test, spot-clean, and recognize when more scrubbing could damage the paint finish. Read our practical guide to cleaning painted walls safely.",
+  "CODEX HANDOFF": "Before approval, verify the publication date is set to September 15, 2026, using America/Chicago; confirm the title and H1 match exactly and that articleMarkdown contains no H1. Review all paint-finish, product-safety, electrical-safety, and moisture-related guidance for factual accuracy and appropriately cautious wording. Confirm /deep-cleaning.html, /recurring-cleaning.html, and /index.html#quote resolve correctly; verify the CTA remains separate from articleMarkdown. Confirm every company-specific sentence is represented in companyClaims with an exact supporting repository quote. Review and approve the illustrative image, dimensions, filename, alt text, and required AI-image disclosure in the final implementation. Finally, inspect the complete article, metadata, responsive layout, image rendering, internal links, and CTA on Vercel Preview before merging.",
+  "companyClaims": [
+    {
+      "claim": "A broader deep cleaning checklist can also help place wall care in sequence with dusting, baseboard cleaning, and floor care.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Deep cleaning goes beyond the weekly basics, focusing on buildup, corners, baseboards and the spaces that are easy to miss."
+    },
+    {
+      "claim": "A recurring cleaning plan can help keep floors, kitchens, bathrooms, and everyday surfaces maintained after a more detailed reset.",
+      "sourcePath": "recurring-cleaning.html",
+      "sourceQuote": "Recurring cleaning keeps kitchens, bathrooms, floors and everyday surfaces under control with a reliable maintenance rhythm."
+    },
+    {
+      "claim": "Want help with a more detailed home reset? Request a deep cleaning quote.",
+      "sourcePath": "deep-cleaning.html",
+      "sourceQuote": "Ready for a deeper clean? Request a quote for a detailed Nashville deep cleaning service."
+    }
+  ],
+  "editorialAudit": {
+    "passed": true,
+    "issues": []
+  }
+}

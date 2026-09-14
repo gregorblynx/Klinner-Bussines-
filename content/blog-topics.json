@@ -42,6 +42,20 @@
       "slug": "new-construction-move-in-cleaning-nashville",
       "status": "draft-pr",
       "createdAt": "2026-09-04"
+    },
+    {
+      "articleTitle": "How to Clean Painted Walls Without Damaging the Finish",
+      "primaryKeyword": "how to clean painted walls",
+      "searchIntent": "Informational guidance for homeowners who want to remove dust, fingerprints, scuffs, and light residue from painted walls without dulling or damaging the finish",
+      "relatedService": "Deep Cleaning",
+      "targetAudience": "Homeowners, renters, and household decision-makers looking for safe, practical wall-cleaning guidance",
+      "seoValue": "This evergreen topic answers a common home-care question that is distinct from the existing move-in, move-out, and Airbnb turnover articles. It can attract early-stage informational traffic while creating relevant paths to deep and recurring cleaning services.",
+      "estimatedDifficulty": "Medium",
+      "priority": "High",
+      "category": "educational",
+      "slug": "how-to-clean-painted-walls-without-damage",
+      "status": "draft-pr",
+      "createdAt": "2026-09-15"
     }
   ]
 }

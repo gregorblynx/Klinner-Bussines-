@@ -30,6 +30,16 @@
       "publicationDate": "2026-09-04",
       "pullRequestStatus": "draft",
       "source": "github-actions"
+    },
+    {
+      "title": "How to Clean Painted Walls Without Damaging the Finish",
+      "slug": "how-to-clean-painted-walls-without-damage",
+      "primaryKeyword": "how to clean painted walls",
+      "searchIntent": "Informational guidance for homeowners who want to remove dust, fingerprints, scuffs, and light residue from painted walls without dulling or damaging the finish",
+      "category": "educational",
+      "publicationDate": "2026-09-15",
+      "pullRequestStatus": "draft",
+      "source": "github-actions"
     }
   ]
 }
