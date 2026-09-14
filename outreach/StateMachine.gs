@@ -175,3 +175,91 @@ function stopProspect(prospectId, reason) {
   flushLog_();
   return { success: true };
 }
+
+/**
+ * N9 (controlled-fixture Step-2 due override): makes ONE explicitly
+ * controlled test fixture due for Step 2 immediately, for a Google-real
+ * retest — WITHOUT touching global cadence, Config, Date_Added, sequence
+ * state, or any other field. The only write this can ever make is
+ * Next_Action_Date, structurally enforced by OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE's
+ * permission grant (Constants.gs) — not merely by this function's own
+ * discipline.
+ *
+ * ARCHITECTURE: read-only guards only, identical in spirit to
+ * sendControlledFixtureLive (Mailer.gs, N8) — same CONTROLLED_FIXTURE_SOURCES
+ * allowlist, same countProspectRowsById_ exact-match check, same
+ * isSuppressed_/isLiveKeyBlocked_ reuse. Nothing here reimplements
+ * cadence math, eligibility, or idempotency logic — canSend_/
+ * isEligibleForNextStep_/computeNextActionDate_ are all completely
+ * untouched by this function; it only sets the ONE field they already
+ * read (Next_Action_Date) to a value that is already due, so the NEXT
+ * normal eligibility check (canSend_, called by the normal send path)
+ * picks the fixture up exactly as it would any other due prospect —
+ * canSend_ itself is never bypassed.
+ *
+ * A real prospect's Source is never in CONTROLLED_FIXTURE_SOURCES, so
+ * this is refused before any write, always.
+ */
+function makeControlledFixtureDueNow(prospectId) {
+  // Guard 1: exactly one row for this id.
+  var matchCount = countProspectRowsById_(prospectId);
+  if (matchCount !== 1) {
+    return { status: 'REJECTED_AMBIGUOUS_ID', matchCount: matchCount };
+  }
+
+  var found = findRowById_(prospectId);
+  if (!found) return { status: 'REJECTED_NOT_FOUND' };
+  var p = found.values;
+
+  // Guard 2: THE core protection — Source allowlist (SAME allowlist N8's
+  // sendControlledFixtureLive uses — a single source of truth for "what
+  // counts as a controlled test fixture" in this project).
+  if (CONTROLLED_FIXTURE_SOURCES.indexOf(p.Source) === -1) {
+    return { status: 'REJECTED_SOURCE_NOT_CONTROLLED', source: p.Source };
+  }
+
+  // Guard 3/4: must genuinely be mid-sequence, exactly at step 1 done.
+  if (p.Status !== STATUS.IN_SEQUENCE) {
+    return { status: 'REJECTED_WRONG_STATUS', prospectStatus: p.Status };
+  }
+  if (Number(p.Sequence_Step) !== 1) {
+    return { status: 'REJECTED_WRONG_SEQUENCE_STEP', sequenceStep: p.Sequence_Step };
+  }
+
+  // Guard 5/6/7: Step 1 must have genuinely, verifiably happened — never
+  // manufacture a due date for a step that was never actually sent.
+  if (!p.Step1_Sent_At) return { status: 'REJECTED_MISSING_STEP1_SENT_AT' };
+  if (!p.Thread_ID) return { status: 'REJECTED_MISSING_THREAD_ID' };
+  if (!p.Last_Message_ID) return { status: 'REJECTED_MISSING_LAST_MESSAGE_ID' };
+
+  // Guards 8/9/10: the same eligibility fields canSend_ itself enforces,
+  // re-checked here explicitly for a named, specific rejection reason.
+  if (p.Replied === true) return { status: 'REJECTED_REPLIED' };
+  if (p.Stop_Contact === true) return { status: 'REJECTED_STOP_CONTACT' };
+  if (p.Do_Not_Contact_Reason) return { status: 'REJECTED_DNC', reason: p.Do_Not_Contact_Reason };
+
+  // Guard 11: Suppression.
+  if (isSuppressed_(p.Email_Normalized, p.Domain)) {
+    return { status: 'REJECTED_SUPPRESSED' };
+  }
+
+  // Guard 12: no unresolved LIVE Step-2 ledger row — the SAME durable
+  // block normal LIVE sending itself enforces (Ledger.gs). Blocks on
+  // CLAIMED/SENT/AMBIGUOUS, exactly like isLiveKeyBlocked_ always does.
+  if (isLiveKeyBlocked_(prospectId, 2)) {
+    return { status: 'REJECTED_LIVE_STEP2_BLOCKED' };
+  }
+
+  // Every guard passed. The ONLY write: Next_Action_Date, already due.
+  // One minute in the past, not "now" — avoids any exact-equality race
+  // against the caller's own `now` a moment later. OPERATION.
+  // ADMIN_FIXTURE_DUE_OVERRIDE's permission grant (Constants.gs) makes
+  // this structurally the only column this call can ever touch.
+  var dueDate = new Date(Date.now() - 60000);
+  writeRowById_(prospectId, { Next_Action_Date: dueDate },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE });
+  logEvent_(LOG_LEVEL.INFO, LOG_EVENT.FIXTURE_DUE_OVERRIDE, prospectId, p.Email_Normalized, 2,
+    'Controlled fixture made due now for Step 2 retest. Next_Action_Date=' + dueDate);
+  flushLog_();
+  return { status: 'DUE_NOW', prospectId: prospectId, nextActionDate: dueDate };
+}

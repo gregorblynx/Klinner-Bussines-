@@ -421,6 +421,28 @@ function findRowById_(prospectId) {
 }
 
 /**
+ * N8/N9 (guarded exact-target operator actions): counts how many
+ * Prospects rows carry this exact Prospect_ID. Normally 0 or 1 —
+ * findRowById_ itself only ever returns the FIRST match, so a mechanism
+ * whose entire safety model depends on "this identifies exactly one row"
+ * needs its own explicit, independent check rather than trusting that
+ * silently. Shared by both guarded controlled-fixture actions so the
+ * check can never drift between them.
+ */
+function countProspectRowsById_(prospectId) {
+  if (!prospectId) return 0;
+  var sheet = getSheet_(SHEET_NAMES.PROSPECTS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  var ids = sheet.getRange(2, PROSPECTS_COLUMNS.Prospect_ID, lastRow - 1, 1).getValues();
+  var count = 0;
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i][0] === prospectId) count++;
+  }
+  return count;
+}
+
+/**
  * THE single authorized boundary for every business write to Prospects.
  *
  * Codex audit finding #1: a previous version exposed applyFieldsToRow_()

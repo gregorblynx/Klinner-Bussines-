@@ -3879,6 +3879,254 @@ function test_N8_fixturePathDoesNotDisturbNormalQueueOrdering_() {
  */
 
 /**
+ * N9 (controlled-fixture Step-2 due override): makeControlledFixtureDueNow
+ * (StateMachine.gs) — makes ONE controlled fixture due for Step 2
+ * immediately, changing ONLY Next_Action_Date, never bypassing canSend_,
+ * idempotency, or any eligibility check.
+ */
+
+/** Builds an IN_SEQUENCE/step-1-done controlled fixture, Next_Action_Date deliberately in the FUTURE. */
+function n9_setupControlledStep2Fixture_(emailTag, overrides) {
+  var email = testUniqueEmail_(emailTag);
+  var emailNormalized = normalizeEmail_(email);
+  var thread = GmailApp._seedLiveThread(email, 'outreach-test@example.com');
+  _testCreatedThreadIds_.push(thread.getId());
+  var future = new Date(); future.setDate(future.getDate() + 7); // NOT due — this is what the override must change.
+  var pastSent = new Date(); pastSent.setDate(pastSent.getDate() - 3);
+  var base = {
+    Prospect_ID: Utilities.getUuid(), Source: CONTROLLED_FIXTURE_SOURCES[0],
+    Email: email, Email_Normalized: emailNormalized,
+    Domain: extractDomain_(emailNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE,
+    Problem_Found: 'x', Status: STATUS.IN_SEQUENCE, Sequence_Step: 1,
+    Step1_Sent_At: pastSent, Last_Contacted: pastSent, Next_Action_Date: future,
+    Thread_ID: thread.getId(), Last_Message_ID: thread.getMessages()[0].getId()
+  };
+  var merged = Object.assign({}, base, overrides || {});
+  var row = addTestProspectRow_(merged);
+  return { p: getTestProspectByRow_(row), thread: thread };
+}
+
+/** Test 1: approved controlled fixture succeeds; the ordinary canSend_ path picks it up afterward — never bypassed. */
+function test_N9_approvedFixtureSucceedsAndBecomesEligibleViaCanSend_() {
+  var setup = n9_setupControlledStep2Fixture_('n9accept');
+  try {
+    var config = getConfig();
+    assert_(!canSend_(setup.p, 2, config, new Date()), 'Precondition: NOT yet due for step 2 (Next_Action_Date is 7 days out).');
+
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+
+    assertEquals_('DUE_NOW', result.status);
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assert_(new Date(after.Next_Action_Date).getTime() <= Date.now(), 'Next_Action_Date must now be due (<= now).');
+    // THE key proof this never bypasses canSend_: the SAME production
+    // eligibility function, completely untouched, now says yes.
+    assert_(canSend_(after, 2, config, new Date()), 'canSend_ itself (unmodified) must now agree this fixture is eligible for step 2.');
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 2: a normal real prospect (default Source) is rejected before any write. */
+function test_N9_realProspectRejectedBeforeWrite_() {
+  var config = getConfig();
+  var setup = n5_setupFollowUpDueProspect_('n9realprospect', config); // default Source = TEST_SOURCE_MARKER.
+  var before = findRowById_(setup.p.Prospect_ID).values;
+
+  var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+
+  assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', result.status, 'A real prospect must be refused on the Source allowlist alone.');
+  var after = findRowById_(setup.p.Prospect_ID).values;
+  assertEquals_(before.Next_Action_Date instanceof Date ? before.Next_Action_Date.getTime() : before.Next_Action_Date,
+    after.Next_Action_Date instanceof Date ? after.Next_Action_Date.getTime() : after.Next_Action_Date,
+    'A rejected real prospect must have NO field changed, not even Next_Action_Date.');
+}
+
+/** Test 3: a similarly-named but not-exactly-allowlisted Source is also rejected. */
+function test_N9_wrongSourceRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9wrongsource', { Source: 'CONTROLLED_INTERNAL_STEP2_RETEST_OLD' });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 4: wrong Status (e.g. still READY, step 1 never actually sent) rejected. */
+function test_N9_wrongStatusRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9wrongstatus', { Status: STATUS.READY });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_WRONG_STATUS', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 5: wrong Sequence_Step (already past step 1) rejected. */
+function test_N9_wrongSequenceStepRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9wrongstep', { Sequence_Step: 2 });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_WRONG_SEQUENCE_STEP', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test: missing Step1_Sent_At rejected — never manufacture a due date for a step that was never verifiably sent. */
+function test_N9_missingStep1SentAtRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9missingsent', { Step1_Sent_At: '' });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_MISSING_STEP1_SENT_AT', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test: missing Thread_ID rejected. */
+function test_N9_missingThreadIdRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9missingthread', { Thread_ID: '' });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_MISSING_THREAD_ID', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test: missing Last_Message_ID rejected. */
+function test_N9_missingLastMessageIdRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9missingmsgid', { Last_Message_ID: '' });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_MISSING_LAST_MESSAGE_ID', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 6a: Replied=TRUE rejected. */
+function test_N9_repliedFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9replied', { Replied: true });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_REPLIED', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 6b: Stop_Contact rejected. */
+function test_N9_stopContactFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9stop', { Stop_Contact: true });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_STOP_CONTACT', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 6c: DNC rejected. */
+function test_N9_dncFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9dnc', { Do_Not_Contact_Reason: DNC_REASON.MANUAL });
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_DNC', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 6d: Suppression rejected — real addSuppression_, not a stub. */
+function test_N9_suppressedFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n9suppressed');
+  addSuppression_(setup.p.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.MANUAL, 'test');
+  _testCreatedSuppressionValues.push(setup.p.Email_Normalized);
+  try {
+    var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    assertEquals_('REJECTED_SUPPRESSED', result.status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 7: a blocking LIVE Step-2 CLAIMED/SENT/AMBIGUOUS row rejects — same isLiveKeyBlocked_ normal sending uses. */
+function test_N9_blockingLiveStep2RowRejected_() {
+  [LEDGER_STATE.CLAIMED, LEDGER_STATE.SENT, LEDGER_STATE.AMBIGUOUS].forEach(function (state) {
+    var setup = n9_setupControlledStep2Fixture_('n9blocked' + state.toLowerCase());
+    try {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: setup.p.Prospect_ID, Email_Normalized: setup.p.Email_Normalized,
+        Step: 2, Idempotency_Key: getIdempotencyKey_(setup.p.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE, State: state,
+        Thread_ID: setup.p.Thread_ID, Message_ID: '', Draft_ID: '',
+        Confirmed_At: state === LEDGER_STATE.SENT ? new Date() : '', Error: ''
+      });
+      var result = makeControlledFixtureDueNow(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_LIVE_STEP2_BLOCKED', result.status, 'A pre-existing ' + state + ' LIVE Step-2 row must block the override.');
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  });
+}
+
+/** Test 8: the accept path changes ONLY Next_Action_Date — every other field byte-identical before/after. */
+function test_N9_onlyNextActionDateFieldChanges_() {
+  var setup = n9_setupControlledStep2Fixture_('n9onlyfield');
+  try {
+    var before = findRowById_(setup.p.Prospect_ID).values;
+    makeControlledFixtureDueNow(setup.p.Prospect_ID);
+    var after = findRowById_(setup.p.Prospect_ID).values;
+
+    Object.keys(before).forEach(function (col) {
+      if (col === 'Next_Action_Date') return;
+      var b = before[col] instanceof Date ? before[col].getTime() : before[col];
+      var a = after[col] instanceof Date ? after[col].getTime() : after[col];
+      assertEquals_(b, a, 'Column "' + col + '" must be completely unchanged by the due override.');
+    });
+    assert_(new Date(after.Next_Action_Date).getTime() !== new Date(before.Next_Action_Date).getTime(),
+      'Next_Action_Date itself must actually have changed.');
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+/** Test 9: real prospects (any status) remain completely untouched by a call targeting the controlled fixture. */
+function test_N9_realProspectsRemainUntouched_() {
+  var config = getConfig();
+  var real1 = n5_setupReadyProspect_('n9real1');
+  var real2 = n5_setupFollowUpDueProspect_('n9real2', config);
+  var fixture = n9_setupControlledStep2Fixture_('n9realuntouched');
+  try {
+    var real1Before = findRowById_(real1.Prospect_ID).values;
+    var real2Before = findRowById_(real2.p.Prospect_ID).values;
+
+    var result = makeControlledFixtureDueNow(fixture.p.Prospect_ID);
+    assertEquals_('DUE_NOW', result.status);
+
+    var real1After = findRowById_(real1.Prospect_ID).values;
+    var real2After = findRowById_(real2.p.Prospect_ID).values;
+    assertEquals_(real1Before.Status, real1After.Status, 'Unrelated real prospect 1 must be untouched.');
+    assertEquals_(real2Before.Status, real2After.Status, 'Unrelated real prospect 2 must be untouched.');
+    assertEquals_(String(real2Before.Next_Action_Date), String(real2After.Next_Action_Date),
+      'Unrelated real prospect 2 Next_Action_Date must be untouched.');
+  } finally {
+    n8_deleteFixtureRow_(fixture.p.Prospect_ID);
+  }
+}
+
+/**
+ * Normal cadence logic / corrected Step-2 Gmail API path unchanged: not
+ * duplicated as new tests — makeControlledFixtureDueNow never calls
+ * computeNextActionDate_ or doFollowUpSend_ at all (grep confirms it),
+ * and the existing N4/N7/timezone/N5-follow-up suites staying green
+ * alongside these new tests is the actual proof nothing in that logic
+ * was touched.
+ */
+
+/**
  * N6: computeNextActionDate_ itself throwing (cadence math failure) after
  * a CONFIRMED send is a distinct path from the Prospects-write failure
  * above — the write would otherwise SUCCEED, but must be forced to
@@ -5114,6 +5362,21 @@ var F1_TEST_FUNCTIONS = [
   ['N8_maxPerRunNotOneRejected', test_N8_maxPerRunNotOneFixtureRejected_],
   ['N8_postSendPersistenceN6Semantics', test_N8_postSendPersistenceFailureRetainsN6SemanticsViaFixturePath_],
   ['N8_doesNotDisturbQueueOrdering', test_N8_fixturePathDoesNotDisturbNormalQueueOrdering_],
+  ['N9_acceptedFixtureBecomesEligible', test_N9_approvedFixtureSucceedsAndBecomesEligibleViaCanSend_],
+  ['N9_realProspectRejected', test_N9_realProspectRejectedBeforeWrite_],
+  ['N9_wrongSourceRejected', test_N9_wrongSourceRejected_],
+  ['N9_wrongStatusRejected', test_N9_wrongStatusRejected_],
+  ['N9_wrongSequenceStepRejected', test_N9_wrongSequenceStepRejected_],
+  ['N9_missingStep1SentAtRejected', test_N9_missingStep1SentAtRejected_],
+  ['N9_missingThreadIdRejected', test_N9_missingThreadIdRejected_],
+  ['N9_missingLastMessageIdRejected', test_N9_missingLastMessageIdRejected_],
+  ['N9_repliedRejected', test_N9_repliedFixtureRejected_],
+  ['N9_stopContactRejected', test_N9_stopContactFixtureRejected_],
+  ['N9_dncRejected', test_N9_dncFixtureRejected_],
+  ['N9_suppressedRejected', test_N9_suppressedFixtureRejected_],
+  ['N9_blockingLiveStep2Rejected', test_N9_blockingLiveStep2RowRejected_],
+  ['N9_onlyNextActionDateChanges', test_N9_onlyNextActionDateFieldChanges_],
+  ['N9_realProspectsUntouched', test_N9_realProspectsRemainUntouched_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

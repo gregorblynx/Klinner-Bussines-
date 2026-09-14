@@ -323,7 +323,8 @@ var LOG_EVENT = {
   LIVE_BLOCKED_PENDING_F0: 'LIVE_BLOCKED_PENDING_F0',
   WRITE_REFUSED_DRY_RUN: 'WRITE_REFUSED_DRY_RUN',
   DIGEST_NOT_SENT_PENDING_F0: 'DIGEST_NOT_SENT_PENDING_F0',
-  DIGEST_SENT: 'DIGEST_SENT'
+  DIGEST_SENT: 'DIGEST_SENT',
+  FIXTURE_DUE_OVERRIDE: 'FIXTURE_DUE_OVERRIDE'
 };
 
 /** Suppression sheet columns. */
@@ -364,7 +365,8 @@ var OPERATION = {
   ADMIN_UNSUBSCRIBE: 'ADMIN_UNSUBSCRIBE', // Process unsubscribe
   ADMIN_RESET: 'ADMIN_RESET', // Reset prospect
   SYSTEM_REPLY_SYNC: 'SYSTEM_REPLY_SYNC', // syncReplies
-  SYSTEM_NIGHTLY_RECON: 'SYSTEM_NIGHTLY_RECON' // nightlyRecon
+  SYSTEM_NIGHTLY_RECON: 'SYSTEM_NIGHTLY_RECON', // nightlyRecon
+  ADMIN_FIXTURE_DUE_OVERRIDE: 'ADMIN_FIXTURE_DUE_OVERRIDE' // makeControlledFixtureDueNow — controlled fixtures ONLY
 };
 
 var OPERATION_ORIGIN = {};
@@ -375,6 +377,7 @@ OPERATION_ORIGIN[OPERATION.ADMIN_UNSUBSCRIBE] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.ADMIN_RESET] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.SYSTEM_REPLY_SYNC] = ORIGIN.SYSTEM;
 OPERATION_ORIGIN[OPERATION.SYSTEM_NIGHTLY_RECON] = ORIGIN.SYSTEM;
+OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE] = ORIGIN.ADMIN;
 
 /**
  * Per-operation permitted columns and permitted Status values.
@@ -472,6 +475,24 @@ OPERATION_PERMISSIONS[OPERATION.SYSTEM_NIGHTLY_RECON] = {
     Do_Not_Contact_Reason: DNC_REASON_VALUES.filter(function (r) { return r !== DNC_REASON.UNSUBSCRIBE; })
   },
   statuses: [STATUS.STOPPED, STATUS.SEQUENCE_DONE, STATUS.NEEDS_REVIEW]
+};
+
+/**
+ * N9 (controlled-fixture Step-2 due override): the SMALLEST possible
+ * permission grant in this whole model — exactly ONE column, ZERO
+ * permitted Status values. `statuses: []` is not an oversight: it means
+ * authorizeWrite_ would reject this operation outright if it ever tried
+ * to include Status in its write (see authorizeWrite_'s
+ * `fields.hasOwnProperty('Status')` check, SheetRepo.gs) — so "this
+ * operation may change ONLY Next_Action_Date" is enforced structurally,
+ * not merely by the caller's own discipline. makeControlledFixtureDueNow
+ * (StateMachine.gs) is the only caller, and it is itself gated to
+ * CONTROLLED_FIXTURE_SOURCES rows only (Mailer.gs's sendControlledFixtureLive
+ * uses the same allowlist for the equivalent LIVE-targeting guard).
+ */
+OPERATION_PERMISSIONS[OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE] = {
+  columns: ['Next_Action_Date'],
+  statuses: []
 };
 
 /** Gmail labels — defaults only; runtime values come from Config. */

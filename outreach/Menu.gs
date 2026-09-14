@@ -20,6 +20,7 @@ function onOpen() {
     .addItem('Restore SAFE config', 'menu_restoreSafeLiveConfig_')
     .addItem('Send now (LIVE)', 'menu_sendNowLive_')
     .addItem('Send selected CONTROLLED fixture (LIVE)', 'menu_sendControlledFixtureLive_')
+    .addItem('Make selected CONTROLLED fixture due now', 'menu_makeControlledFixtureDueNow_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
     .addItem('Stop prospect (selected row)', 'menu_stopProspect_')
@@ -175,6 +176,27 @@ function menu_sendControlledFixtureLive_() {
     if (response !== ui.Button.YES) return;
     var result = sendControlledFixtureLive(prospectId);
     ui.alert('Send selected CONTROLLED fixture (LIVE)', 'Result: ' + result.status, ui.ButtonSet.OK);
+  });
+}
+
+/**
+ * Operator-only: makes ONE explicitly controlled test fixture due for
+ * Step 2 immediately, for a Google-real retest. Real prospects are
+ * refused before any write (makeControlledFixtureDueNow enforces the
+ * same Source allowlist as the LIVE-targeting action above). The ONLY
+ * field this can ever change is Next_Action_Date.
+ */
+function menu_makeControlledFixtureDueNow_() {
+  guardedMenuAction_(function (ui) {
+    var prospectId = getSelectedProspectId_(ui);
+    var response = ui.alert('Make selected CONTROLLED fixture due now',
+      'This sets Next_Action_Date to now for the selected row, ONLY if its Source is an approved ' +
+      'controlled-test fixture — real prospects are refused before any write. No other field changes. ' +
+      'Prospect_ID: ' + prospectId + '\n\nContinue?',
+      ui.ButtonSet.YES_NO);
+    if (response !== ui.Button.YES) return;
+    var result = makeControlledFixtureDueNow(prospectId);
+    ui.alert('Make selected CONTROLLED fixture due now', 'Result: ' + result.status, ui.ButtonSet.OK);
   });
 }
 

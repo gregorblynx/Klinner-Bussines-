@@ -1594,19 +1594,10 @@ function sendFollowUp(prospectId, step) {
 function sendControlledFixtureLive(prospectId) {
   if (!prospectId) return { status: 'REJECTED_NO_PROSPECT_ID' };
 
-  // Guard 1: the id must resolve to EXACTLY one row. findRowById_ itself
-  // only ever returns the first match (I7's normal guarantee), so this is
-  // an explicit, independent duplicate-ID scan — belt and suspenders for a
-  // mechanism whose whole purpose is "never touch the wrong row".
-  var sheet = getSheet_(SHEET_NAMES.PROSPECTS);
-  var lastRow = sheet.getLastRow();
-  var matchCount = 0;
-  if (lastRow >= 2) {
-    var ids = sheet.getRange(2, PROSPECTS_COLUMNS.Prospect_ID, lastRow - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (ids[i][0] === prospectId) matchCount++;
-    }
-  }
+  // Guard 1: the id must resolve to EXACTLY one row — see
+  // countProspectRowsById_'s docstring (SheetRepo.gs), shared with
+  // makeControlledFixtureDueNow (StateMachine.gs).
+  var matchCount = countProspectRowsById_(prospectId);
   if (matchCount !== 1) {
     return { status: 'REJECTED_AMBIGUOUS_ID', matchCount: matchCount };
   }
