@@ -19,6 +19,7 @@ function onOpen() {
     .addItem('Arm one-shot LIVE config…', 'menu_armLiveConfig_')
     .addItem('Restore SAFE config', 'menu_restoreSafeLiveConfig_')
     .addItem('Send now (LIVE)', 'menu_sendNowLive_')
+    .addItem('Send selected CONTROLLED fixture (LIVE)', 'menu_sendControlledFixtureLive_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
     .addItem('Stop prospect (selected row)', 'menu_stopProspect_')
@@ -154,6 +155,26 @@ function menu_sendNowLive_() {
     if (response !== ui.Button.YES) return;
     sendBatch();
     ui.alert('Klinner Outreach', 'sendBatch() finished. Check the Log sheet for details.', ui.ButtonSet.OK);
+  });
+}
+
+/**
+ * Operator-only, exact-target LIVE send for ONE explicitly controlled test
+ * fixture — never a real prospect (sendControlledFixtureLive enforces the
+ * Source allowlist in Constants.gs before touching Gmail). Uses the
+ * currently selected Prospects row, exactly like the other selected-row
+ * actions below.
+ */
+function menu_sendControlledFixtureLive_() {
+  guardedMenuAction_(function (ui) {
+    var prospectId = getSelectedProspectId_(ui);
+    var response = ui.alert('Send selected CONTROLLED fixture (LIVE)',
+      'This sends ONE real email to the selected row, ONLY if its Source is an approved controlled-test ' +
+      'fixture — real prospects are refused before any Gmail call. Prospect_ID: ' + prospectId + '\n\nContinue?',
+      ui.ButtonSet.YES_NO);
+    if (response !== ui.Button.YES) return;
+    var result = sendControlledFixtureLive(prospectId);
+    ui.alert('Send selected CONTROLLED fixture (LIVE)', 'Result: ' + result.status, ui.ButtonSet.OK);
   });
 }
 

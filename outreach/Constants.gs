@@ -160,6 +160,19 @@ var DNC_REASON_VALUES = [
 
 var OUTCOME_VALUES = ['', 'interested', 'not interested', 'meeting', 'client'];
 
+/**
+ * N8 (controlled-fixture LIVE targeting): the ONLY Source values
+ * sendControlledFixtureLive (Mailer.gs) will act on. Deliberately a code
+ * constant, not a Config sheet key — an operator-editable allowlist would
+ * let a Sheet edit alone widen what this mechanism can touch, which
+ * defeats its entire purpose (never usable on a real prospect). Extend
+ * this list only for genuinely new controlled-test fixtures, never for a
+ * production Source.
+ */
+var CONTROLLED_FIXTURE_SOURCES = [
+  'CONTROLLED_INTERNAL_STEP2_RETEST'
+];
+
 /** SendLedger enums. */
 var LEDGER_MODE = { LIVE: 'LIVE', DRY_RUN: 'DRY_RUN' };
 /**

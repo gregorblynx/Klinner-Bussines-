@@ -1558,6 +1558,117 @@ function sendFollowUp(prospectId, step) {
 }
 
 /**
+ * Sends REAL Step 1 email for EXACTLY ONE explicitly controlled test
+ * fixture, chosen by Prospect_ID, without going through the normal
+ * queue/orderQueue_ path — so real READY prospects ahead of the fixture
+ * in the natural queue are never touched, never re-ordered, never even
+ * read as candidates.
+ *
+ * ARCHITECTURE: this function performs ONLY read-only, pre-Gmail
+ * identity/eligibility guards (below). It does NOT reimplement Gmail
+ * sending, ledger claiming, idempotency, or Prospects persistence — once
+ * every guard here passes, it delegates to sendStep1(prospectId), the
+ * EXACT SAME public entry point normal LIVE sending uses. Every
+ * protection sendStep1 already enforces (fresh row re-read, canSend_,
+ * isLiveKeyBlocked_/CLAIMED-SENT-AMBIGUOUS blocking, DRY_RUN/PENDING_F0
+ * gating via performLiveSend_, the send window, the daily quota, N6's
+ * post-send-persistence hard-stop-and-durable-marker handling) applies
+ * here unchanged, because this function does not bypass a single one of
+ * them — it only adds a narrower gate in front.
+ *
+ * THE GATE THIS FUNCTION EXISTS FOR: Source must be one of
+ * CONTROLLED_FIXTURE_SOURCES (Constants.gs) — a code-level allowlist, not
+ * a Config/Sheet value, so a Sheet edit alone cannot widen what this can
+ * touch. A real prospect's Source is never in that list, so this function
+ * fails closed, before any Gmail call, for every real prospect — always.
+ *
+ * Every guard below is independently testable and returns a distinct
+ * REJECTED_* status naming exactly which one failed. Guards intentionally
+ * NOT re-implemented here (already covered by sendStep1's own fresh
+ * checks, so duplicating them would only create a second copy that could
+ * drift): the blocking-ledger-row check, LIVE Config arming, the send
+ * window, and the daily quota. Re-checking Source/identity/email-shape
+ * here first means a request for a real prospect never even reaches those
+ * deeper, production-shared checks.
+ */
+function sendControlledFixtureLive(prospectId) {
+  if (!prospectId) return { status: 'REJECTED_NO_PROSPECT_ID' };
+
+  // Guard 1: the id must resolve to EXACTLY one row. findRowById_ itself
+  // only ever returns the first match (I7's normal guarantee), so this is
+  // an explicit, independent duplicate-ID scan — belt and suspenders for a
+  // mechanism whose whole purpose is "never touch the wrong row".
+  var sheet = getSheet_(SHEET_NAMES.PROSPECTS);
+  var lastRow = sheet.getLastRow();
+  var matchCount = 0;
+  if (lastRow >= 2) {
+    var ids = sheet.getRange(2, PROSPECTS_COLUMNS.Prospect_ID, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i][0] === prospectId) matchCount++;
+    }
+  }
+  if (matchCount !== 1) {
+    return { status: 'REJECTED_AMBIGUOUS_ID', matchCount: matchCount };
+  }
+
+  var found = findRowById_(prospectId);
+  if (!found) return { status: 'REJECTED_NOT_FOUND' };
+  var p = found.values;
+
+  // Guard 2: THE core protection — Source allowlist.
+  if (CONTROLLED_FIXTURE_SOURCES.indexOf(p.Source) === -1) {
+    return { status: 'REJECTED_SOURCE_NOT_CONTROLLED', source: p.Source };
+  }
+
+  // Guard 3/4: Status=READY and Step 1 is genuinely the expected next step.
+  if (p.Status !== STATUS.READY) {
+    return { status: 'REJECTED_NOT_READY', prospectStatus: p.Status };
+  }
+  var config = getConfig();
+  var expectedStep = getNextStepNumber_(p, config);
+  if (expectedStep !== 1) {
+    return { status: 'REJECTED_UNEXPECTED_STEP', expectedStep: expectedStep };
+  }
+
+  // Guards 5/6/7: the same three eligibility fields canSend_ enforces,
+  // re-checked here explicitly so a rejected fixture gets a named,
+  // specific reason instead of the single generic SKIPPED_NOT_ELIGIBLE
+  // sendStep1 would otherwise return for any of these.
+  if (p.Stop_Contact === true) return { status: 'REJECTED_STOP_CONTACT' };
+  if (p.Do_Not_Contact_Reason) return { status: 'REJECTED_DNC', reason: p.Do_Not_Contact_Reason };
+  if (p.Replied === true) return { status: 'REJECTED_REPLIED' };
+
+  // Guards 8/9: email syntax, and Email/Email_Normalized consistency —
+  // defense in depth on top of validateAllRows (which is the only normal
+  // path to Status=READY, and already enforces both).
+  var recomputedNormalized = normalizeEmail_(p.Email);
+  if (!isValidEmailSyntax_(recomputedNormalized)) {
+    return { status: 'REJECTED_INVALID_EMAIL' };
+  }
+  if (recomputedNormalized !== normalizeEmail_(p.Email_Normalized)) {
+    return { status: 'REJECTED_EMAIL_NORMALIZATION_MISMATCH' };
+  }
+
+  // Guard 10: Suppression — re-checked explicitly for a named reason.
+  if (isSuppressed_(p.Email_Normalized, p.Domain)) {
+    return { status: 'REJECTED_SUPPRESSED' };
+  }
+
+  // Guard 15: this mechanism is for single-target use only — refuse to
+  // run unless the operator has the system in a one-shot posture.
+  if (Number(config.MAX_PER_RUN) !== 1) {
+    return { status: 'REJECTED_MAX_PER_RUN_NOT_ONE', maxPerRun: config.MAX_PER_RUN };
+  }
+
+  // Guards 11-14 and 16: delegated, unchanged, to the production primitive.
+  // sendStep1 re-reads this exact row fresh under its own lock and applies
+  // isLiveKeyBlocked_, DRY_RUN/PENDING_F0 (performLiveSend_), the send
+  // window, the daily quota, and (on send) N6's post-send-persistence
+  // hard-stop/durable-marker handling — all unmodified.
+  return sendStep1(prospectId);
+}
+
+/**
  * LIVE orchestrator (F2). Not called by any trigger, menu default, or test
  * in this F1 delivery. Included per the approved file list. Deliberately
  * thin — ALL real authority (lock, PAUSE_ALL, window, eligibility, quota)

@@ -3468,6 +3468,417 @@ function test_N6_batchDoesNotStopOnOrdinaryOutcomes_() {
 }
 
 /**
+ * N8 (controlled-fixture LIVE targeting): sendControlledFixtureLive
+ * (Mailer.gs) — exact-target LIVE for ONE explicitly controlled test
+ * fixture, never a real prospect, delegating unchanged to sendStep1 once
+ * its own pre-Gmail guards pass. Tests A-U below (task's own lettering).
+ *
+ * IMPORTANT FIXTURE-ISOLATION NOTE: cleanupTestRows_ sweeps Prospects rows
+ * by Source===TEST_SOURCE_MARKER — a controlled-fixture-Source row would
+ * NOT be swept by that mechanism (correctly: production cleanup must never
+ * accidentally match a real controlled-fixture Source). So every test
+ * below creates its own row directly with addTestProspectRow_ and deletes
+ * it explicitly in a finally block via n8_deleteFixtureRow_ — never
+ * relying on the normal per-test sweep for this specific Source value.
+ */
+function n8_setupControlledFixture_(emailTag, overrides) {
+  var merged = Object.assign({
+    Source: CONTROLLED_FIXTURE_SOURCES[0], Email: testUniqueEmail_(emailTag), Problem_Found: 'x'
+  }, overrides || {});
+  var row = addTestProspectRow_(merged);
+  validateAllRows();
+  return getTestProspectByRow_(row);
+}
+
+/** Explicit, index-independent cleanup — re-finds by Prospect_ID, never a stale row index. */
+function n8_deleteFixtureRow_(prospectId) {
+  var found = findRowById_(prospectId);
+  if (found) getSheet_(SHEET_NAMES.PROSPECTS).deleteRow(found.rowIndex);
+}
+
+/** Test A + Q: the accept path reaches the real primitive and performs a normal, complete LIVE send. */
+function test_N8_approvedControlledFixtureReachesRealPrimitiveAndSendsNormally_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8accept');
+    try {
+      GmailApp._resetCallCounts();
+      var beforeLedgerRows = readAllLedgerRows_().length;
+
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+
+      assertEquals_('SENT', result.status, 'An approved controlled fixture, fully eligible, must reach a normal SENT.');
+      assertEquals_(1, GmailApp._callCounts.send, 'Exactly one real Gmail send must occur.');
+
+      var ledgerRows = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === p.Prospect_ID && r.values.Mode === LEDGER_MODE.LIVE;
+      });
+      assertEquals_(1, ledgerRows.length, 'Exactly one LIVE ledger row — the SAME row transitions CLAIMED -> SENT, never two rows.');
+      assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State, 'The ledger row must be durably SENT — the same production ledger primitive, unchanged.');
+      assertEquals_(beforeLedgerRows + 1, readAllLedgerRows_().length, 'Exactly one new ledger row total (the CLAIMED->SENT transition, not two appends).');
+
+      var after = findRowById_(p.Prospect_ID).values;
+      assertEquals_(STATUS.IN_SEQUENCE, after.Status, 'Normal Prospects persistence must occur — same as any other LIVE send.');
+      assertEquals_(1, Number(after.Sequence_Step));
+      assert_(!!after.Thread_ID && !!after.Last_Message_ID, 'Thread_ID/Last_Message_ID must be recorded normally.');
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test B: a normal real prospect (default test Source) must be refused before any Gmail call. */
+function test_N8_normalRealProspectRejectedBeforeGmail_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n5_setupReadyProspect_('n8realprospect'); // default Source = TEST_SOURCE_MARKER, i.e. NOT controlled.
+    GmailApp._resetCallCounts();
+
+    var result = sendControlledFixtureLive(p.Prospect_ID);
+
+    assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', result.status, 'A real prospect must be refused on the Source allowlist alone.');
+    assertEquals_(0, GmailApp._callCounts.createDraft, 'No Gmail call of any kind may occur.');
+    assertEquals_(0, GmailApp._callCounts.send, 'No Gmail call of any kind may occur.');
+    assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === p.Prospect_ID; }).length,
+      'No ledger row — not even a claim — may be written for a rejected real prospect.');
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test C: a similarly-named but NOT-exactly-allowlisted controlled source must also be refused. */
+function test_N8_similarButNotAllowlistedSourceRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8wrongsource', { Source: 'CONTROLLED_INTERNAL_STEP2_RETEST_V2' });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', result.status, 'The allowlist match must be exact, not a prefix/substring match.');
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test D: Stop_Contact rejected before Gmail. */
+function test_N8_stopContactFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8stop', { Stop_Contact: true });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_STOP_CONTACT', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test E: Do_Not_Contact_Reason rejected before Gmail. */
+function test_N8_dncFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8dnc', { Do_Not_Contact_Reason: DNC_REASON.MANUAL });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_DNC', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test F: Replied=TRUE rejected before Gmail. */
+function test_N8_repliedFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8replied', { Replied: true });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_REPLIED', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test G: a suppressed email is rejected before Gmail — real addSuppression_, not a stub. */
+function test_N8_suppressedFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8suppressed');
+    addSuppression_(p.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.MANUAL, 'test');
+    _testCreatedSuppressionValues.push(p.Email_Normalized);
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_SUPPRESSED', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test H: malformed email rejected before Gmail. */
+function test_N8_malformedEmailFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var row = addTestProspectRow_({
+      Source: CONTROLLED_FIXTURE_SOURCES[0], Email: 'not-an-email', Problem_Found: 'x'
+    });
+    validateAllRows(); // A malformed email classifies as INVALID_EMAIL, not READY — proves the guard fires regardless.
+    var p = getTestProspectByRow_(row);
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assert_(result.status === 'REJECTED_INVALID_EMAIL' || result.status === 'REJECTED_NOT_READY',
+        'A malformed email must be refused — either directly (REJECTED_INVALID_EMAIL) or because validateAllRows never let it reach READY (REJECTED_NOT_READY). Got: ' + result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test I: Email/Email_Normalized inconsistency rejected before Gmail — simulates a corrupted row bypassing validateAllRows. */
+function test_N8_emailNormalizationMismatchFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8mismatch');
+    try {
+      // Corrupt Email_Normalized directly on the sheet — validateAllRows
+      // would never produce this; the guard must catch it anyway (defense
+      // in depth against a corrupted/hand-edited row).
+      setRawCellForTest_(findRowById_(p.Prospect_ID).rowIndex, 'Email_Normalized', 'someone-else@example.com');
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_EMAIL_NORMALIZATION_MISMATCH', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test J: an existing LIVE CLAIMED row blocks — delegated unchanged to isLiveKeyBlocked_ via sendStep1. */
+function test_N8_existingLiveClaimedRowBlocksFixture_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8claimed');
+    try {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: p.Prospect_ID, Email_Normalized: p.Email_Normalized,
+        Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.CLAIMED,
+        Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
+      });
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('SKIPPED_ALREADY_CLAIMED', result.status, 'A pre-existing CLAIMED row must block via the SAME isLiveKeyBlocked_ sendStep1 already uses.');
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test K: an existing LIVE SENT row blocks — same mechanism. */
+function test_N8_existingLiveSentRowBlocksFixture_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8sent');
+    try {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: p.Prospect_ID, Email_Normalized: p.Email_Normalized,
+        Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.SENT,
+        Thread_ID: 'preexisting-thread', Message_ID: 'preexisting-msg', Draft_ID: '', Confirmed_At: new Date(), Error: ''
+      });
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('SKIPPED_ALREADY_CLAIMED', result.status, 'A pre-existing SENT row must ALSO block — never a second send for the same key.');
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test L: an existing LIVE AMBIGUOUS row blocks — same mechanism. */
+function test_N8_existingLiveAmbiguousRowBlocksFixture_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8ambiguous');
+    try {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: p.Prospect_ID, Email_Normalized: p.Email_Normalized,
+        Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1), Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.AMBIGUOUS,
+        Thread_ID: '', Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: 'pre-existing ambiguous outcome'
+      });
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('SKIPPED_ALREADY_CLAIMED', result.status, 'An unresolved AMBIGUOUS row must block, never auto-retried.');
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test M: Config not armed (DRY_RUN=TRUE) — the SAME performLiveSend_ throw sendStep1 itself produces, unmodified. */
+function test_N8_configNotArmedFixtureRejected_() {
+  // Deliberately NOT withLiveModeEnabledForTest_ (which sets DRY_RUN=FALSE)
+  // — this test needs DRY_RUN=TRUE, the real safe default, to reach
+  // performLiveSend_'s own guard. Only MAX_PER_RUN is set to 1 (this
+  // mechanism's own guard 15 would otherwise fire first and mask what
+  // this test is actually proving).
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var lastRow = sheet.getLastRow();
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var maxPerRunRow = null;
+  for (var i = 0; i < values.length; i++) { if (values[i][0] === 'MAX_PER_RUN') maxPerRunRow = i + 2; }
+  if (!maxPerRunRow) throw new Error('MAX_PER_RUN not found in Config.');
+  var originalMaxPerRun = sheet.getRange(maxPerRunRow, 2).getValue();
+
+  var p = n8_setupControlledFixture_('n8notarmed');
+  try {
+    sheet.getRange(maxPerRunRow, 2).setValue('1');
+    resetConfigCache_();
+    assertEquals_(true, getConfig().DRY_RUN, 'Precondition: DRY_RUN must genuinely still be TRUE for this test.');
+
+    GmailApp._resetCallCounts();
+    var threw = false;
+    try {
+      sendControlledFixtureLive(p.Prospect_ID);
+    } catch (e) {
+      threw = true;
+      assert_(String(e).indexOf('DRY_RUN') !== -1, 'The propagated error must be performLiveSend_\'s own DRY_RUN guard, unmodified.');
+    }
+    assert_(threw, 'With DRY_RUN=TRUE, sendControlledFixtureLive must throw — exactly like sendStep1 would — never silently no-op or send.');
+    assertEquals_(0, GmailApp._callCounts.send);
+  } finally {
+    n8_deleteFixtureRow_(p.Prospect_ID);
+    sheet.getRange(maxPerRunRow, 2).setValue(originalMaxPerRun);
+    resetConfigCache_();
+  }
+}
+
+/** Test N: outside the configured send window — delegated unchanged to isWithinSendWindow_ via sendStep1. */
+function test_N8_outsideSendWindowFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8window');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('SKIPPED_OUTSIDE_WINDOW', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+    // SEND_START_HOUR=SEND_END_HOUR closes the window entirely regardless of real time-of-day.
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5', SEND_START_HOUR: '9', SEND_END_HOUR: '9' });
+}
+
+/** Test O: daily quota exhausted — delegated unchanged to computeLiveSendBudget_ via sendStep1. */
+function test_N8_dailyQuotaExhaustedFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8quota');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('QUOTA_ABORT', result.status);
+      assertEquals_(0, GmailApp._callCounts.send);
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '0' }); // Zero remaining budget today.
+}
+
+/** Test P: MAX_PER_RUN != 1 refuses this mechanism outright — never delegates. */
+function test_N8_maxPerRunNotOneFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8maxperrun');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(p.Prospect_ID);
+      assertEquals_('REJECTED_MAX_PER_RUN_NOT_ONE', result.status,
+        'This mechanism is for single-target use only — it must refuse to run at all while MAX_PER_RUN != 1.');
+      assertEquals_(0, GmailApp._callCounts.send);
+      assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === p.Prospect_ID; }).length,
+        'No claim of any kind — the guard fires before sendStep1 is ever called.');
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '2', MAX_PER_DAY: '5' });
+}
+
+/** Test R: post-send persistence failure retains EXACT N6 semantics through this new entry point. */
+function test_N8_postSendPersistenceFailureRetainsN6SemanticsViaFixturePath_() {
+  withLiveModeEnabledForTest_(function () {
+    var p = n8_setupControlledFixture_('n8n6semantics');
+    try {
+      GmailApp._resetCallCounts();
+      var originalWriteRowById = writeRowById_;
+      writeRowById_ = function () { throw new Error('N8 simulated: total Prospects persistence outage.'); };
+
+      var result;
+      try {
+        result = sendControlledFixtureLive(p.Prospect_ID);
+      } finally {
+        writeRowById_ = originalWriteRowById;
+      }
+
+      assertEquals_('SENT_PERSISTENCE_FAILED', result.status, 'N6 semantics must be identical through this entry point — no divergent behavior introduced.');
+      var ledgerRows = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === p.Prospect_ID && r.values.Mode === LEDGER_MODE.LIVE; });
+      assertEquals_(1, ledgerRows.length);
+      assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State, 'Ledger must still reach durable SENT.');
+      assert_(String(ledgerRows[0].values.Error).indexOf('POST_SEND_PERSISTENCE_FAILURE') !== -1,
+        'The durable N6 ledger marker must still be stamped.');
+      assert_(isLiveKeyBlocked_(p.Prospect_ID, 1), 'The key must still be durably blocked.');
+
+      var retry = sendControlledFixtureLive(p.Prospect_ID);
+      assert_(retry.status === 'SKIPPED_ALREADY_CLAIMED' || retry.status === 'REJECTED_NOT_READY' || retry.status === 'SKIPPED_NOT_ELIGIBLE',
+        'A retry through this same entry point must not resend. Got: ' + retry.status);
+      assertEquals_(1, GmailApp._callCounts.send, 'Total real Gmail sends, including the retry attempt, must be EXACTLY 1.');
+    } finally {
+      n8_deleteFixtureRow_(p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test S: the fixture path never reads or touches the normal queue — unrelated real prospects are provably untouched. */
+function test_N8_fixturePathDoesNotDisturbNormalQueueOrdering_() {
+  withLiveModeEnabledForTest_(function () {
+    var real1 = n5_setupReadyProspect_('n8queuereal1');
+    var real2 = n5_setupReadyProspect_('n8queuereal2');
+    var fixture = n8_setupControlledFixture_('n8queuefixture');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureLive(fixture.Prospect_ID);
+      assertEquals_('SENT', result.status);
+      assertEquals_(1, GmailApp._callCounts.send, 'Only the fixture may be sent — never a real prospect, regardless of queue position.');
+
+      [real1.Prospect_ID, real2.Prospect_ID].forEach(function (id) {
+        var after = findRowById_(id).values;
+        assertEquals_(STATUS.READY, after.Status, 'Real prospects must remain untouched — Status unchanged.');
+        assertEquals_('', String(after.Sequence_Step || ''), 'Real prospects must remain untouched — Sequence_Step unchanged.');
+        assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === id; }).length,
+          'Real prospects must have NO ledger row — not even claimed — the fixture path never enumerates the queue.');
+      });
+    } finally {
+      n8_deleteFixtureRow_(fixture.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/**
+ * Tests T and U (task's own lettering) are deliberately NOT new tests:
+ * T — "Step-1 normal production behavior remains unchanged" is exactly
+ *     what test_N5_normalConfirmedStep1SendsExactlyOnce_ already proves,
+ *     calling sendStep1 directly (never through sendControlledFixtureLive).
+ * U — "corrected Step-2 Gmail API behavior [Codex finding #7] remains
+ *     unchanged" is exactly what the existing N5 follow-up tests
+ *     (test_N5_normalConfirmedFollowUpRepliesExactlyOnce_ etc.) already
+ *     prove — this change never touches doFollowUpSend_.
+ * Both are re-confirmed simply by the full existing suite staying green
+ * alongside these new tests (see the full regression results). Adding
+ * duplicate tests here would test nothing this change could have broken.
+ */
+
+/**
  * N6: computeNextActionDate_ itself throwing (cadence math failure) after
  * a CONFIRMED send is a distinct path from the Prospects-write failure
  * above — the write would otherwise SUCCEED, but must be forced to
@@ -4685,6 +5096,24 @@ var F1_TEST_FUNCTIONS = [
   ['N6_cadenceThrowForcesNeedsReview', test_N6_cadenceThrowAfterConfirmedSendForcesNeedsReview_],
   ['N6_batchHardStopsAfterPersistenceFailure', test_N6_batchHardStopsAfterPostSendPersistenceFailure_],
   ['N6_batchDoesNotStopOnOrdinaryOutcomes', test_N6_batchDoesNotStopOnOrdinaryOutcomes_],
+  ['N8_acceptedFixtureReachesPrimitive', test_N8_approvedControlledFixtureReachesRealPrimitiveAndSendsNormally_],
+  ['N8_realProspectRejected', test_N8_normalRealProspectRejectedBeforeGmail_],
+  ['N8_similarSourceRejected', test_N8_similarButNotAllowlistedSourceRejected_],
+  ['N8_stopContactRejected', test_N8_stopContactFixtureRejected_],
+  ['N8_dncRejected', test_N8_dncFixtureRejected_],
+  ['N8_repliedRejected', test_N8_repliedFixtureRejected_],
+  ['N8_suppressedRejected', test_N8_suppressedFixtureRejected_],
+  ['N8_malformedEmailRejected', test_N8_malformedEmailFixtureRejected_],
+  ['N8_emailMismatchRejected', test_N8_emailNormalizationMismatchFixtureRejected_],
+  ['N8_liveClaimedBlocks', test_N8_existingLiveClaimedRowBlocksFixture_],
+  ['N8_liveSentBlocks', test_N8_existingLiveSentRowBlocksFixture_],
+  ['N8_liveAmbiguousBlocks', test_N8_existingLiveAmbiguousRowBlocksFixture_],
+  ['N8_configNotArmedRejected', test_N8_configNotArmedFixtureRejected_],
+  ['N8_outsideWindowRejected', test_N8_outsideSendWindowFixtureRejected_],
+  ['N8_quotaExhaustedRejected', test_N8_dailyQuotaExhaustedFixtureRejected_],
+  ['N8_maxPerRunNotOneRejected', test_N8_maxPerRunNotOneFixtureRejected_],
+  ['N8_postSendPersistenceN6Semantics', test_N8_postSendPersistenceFailureRetainsN6SemanticsViaFixturePath_],
+  ['N8_doesNotDisturbQueueOrdering', test_N8_fixturePathDoesNotDisturbNormalQueueOrdering_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],
