@@ -1660,6 +1660,105 @@ function sendControlledFixtureLive(prospectId) {
 }
 
 /**
+ * Sends REAL Step 2 email for EXACTLY ONE explicitly controlled test
+ * fixture, chosen by Prospect_ID, without going through the normal
+ * queue/orderQueue_ path — the Step-2 sibling of sendControlledFixtureLive
+ * above (same architecture, same CONTROLLED_FIXTURE_SOURCES allowlist,
+ * same delegation model).
+ *
+ * ARCHITECTURE: read-only, pre-Gmail guards only. Delegates unchanged to
+ * sendFollowUp(prospectId, 2) — the EXACT SAME public entry point
+ * sendBatch() itself uses for every real Step-2+ send (executeLiveSendForStep_
+ * -> doFollowUpSend_). Nothing about Gmail.Users.Messages.send(), MIME/
+ * In-Reply-To/References threading, ledger CLAIMED/SENT/AMBIGUOUS,
+ * idempotency, quota, canSend_, post-send verification, Prospects
+ * persistence, or N6 post-send-persistence handling is reimplemented here
+ * — every one of those still runs, unmodified, inside doFollowUpSend_.
+ * This function only adds a narrower gate in front, exactly like its
+ * Step-1 sibling.
+ *
+ * THE GATE THIS FUNCTION EXISTS FOR: Source must be one of
+ * CONTROLLED_FIXTURE_SOURCES (Constants.gs) — the SAME allowlist
+ * sendControlledFixtureLive and makeControlledFixtureDueNow already use.
+ * A real prospect's Source is never in that list, so this fails closed,
+ * before any Gmail call, for every real prospect — always.
+ *
+ * Guards intentionally NOT re-implemented here (already covered by
+ * sendFollowUp's own fresh checks — duplicating them would only create a
+ * second copy that could drift): the blocking-ledger-row check
+ * (isLiveKeyBlocked_), LIVE Config arming (DRY_RUN/PENDING_F0 via
+ * performLiveSend_), the send window, and the daily quota.
+ */
+function sendControlledFixtureStep2Live(prospectId) {
+  if (!prospectId) return { status: 'REJECTED_NO_PROSPECT_ID' };
+
+  // Guard 1: the id must resolve to EXACTLY one row.
+  var matchCount = countProspectRowsById_(prospectId);
+  if (matchCount !== 1) {
+    return { status: 'REJECTED_AMBIGUOUS_ID', matchCount: matchCount };
+  }
+
+  var found = findRowById_(prospectId);
+  if (!found) return { status: 'REJECTED_NOT_FOUND' };
+  var p = found.values;
+
+  // Guard 2: THE core protection — Source allowlist.
+  if (CONTROLLED_FIXTURE_SOURCES.indexOf(p.Source) === -1) {
+    return { status: 'REJECTED_SOURCE_NOT_CONTROLLED', source: p.Source };
+  }
+
+  // Guard 3/4/5: must genuinely be mid-sequence, exactly at step 1 done,
+  // and step 2 must be the genuinely expected next step (getNextStepNumber_
+  // is the SAME function canSend_/sendBatch's queue-builder both use).
+  if (p.Status !== STATUS.IN_SEQUENCE) {
+    return { status: 'REJECTED_WRONG_STATUS', prospectStatus: p.Status };
+  }
+  if (Number(p.Sequence_Step) !== 1) {
+    return { status: 'REJECTED_WRONG_SEQUENCE_STEP', sequenceStep: p.Sequence_Step };
+  }
+  var config = getConfig();
+  var expectedStep = getNextStepNumber_(p, config);
+  if (expectedStep !== 2) {
+    return { status: 'REJECTED_UNEXPECTED_STEP', expectedStep: expectedStep };
+  }
+
+  // Guards 6/7/8: Step 1 must have genuinely, verifiably happened — never
+  // send a follow-up for a step that was never actually sent.
+  if (!p.Step1_Sent_At) return { status: 'REJECTED_MISSING_STEP1_SENT_AT' };
+  if (!p.Thread_ID) return { status: 'REJECTED_MISSING_THREAD_ID' };
+  if (!p.Last_Message_ID) return { status: 'REJECTED_MISSING_LAST_MESSAGE_ID' };
+
+  // Guard 9: due now — named separately from the generic SKIPPED_NOT_ELIGIBLE
+  // canSend_ would otherwise produce for this same condition.
+  if (!p.Next_Action_Date || new Date(p.Next_Action_Date).getTime() > Date.now()) {
+    return { status: 'REJECTED_NOT_DUE', nextActionDate: p.Next_Action_Date };
+  }
+
+  // Guards 10/11/12: the same three eligibility fields canSend_ enforces,
+  // re-checked here explicitly for a named, specific rejection reason.
+  if (p.Replied === true) return { status: 'REJECTED_REPLIED' };
+  if (p.Stop_Contact === true) return { status: 'REJECTED_STOP_CONTACT' };
+  if (p.Do_Not_Contact_Reason) return { status: 'REJECTED_DNC', reason: p.Do_Not_Contact_Reason };
+
+  // Guard 13: Suppression.
+  if (isSuppressed_(p.Email_Normalized, p.Domain)) {
+    return { status: 'REJECTED_SUPPRESSED' };
+  }
+
+  // Guard 16: this mechanism is for single-target use only.
+  if (Number(config.MAX_PER_RUN) !== 1) {
+    return { status: 'REJECTED_MAX_PER_RUN_NOT_ONE', maxPerRun: config.MAX_PER_RUN };
+  }
+
+  // Guards 14/15/17: delegated, unchanged, to the production primitive.
+  // sendFollowUp re-reads this exact row fresh under its own lock and
+  // applies isLiveKeyBlocked_, DRY_RUN/PENDING_F0 (performLiveSend_), the
+  // send window, the daily quota, and (on send) doFollowUpSend_'s full
+  // Gmail-reply/threading/ledger/N6 handling — all unmodified.
+  return sendFollowUp(prospectId, 2);
+}
+
+/**
  * LIVE orchestrator (F2). Not called by any trigger, menu default, or test
  * in this F1 delivery. Included per the approved file list. Deliberately
  * thin — ALL real authority (lock, PAUSE_ALL, window, eligibility, quota)

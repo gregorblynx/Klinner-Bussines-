@@ -21,6 +21,7 @@ function onOpen() {
     .addItem('Send now (LIVE)', 'menu_sendNowLive_')
     .addItem('Send selected CONTROLLED fixture (LIVE)', 'menu_sendControlledFixtureLive_')
     .addItem('Make selected CONTROLLED fixture due now', 'menu_makeControlledFixtureDueNow_')
+    .addItem('Send selected CONTROLLED fixture Step 2 (LIVE)', 'menu_sendControlledFixtureStep2Live_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
     .addItem('Stop prospect (selected row)', 'menu_stopProspect_')
@@ -197,6 +198,26 @@ function menu_makeControlledFixtureDueNow_() {
     if (response !== ui.Button.YES) return;
     var result = makeControlledFixtureDueNow(prospectId);
     ui.alert('Make selected CONTROLLED fixture due now', 'Result: ' + result.status, ui.ButtonSet.OK);
+  });
+}
+
+/**
+ * Operator-only, exact-target LIVE Step 2 send for ONE explicitly
+ * controlled test fixture — never a real prospect
+ * (sendControlledFixtureStep2Live enforces the same Source allowlist as
+ * the other controlled-fixture actions before touching Gmail).
+ */
+function menu_sendControlledFixtureStep2Live_() {
+  guardedMenuAction_(function (ui) {
+    var prospectId = getSelectedProspectId_(ui);
+    var response = ui.alert('Send selected CONTROLLED fixture Step 2 (LIVE)',
+      'This sends ONE real Step 2 follow-up to the selected row, ONLY if its Source is an approved ' +
+      'controlled-test fixture — real prospects are refused before any Gmail call. Prospect_ID: ' + prospectId +
+      '\n\nContinue?',
+      ui.ButtonSet.YES_NO);
+    if (response !== ui.Button.YES) return;
+    var result = sendControlledFixtureStep2Live(prospectId);
+    ui.alert('Send selected CONTROLLED fixture Step 2 (LIVE)', 'Result: ' + result.status, ui.ButtonSet.OK);
   });
 }
 

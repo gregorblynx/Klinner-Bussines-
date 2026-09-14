@@ -4127,6 +4127,422 @@ function test_N9_realProspectsRemainUntouched_() {
  */
 
 /**
+ * N10 (exact-target controlled Step-2 LIVE): sendControlledFixtureStep2Live
+ * (Mailer.gs) — the Step-2 sibling of N8's sendControlledFixtureLive.
+ * Same architecture, same delegation model, this time to
+ * sendFollowUp(prospectId, 2) — the SAME primitive sendBatch() itself
+ * uses for every real Step-2+ send.
+ */
+
+/** A due, IN_SEQUENCE/step-1-done controlled fixture — same shape n9_setupControlledStep2Fixture_ builds, made due by default here. */
+function n10_setupDueControlledStep2Fixture_(emailTag, overrides) {
+  var past = new Date(); past.setDate(past.getDate() - 3);
+  var merged = Object.assign({ Next_Action_Date: past }, overrides || {});
+  return n9_setupControlledStep2Fixture_(emailTag, merged);
+}
+
+/** Test 1 + 20: the accept path reaches sendFollowUp(id, 2) and performs a normal, complete Step-2 LIVE send; no other row changes. */
+function test_N10_approvedFixtureStep2SucceedsThroughNormalPrimitive_() {
+  withLiveModeEnabledForTest_(function () {
+    var real1 = n5_setupReadyProspect_('n10queuereal1');
+    var setup = n10_setupDueControlledStep2Fixture_('n10accept');
+    try {
+      var real1Before = findRowById_(real1.Prospect_ID).values;
+      GmailApp._resetCallCounts();
+      var beforeLedgerRows = readAllLedgerRows_().length;
+
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+
+      assertEquals_('SENT', result.status, 'An approved, due controlled fixture must reach a normal SENT.');
+      assertEquals_(1, GmailApp._callCounts.apiSend, 'Exactly one real Gmail.Users.Messages.send() call must occur — the SAME Step-2 primitive normal sending uses.');
+      assertEquals_(0, GmailApp._callCounts.send, 'No draft.send() — Step 2 replies on the existing thread, never sends a fresh message.');
+
+      var ledgerRows = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID && r.values.Mode === LEDGER_MODE.LIVE && r.values.Step === 2;
+      });
+      assertEquals_(1, ledgerRows.length, 'Exactly one LIVE Step-2 ledger row — CLAIMED -> SENT, never two rows.');
+      assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State);
+      assertEquals_(beforeLedgerRows + 1, readAllLedgerRows_().length, 'Exactly one new ledger row total.');
+
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(2, Number(after.Sequence_Step), 'Prospects persistence must occur normally — Sequence_Step advances to 2.');
+      assert_(!!after.Last_Message_ID, 'Last_Message_ID must be recorded normally.');
+
+      // Test 20: exact fixture only — an unrelated real prospect untouched.
+      var real1After = findRowById_(real1.Prospect_ID).values;
+      assertEquals_(real1Before.Status, real1After.Status, 'An unrelated real prospect must be completely untouched.');
+      assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === real1.Prospect_ID; }).length,
+        'An unrelated real prospect must have NO ledger row — the fixture path never enumerates the queue.');
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 2: a normal real prospect (default Source), otherwise perfectly eligible for Step 2, is rejected before any Gmail call. */
+function test_N10_realProspectRejectedBeforeGmail_() {
+  withLiveModeEnabledForTest_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('n10realprospect', config); // default Source, due, IN_SEQUENCE step 1.
+    GmailApp._resetCallCounts();
+
+    var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+
+    assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', result.status);
+    assertEquals_(0, GmailApp._callCounts.apiSend);
+    assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === setup.p.Prospect_ID; }).length,
+      'No ledger row — not even a claim — for a rejected real prospect.');
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 3: a similarly-named but not-exactly-allowlisted Source is also rejected. */
+function test_N10_wrongSourceRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10wrongsource', { Source: 'CONTROLLED_INTERNAL_STEP2_RETEST_OLD' });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 4: Status=READY (step 1 never actually sent, or already reset) rejected. */
+function test_N10_readyStatusRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10ready', { Status: STATUS.READY });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_WRONG_STATUS', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 5: wrong Sequence_Step (already past step 1) rejected. */
+function test_N10_wrongSequenceStepRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10wrongstep', { Sequence_Step: 2 });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_WRONG_SEQUENCE_STEP', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 6: missing Step1_Sent_At rejected. */
+function test_N10_missingStep1SentAtRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10missingsent', { Step1_Sent_At: '' });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_MISSING_STEP1_SENT_AT', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 7: missing Thread_ID rejected. */
+function test_N10_missingThreadIdRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10missingthread', { Thread_ID: '' });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_MISSING_THREAD_ID', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 8: missing Last_Message_ID rejected. */
+function test_N10_missingLastMessageIdRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10missingmsgid', { Last_Message_ID: '' });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_MISSING_LAST_MESSAGE_ID', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 9: NOT yet due (Next_Action_Date in the future — n9's own default shape) rejected. */
+function test_N10_notDueFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n9_setupControlledStep2Fixture_('n10notdue'); // default: 7 days in the future.
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_NOT_DUE', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 10: Replied=TRUE rejected. */
+function test_N10_repliedFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10replied', { Replied: true });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_REPLIED', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 11: Stop_Contact rejected. */
+function test_N10_stopContactFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10stop', { Stop_Contact: true });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_STOP_CONTACT', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 12: DNC rejected. */
+function test_N10_dncFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10dnc', { Do_Not_Contact_Reason: DNC_REASON.MANUAL });
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_DNC', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 13: Suppression rejected — real addSuppression_. */
+function test_N10_suppressedFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10suppressed');
+    addSuppression_(setup.p.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.MANUAL, 'test');
+    _testCreatedSuppressionValues.push(setup.p.Email_Normalized);
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_SUPPRESSED', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Tests 14/15/16: an existing blocking Step-2 LIVE row (CLAIMED/SENT/AMBIGUOUS) blocks — delegated unchanged to isLiveKeyBlocked_ via sendFollowUp. */
+function test_N10_existingBlockingLiveStep2RowBlocksFixture_() {
+  withLiveModeEnabledForTest_(function () {
+    [LEDGER_STATE.CLAIMED, LEDGER_STATE.SENT, LEDGER_STATE.AMBIGUOUS].forEach(function (state) {
+      var setup = n10_setupDueControlledStep2Fixture_('n10blocked' + state.toLowerCase());
+      try {
+        appendLedgerRow_({
+          Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: setup.p.Prospect_ID, Email_Normalized: setup.p.Email_Normalized,
+          Step: 2, Idempotency_Key: getIdempotencyKey_(setup.p.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE, State: state,
+          Thread_ID: setup.p.Thread_ID, Message_ID: '', Draft_ID: '',
+          Confirmed_At: state === LEDGER_STATE.SENT ? new Date() : '', Error: ''
+        });
+        GmailApp._resetCallCounts();
+        var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+        assertEquals_('SKIPPED_ALREADY_CLAIMED', result.status,
+          'A pre-existing ' + state + ' LIVE Step-2 row must block via the SAME isLiveKeyBlocked_ sendFollowUp already uses.');
+        assertEquals_(0, GmailApp._callCounts.apiSend);
+      } finally {
+        n8_deleteFixtureRow_(setup.p.Prospect_ID);
+      }
+    });
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/** Test 17: Config not armed (DRY_RUN=TRUE) — the SAME performLiveSend_ throw sendFollowUp itself produces, unmodified. */
+function test_N10_configNotArmedFixtureRejected_() {
+  // Deliberately NOT withLiveModeEnabledForTest_ — DRY_RUN stays TRUE, the
+  // real safe default. Only MAX_PER_RUN is set to 1 so this mechanism's
+  // OWN guard 16 does not mask what this test is actually proving.
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var lastRow = sheet.getLastRow();
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var maxPerRunRow = null;
+  for (var i = 0; i < values.length; i++) { if (values[i][0] === 'MAX_PER_RUN') maxPerRunRow = i + 2; }
+  if (!maxPerRunRow) throw new Error('MAX_PER_RUN not found in Config.');
+  var originalMaxPerRun = sheet.getRange(maxPerRunRow, 2).getValue();
+
+  var setup = n10_setupDueControlledStep2Fixture_('n10notarmed');
+  try {
+    sheet.getRange(maxPerRunRow, 2).setValue('1');
+    resetConfigCache_();
+    assertEquals_(true, getConfig().DRY_RUN, 'Precondition: DRY_RUN must genuinely still be TRUE.');
+
+    GmailApp._resetCallCounts();
+    var threw = false;
+    try {
+      sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+    } catch (e) {
+      threw = true;
+      assert_(String(e).indexOf('DRY_RUN') !== -1, 'The propagated error must be performLiveSend_\\u2019s own DRY_RUN guard, unmodified.');
+    }
+    assert_(threw, 'With DRY_RUN=TRUE, sendControlledFixtureStep2Live must throw — exactly like sendFollowUp would.');
+    assertEquals_(0, GmailApp._callCounts.apiSend);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    sheet.getRange(maxPerRunRow, 2).setValue(originalMaxPerRun);
+    resetConfigCache_();
+  }
+}
+
+/** Test 18: outside the configured send window — delegated unchanged to isWithinSendWindow_ via sendFollowUp. */
+function test_N10_outsideSendWindowFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10window');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('SKIPPED_OUTSIDE_WINDOW', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5', SEND_START_HOUR: '9', SEND_END_HOUR: '9' });
+}
+
+/** Test 19: daily quota exhausted — delegated unchanged to computeLiveSendBudget_ via sendFollowUp. */
+function test_N10_dailyQuotaExhaustedFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10quota');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('QUOTA_ABORT', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '0' });
+}
+
+/** Test: MAX_PER_RUN != 1 refuses this mechanism outright — never delegates. */
+function test_N10_maxPerRunNotOneFixtureRejected_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10maxperrun');
+    try {
+      GmailApp._resetCallCounts();
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      assertEquals_('REJECTED_MAX_PER_RUN_NOT_ONE', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+      assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === setup.p.Prospect_ID; }).length,
+        'No claim of any kind — the guard fires before sendFollowUp is ever called.');
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '2', MAX_PER_DAY: '5' });
+}
+
+/** Test 24: N6 post-send persistence protection is unchanged through this new entry point. */
+function test_N10_postSendPersistenceFailureRetainsN6SemanticsViaStep2FixturePath_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n10n6semantics');
+    try {
+      GmailApp._resetCallCounts();
+      var originalWriteRowById = writeRowById_;
+      writeRowById_ = function () { throw new Error('N10 simulated: total Prospects persistence outage.'); };
+
+      var result;
+      try {
+        result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+      } finally {
+        writeRowById_ = originalWriteRowById;
+      }
+
+      assertEquals_('SENT_PERSISTENCE_FAILED', result.status, 'N6 semantics must be identical through this entry point.');
+      var ledgerRows = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID && r.values.Mode === LEDGER_MODE.LIVE && r.values.Step === 2;
+      });
+      assertEquals_(1, ledgerRows.length);
+      assertEquals_(LEDGER_STATE.SENT, ledgerRows[0].values.State, 'Ledger must still reach durable SENT.');
+      assert_(String(ledgerRows[0].values.Error).indexOf('POST_SEND_PERSISTENCE_FAILURE') !== -1,
+        'The durable N6 ledger marker must still be stamped.');
+      assert_(isLiveKeyBlocked_(setup.p.Prospect_ID, 2), 'The key must still be durably blocked.');
+      assertEquals_(1, GmailApp._callCounts.apiSend, 'Exactly one real Gmail.Users.Messages.send() call must have occurred.');
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
+}
+
+/**
+ * Tests 21/22/23 (task's own numbering) are deliberately NOT new tests:
+ * 21 — "Step-1 controlled action remains unchanged" is exactly what the
+ *      existing N8 suite already proves; sendControlledFixtureStep2Live
+ *      never touches sendControlledFixtureLive or doStep1Send_.
+ * 22 — "normal sendBatch behavior remains unchanged" is exactly what the
+ *      existing N6 batch-hard-stop suite already proves; this change
+ *      never touches sendBatch() at all (grep confirms it).
+ * 23 — "corrected Gmail API follow-up architecture [explicit-recipient
+ *      Gmail.Users.Messages.send/get, MIME, In-Reply-To/References] remains
+ *      unchanged" is exactly what the CURRENT, registered follow-up suite
+ *      already proves: test_followUpApiSendExceptionIsAmbiguousAndNeverRetried_,
+ *      test_followUpApiOutboundOnlyThreadUsesExplicitProspectRecipient_,
+ *      test_followUpApiExplicitRecipientMismatchFailsBeforeSend_,
+ *      test_followUpApiWrongReturnedRecipientBecomesAmbiguous_,
+ *      test_followUpApiReturnedThreadMismatchBecomesAmbiguous_,
+ *      test_followUpApiMetadataReadRetriesWithoutResending_,
+ *      test_followUpApiExistingAmbiguousKeyBlocksAllGmailCalls_ (all
+ *      registered under the N5_followUp* keys below). This change never
+ *      touches doFollowUpSend_ — it only calls the unmodified public
+ *      sendFollowUp(id, 2).
+ *
+ *      NOTE (discovered while writing these tests, not introduced by this
+ *      change, and deliberately left untouched — out of scope for this
+ *      round): four OLDER thread.reply()-based follow-up tests
+ *      (test_N5_followUpReplyThrowsDurablyBlocksLedger_,
+ *      test_N5_followUpReplyThrowsAndProspectsWriteThrowsStillBlocksAtLedger_,
+ *      test_N5_followUpMessageCountMismatchDurablyBlocksEvenIfProspectsWriteFails_,
+ *      test_N5_normalConfirmedFollowUpRepliesExactlyOnce_) are still defined
+ *      in this file but are no longer referenced by F1_TEST_FUNCTIONS —
+ *      an earlier commit that rewrote doFollowUpSend_ onto the explicit-
+ *      recipient Gmail API replaced their registry entries with the
+ *      test_followUpApi* functions above but left the orphaned originals
+ *      in place. They currently execute as dead code. Confirmed by
+ *      `grep -c "<name>\]" Tests.gs` returning 0 for each. Flagged here for
+ *      whoever next touches Tests.gs; not fixed in this round because it is
+ *      unrelated to exact-target controlled Step-2 LIVE.
+ * All three are re-confirmed by the full existing suite staying green
+ * alongside these new tests.
+ */
+
+/**
  * N6: computeNextActionDate_ itself throwing (cadence math failure) after
  * a CONFIRMED send is a distinct path from the Prospects-write failure
  * above — the write would otherwise SUCCEED, but must be forced to
@@ -5377,6 +5793,25 @@ var F1_TEST_FUNCTIONS = [
   ['N9_blockingLiveStep2Rejected', test_N9_blockingLiveStep2RowRejected_],
   ['N9_onlyNextActionDateChanges', test_N9_onlyNextActionDateFieldChanges_],
   ['N9_realProspectsUntouched', test_N9_realProspectsRemainUntouched_],
+  ['N10_acceptedFixtureStep2Succeeds', test_N10_approvedFixtureStep2SucceedsThroughNormalPrimitive_],
+  ['N10_realProspectRejected', test_N10_realProspectRejectedBeforeGmail_],
+  ['N10_wrongSourceRejected', test_N10_wrongSourceRejected_],
+  ['N10_readyStatusRejected', test_N10_readyStatusRejected_],
+  ['N10_wrongSequenceStepRejected', test_N10_wrongSequenceStepRejected_],
+  ['N10_missingStep1SentAtRejected', test_N10_missingStep1SentAtRejected_],
+  ['N10_missingThreadIdRejected', test_N10_missingThreadIdRejected_],
+  ['N10_missingLastMessageIdRejected', test_N10_missingLastMessageIdRejected_],
+  ['N10_notDueRejected', test_N10_notDueFixtureRejected_],
+  ['N10_repliedRejected', test_N10_repliedFixtureRejected_],
+  ['N10_stopContactRejected', test_N10_stopContactFixtureRejected_],
+  ['N10_dncRejected', test_N10_dncFixtureRejected_],
+  ['N10_suppressedRejected', test_N10_suppressedFixtureRejected_],
+  ['N10_blockingLiveStep2Rejected', test_N10_existingBlockingLiveStep2RowBlocksFixture_],
+  ['N10_configNotArmedRejected', test_N10_configNotArmedFixtureRejected_],
+  ['N10_outsideWindowRejected', test_N10_outsideSendWindowFixtureRejected_],
+  ['N10_quotaExhaustedRejected', test_N10_dailyQuotaExhaustedFixtureRejected_],
+  ['N10_maxPerRunNotOneRejected', test_N10_maxPerRunNotOneFixtureRejected_],
+  ['N10_postSendPersistenceN6Semantics', test_N10_postSendPersistenceFailureRetainsN6SemanticsViaStep2FixturePath_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],
