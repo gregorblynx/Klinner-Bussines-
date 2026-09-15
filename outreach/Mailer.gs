@@ -1017,6 +1017,62 @@ function deleteKlinnerPreviewDrafts() {
 // ---------------------------------------------------------------------------
 
 var executeLiveSendForStep_;
+var reconcileControlledFixtureStep2Ambiguous;
+
+/**
+ * Gmail API MessagePartBody.data is base64url. Gmail commonly omits the
+ * optional trailing '=' padding, while Apps Script's decoder requires a
+ * complete four-character quantum for some payload lengths. Normalize only
+ * that permitted omission, validate the alphabet/shape first, and verify a
+ * UTF-8 round trip so corrupt bytes never become replacement characters and
+ * accidentally pass body verification.
+ */
+function decodeGmailApiBase64UrlUtf8_(encoded) {
+  var input = String(encoded || '');
+  if (!input || !/^[A-Za-z0-9_-]+={0,2}$/.test(input) || /=/.test(input.replace(/={1,2}$/, ''))) {
+    throw new Error('Gmail verification failed: malformed base64url body data.');
+  }
+  var unpadded = input.replace(/=+$/, '');
+  var remainder = unpadded.length % 4;
+  if (remainder === 1) {
+    throw new Error('Gmail verification failed: malformed base64url body length.');
+  }
+  var padded = unpadded + (remainder === 2 ? '==' : (remainder === 3 ? '=' : ''));
+  var bytes;
+  try {
+    bytes = Utilities.base64DecodeWebSafe(padded);
+  } catch (e) {
+    throw new Error('Gmail verification failed: base64url body decode error: ' + e);
+  }
+  var decoded = Utilities.newBlob(bytes).getDataAsString('UTF-8');
+  var roundTrip = Utilities.base64EncodeWebSafe(decoded, Utilities.Charset.UTF_8).replace(/=+$/, '');
+  if (roundTrip !== unpadded) {
+    throw new Error('Gmail verification failed: decoded body is not valid canonical UTF-8.');
+  }
+  return decoded;
+}
+
+/** Extract exactly one inline text/plain body and decode it fail-closed. */
+function decodeGmailApiMessageBodyUtf8_(messageResource) {
+  var payload = messageResource && messageResource.payload;
+  if (!payload) throw new Error('Gmail verification failed: message payload is missing.');
+
+  var candidates = [];
+  function visit(part, isRoot) {
+    if (!part) return;
+    var data = part.body && part.body.data;
+    var mimeType = String(part.mimeType || '').toLowerCase();
+    var filename = String(part.filename || '');
+    if (data && mimeType === 'text/plain' && !filename) candidates.push(data);
+    var parts = part.parts || [];
+    for (var i = 0; i < parts.length; i++) visit(parts[i], false);
+  }
+  visit(payload, true);
+  if (candidates.length !== 1) {
+    throw new Error('Gmail verification failed: expected exactly one inline text/plain body, found ' + candidates.length + '.');
+  }
+  return decodeGmailApiBase64UrlUtf8_(candidates[0]);
+}
 
 (function () {
   /**
@@ -1235,9 +1291,7 @@ var executeLiveSendForStep_;
   }
 
   function decodedApiMessageBody_(messageResource) {
-    var data = messageResource && messageResource.payload && messageResource.payload.body && messageResource.payload.body.data;
-    if (!data) return '';
-    return Utilities.newBlob(Utilities.base64DecodeWebSafe(data)).getDataAsString('UTF-8');
+    return decodeGmailApiMessageBodyUtf8_(messageResource);
   }
 
   function buildExplicitFollowUpMessage_(prospect, rendered, config, priorMessage) {
@@ -1310,6 +1364,182 @@ var executeLiveSendForStep_;
     }
     throw lastError || new Error('follow-up verification failed');
   }
+
+  function countExactFollowUpCopiesInThread_(threadResource, expected) {
+    if (!threadResource || threadResource.id !== expected.threadId || !Array.isArray(threadResource.messages)) {
+      throw new Error('Controlled reconciliation blocked: Gmail thread resource is missing or mismatched.');
+    }
+    var matches = 0;
+    for (var i = 0; i < threadResource.messages.length; i++) {
+      var message = threadResource.messages[i];
+      if (normalizedSingleAddress_(gmailApiHeader_(message, 'To')) !== expected.recipient ||
+          normalizedSingleAddress_(gmailApiHeader_(message, 'From')) !== expected.sender ||
+          gmailApiHeader_(message, 'Subject') !== expected.subject ||
+          gmailApiHeader_(message, 'In-Reply-To') !== expected.priorRfcMessageId ||
+          gmailApiHeader_(message, 'References') !== expected.references ||
+          gmailApiHeader_(message, 'X-Klinner-Body-SHA256') !== expected.bodyHash) {
+        continue;
+      }
+      if (decodedApiMessageBody_(message).replace(/\r\n?/g, '\n') === expected.body.replace(/\r\n?/g, '\n')) {
+        matches++;
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * Reconciles one immutable, already-sent controlled Step-2 incident.
+   * This function has no outbound Gmail primitive: it only reads the exact
+   * prior/current message and thread, then persists the already-proven result.
+   * Every identifier is pinned in CONTROLLED_STEP2_AMBIGUOUS_INCIDENT, so it
+   * cannot be repurposed for a real prospect or another ambiguous row.
+   */
+  reconcileControlledFixtureStep2Ambiguous = function (prospectId) {
+    var incident = CONTROLLED_STEP2_AMBIGUOUS_INCIDENT;
+    if (prospectId !== incident.Prospect_ID) {
+      return { status: 'REJECTED_RECONCILIATION_TARGET', prospectId: prospectId };
+    }
+
+    var config = getConfig();
+    if (config.DRY_RUN !== true || config.PAUSE_ALL !== true || Number(config.MAX_PER_RUN) !== 1) {
+      return { status: 'REJECTED_CONFIG_NOT_SAFE' };
+    }
+    if (normalizeEmail_(config.SENDER_EMAIL) !== incident.Sender_Email) {
+      return { status: 'REJECTED_SENDER_CONFIG_MISMATCH' };
+    }
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) return { status: 'REJECTED_LOCK_BUSY' };
+    try {
+      if (countProspectRowsById_(prospectId) !== 1) return { status: 'REJECTED_AMBIGUOUS_ID' };
+      var found = findRowById_(prospectId);
+      if (!found) return { status: 'REJECTED_NOT_FOUND' };
+      var p = found.values;
+      if (p.Source !== incident.Source) return { status: 'REJECTED_SOURCE_NOT_CONTROLLED' };
+      if (normalizeEmail_(p.Email_Normalized) !== incident.Email_Normalized ||
+          normalizeEmail_(p.Email) !== incident.Email_Normalized) return { status: 'REJECTED_RECIPIENT_MISMATCH' };
+      if (String(p.Thread_ID || '') !== incident.Thread_ID) return { status: 'REJECTED_PRIOR_MESSAGE_MISMATCH' };
+
+      var stepRows = readAllLedgerRows_().filter(function (row) {
+        return row.values.Prospect_ID === prospectId && Number(row.values.Step) === incident.Step &&
+          row.values.Mode === LEDGER_MODE.LIVE;
+      });
+
+      if (stepRows.length === 1 && stepRows[0].values.State === LEDGER_STATE.SENT &&
+          stepRows[0].values.Run_ID === incident.Run_ID && stepRows[0].values.Message_ID === incident.Message_ID &&
+          Number(p.Sequence_Step) === incident.Step && p.Step2_Sent_At &&
+          String(p.Last_Message_ID || '') === incident.Message_ID) {
+        return { status: 'ALREADY_RECONCILED', prospectId: prospectId, messageId: incident.Message_ID };
+      }
+
+      if (String(p.Last_Message_ID || '') !== incident.Prior_Message_ID) {
+        return { status: 'REJECTED_PRIOR_MESSAGE_MISMATCH' };
+      }
+
+      if (p.Status !== STATUS.NEEDS_REVIEW) return { status: 'REJECTED_WRONG_STATUS', prospectStatus: p.Status };
+      if (Number(p.Sequence_Step) !== 1) return { status: 'REJECTED_WRONG_SEQUENCE_STEP', sequenceStep: p.Sequence_Step };
+      if (!p.Step1_Sent_At || p.Step2_Sent_At) return { status: 'REJECTED_STEP_HISTORY' };
+      if (!p.Next_Action_Date || new Date(p.Next_Action_Date).getTime() > Date.now()) return { status: 'REJECTED_NOT_DUE' };
+      if (p.Replied === true) return { status: 'REJECTED_REPLIED' };
+      if (p.Stop_Contact === true) return { status: 'REJECTED_STOP_CONTACT' };
+      if (p.Do_Not_Contact_Reason) return { status: 'REJECTED_DNC' };
+      if (isSuppressed_(p.Email_Normalized, p.Domain)) return { status: 'REJECTED_SUPPRESSED' };
+      if (stepRows.length !== 1) return { status: 'REJECTED_STEP2_LEDGER_COUNT', count: stepRows.length };
+
+      var ledgerRow = stepRows[0];
+      var lv = ledgerRow.values;
+      var isOriginalAmbiguous = lv.State === LEDGER_STATE.AMBIGUOUS && !lv.Message_ID;
+      var isResumeAfterLedgerCommit = lv.State === LEDGER_STATE.SENT && lv.Message_ID === incident.Message_ID &&
+        String(lv.Error || '').indexOf('RECONCILED_FROM_AMBIGUOUS:') === 0;
+      if (lv.Run_ID !== incident.Run_ID || (!isOriginalAmbiguous && !isResumeAfterLedgerCommit) ||
+          lv.Idempotency_Key !== getIdempotencyKey_(prospectId, incident.Step) ||
+          String(lv.Thread_ID || '') !== incident.Thread_ID) {
+        return { status: 'REJECTED_STEP2_LEDGER_EVIDENCE' };
+      }
+      var originalAmbiguity = String(lv.Error || '');
+      if (originalAmbiguity.indexOf('No se pudo descifrar la cadena') === -1) {
+        return { status: 'REJECTED_AMBIGUITY_REASON' };
+      }
+
+      var priorMessage = Gmail.Users.Messages.get('me', incident.Prior_Message_ID, { format: 'metadata' });
+      if (!priorMessage || priorMessage.threadId !== incident.Thread_ID ||
+          gmailApiHeader_(priorMessage, 'Message-ID') !== incident.Prior_Rfc_Message_ID) {
+        return { status: 'REJECTED_PRIOR_GMAIL_EVIDENCE' };
+      }
+
+      var rendered = renderTemplateForStep_(incident.Step, p, config);
+      var prepared = buildExplicitFollowUpMessage_(p, rendered, config, priorMessage);
+      if (prepared.recipient !== incident.Email_Normalized || prepared.priorRfcMessageId !== incident.Prior_Rfc_Message_ID ||
+          prepared.references.indexOf(incident.Prior_Rfc_Message_ID) === -1) {
+        return { status: 'REJECTED_RENDERED_EVIDENCE' };
+      }
+
+      var expected = {
+        threadId: incident.Thread_ID, recipient: prepared.recipient, sender: prepared.sender,
+        subject: prepared.subject, priorRfcMessageId: prepared.priorRfcMessageId,
+        references: prepared.references, bodyHash: prepared.bodyHash, body: prepared.body
+      };
+      var actual = verifyExplicitFollowUpMessage_(incident.Message_ID, expected);
+      if (gmailApiHeader_(actual, 'Message-ID') !== incident.Rfc_Message_ID) {
+        return { status: 'REJECTED_RFC_MESSAGE_ID' };
+      }
+
+      var threadResource = Gmail.Users.Threads.get('me', incident.Thread_ID, { format: 'full' });
+      if (countExactFollowUpCopiesInThread_(threadResource, expected) !== 1) {
+        return { status: 'REJECTED_DUPLICATE_OR_MISSING_MESSAGE' };
+      }
+
+      var confirmedAt = new Date(Number(actual.internalDate));
+      if (!actual.internalDate || isNaN(confirmedAt.getTime())) {
+        return { status: 'REJECTED_INVALID_INTERNAL_DATE' };
+      }
+      var nextDate = computeNextActionDate_(incident.Step, confirmedAt, config);
+      var nextStatus = nextDate ? STATUS.IN_SEQUENCE : STATUS.SEQUENCE_DONE;
+      var reconciliationMarker = 'RECONCILED_FROM_AMBIGUOUS: exact Gmail message ' + incident.Message_ID +
+        ' verified; original incident=' + originalAmbiguity;
+
+      // Metadata first, SENT state last: a killed execution cannot publish
+      // SENT before its authoritative Gmail ID/timestamp/audit marker exists.
+      if (isOriginalAmbiguous) {
+        writeLedgerMetadataThenState_(ledgerRow.rowIndex, {
+          Message_ID: incident.Message_ID,
+          Confirmed_At: confirmedAt,
+          Error: reconciliationMarker
+        }, LEDGER_STATE.SENT);
+      }
+
+      var fields = {
+        Status: nextStatus,
+        Sequence_Step: incident.Step,
+        Step2_Sent_At: confirmedAt,
+        Last_Contacted: confirmedAt,
+        Last_Message_ID: incident.Message_ID,
+        Next_Action_Date: nextDate || ''
+      };
+      try {
+        writeRowById_(prospectId, fields, {
+          origin: ORIGIN.ADMIN,
+          operation: OPERATION.ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION
+        });
+      } catch (persistError) {
+        updateLedgerRow_(ledgerRow.rowIndex, {
+          Error: reconciliationMarker + ' POST_SEND_PERSISTENCE_FAILURE: reconciliation Prospects write failed (' + persistError + ').'
+        });
+        throw persistError;
+      }
+
+      logEvent_(LOG_LEVEL.INFO, LOG_EVENT.FIXTURE_STEP2_AMBIGUOUS_RECONCILED,
+        prospectId, p.Email_Normalized, incident.Step,
+        'Exact existing Gmail message verified; AMBIGUOUS row transitioned in place to SENT. Original=' + originalAmbiguity);
+      flushLog_();
+      return {
+        status: 'RECONCILED_SENT', prospectId: prospectId, messageId: incident.Message_ID,
+        confirmedAt: confirmedAt, nextActionDate: nextDate || ''
+      };
+    } finally {
+      lock.releaseLock();
+    }
+  };
 
   function markFollowUpAmbiguous_(ledgerRowNum, prospectId, prospect, step, error) {
     updateLedgerRow_(ledgerRowNum, {

@@ -176,6 +176,26 @@ var CONTROLLED_FIXTURE_SOURCES = [
 /** The one Google-real Step-2 fixture allowed to recover from the documented pre-CLAIM scope failure. */
 var CONTROLLED_STEP2_RECOVERY_PROSPECT_ID = 'cd55d881-113f-4949-850d-ecde913d83cb';
 
+/**
+ * The one already-sent Google-real Step-2 incident that may be reconciled
+ * without another Gmail SEND. These immutable identifiers are deliberately
+ * code constants: Sheet edits cannot widen this operator action to another
+ * prospect, run, message, recipient, or thread.
+ */
+var CONTROLLED_STEP2_AMBIGUOUS_INCIDENT = {
+  Prospect_ID: 'cd55d881-113f-4949-850d-ecde913d83cb',
+  Source: 'CONTROLLED_INTERNAL_STEP2_RETEST',
+  Run_ID: 'df1c0772-4e10-47bf-aa9d-366ee7828320',
+  Step: 2,
+  Email_Normalized: 'gregorsilvauber+step2fix@gmail.com',
+  Sender_Email: 'jhessyca@klinnerpro.com',
+  Thread_ID: '1a0a125e8dde9823',
+  Prior_Message_ID: '1a0a125eb01e480c',
+  Message_ID: '1a0a6999b8bf445f',
+  Rfc_Message_ID: '<CABTxQ3he_jUOzq=SMJO6k7KdGi=bLdTeNvy7TaLMcKPXouKEew@mail.gmail.com>',
+  Prior_Rfc_Message_ID: '<CABTxQ3j5XhXY6=++FAF6a3foFJ9+V2t=F59VJujUUByCCO4UNg@mail.gmail.com>'
+};
+
 /** SendLedger enums. */
 var LEDGER_MODE = { LIVE: 'LIVE', DRY_RUN: 'DRY_RUN' };
 /**
@@ -328,7 +348,8 @@ var LOG_EVENT = {
   DIGEST_NOT_SENT_PENDING_F0: 'DIGEST_NOT_SENT_PENDING_F0',
   DIGEST_SENT: 'DIGEST_SENT',
   FIXTURE_DUE_OVERRIDE: 'FIXTURE_DUE_OVERRIDE',
-  FIXTURE_STEP2_RECOVERY: 'FIXTURE_STEP2_RECOVERY'
+  FIXTURE_STEP2_RECOVERY: 'FIXTURE_STEP2_RECOVERY',
+  FIXTURE_STEP2_AMBIGUOUS_RECONCILED: 'FIXTURE_STEP2_AMBIGUOUS_RECONCILED'
 };
 
 /** Suppression sheet columns. */
@@ -371,7 +392,8 @@ var OPERATION = {
   SYSTEM_REPLY_SYNC: 'SYSTEM_REPLY_SYNC', // syncReplies
   SYSTEM_NIGHTLY_RECON: 'SYSTEM_NIGHTLY_RECON', // nightlyRecon
   ADMIN_FIXTURE_DUE_OVERRIDE: 'ADMIN_FIXTURE_DUE_OVERRIDE', // makeControlledFixtureDueNow — controlled fixtures ONLY
-  ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY: 'ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY' // one exact controlled fixture only
+  ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY: 'ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY', // one exact controlled fixture only
+  ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION: 'ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION' // one exact already-sent incident only
 };
 
 var OPERATION_ORIGIN = {};
@@ -384,6 +406,7 @@ OPERATION_ORIGIN[OPERATION.SYSTEM_REPLY_SYNC] = ORIGIN.SYSTEM;
 OPERATION_ORIGIN[OPERATION.SYSTEM_NIGHTLY_RECON] = ORIGIN.SYSTEM;
 OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY] = ORIGIN.ADMIN;
+OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION] = ORIGIN.ADMIN;
 
 /**
  * Per-operation permitted columns and permitted Status values.
@@ -505,6 +528,12 @@ OPERATION_PERMISSIONS[OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE] = {
 OPERATION_PERMISSIONS[OPERATION.ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY] = {
   columns: ['Status'],
   statuses: [STATUS.IN_SEQUENCE]
+};
+
+/** Exact fields a verified, already-sent controlled Step-2 may persist. */
+OPERATION_PERMISSIONS[OPERATION.ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION] = {
+  columns: ['Status', 'Sequence_Step', 'Next_Action_Date', 'Last_Contacted', 'Step2_Sent_At', 'Last_Message_ID'],
+  statuses: [STATUS.IN_SEQUENCE, STATUS.SEQUENCE_DONE]
 };
 
 /** Gmail labels — defaults only; runtime values come from Config. */

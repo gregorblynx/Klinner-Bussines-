@@ -23,6 +23,7 @@ function onOpen() {
     .addItem('Make selected CONTROLLED fixture due now', 'menu_makeControlledFixtureDueNow_')
     .addItem('Send selected CONTROLLED fixture Step 2 (LIVE)', 'menu_sendControlledFixtureStep2Live_')
     .addItem('Recover selected CONTROLLED Step 2 pre-send failure', 'menu_recoverControlledFixtureStep2PreSendFailure_')
+    .addItem('Reconcile selected CONTROLLED Step 2 AMBIGUOUS', 'menu_reconcileControlledFixtureStep2Ambiguous_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
     .addItem('Stop prospect (selected row)', 'menu_stopProspect_')
@@ -233,6 +234,19 @@ function menu_recoverControlledFixtureStep2PreSendFailure_() {
     if (response !== ui.Button.YES) return;
     var result = recoverControlledFixtureStep2PreSendFailure(prospectId);
     ui.alert('Recover selected CONTROLLED Step 2 pre-send failure', 'Result: ' + result.status, ui.ButtonSet.OK);
+  });
+}
+
+/** Read-only Gmail verification plus in-place ledger/CRM reconciliation; never sends. */
+function menu_reconcileControlledFixtureStep2Ambiguous_() {
+  guardedMenuAction_(function (ui) {
+    var prospectId = getSelectedProspectId_(ui);
+    var response = ui.alert('Reconcile selected CONTROLLED Step 2 AMBIGUOUS',
+      'This action can reconcile ONLY the one hard-coded controlled incident after exact Gmail verification. ' +
+      'It cannot send or retry email. Prospect_ID: ' + prospectId + '\n\nContinue?', ui.ButtonSet.YES_NO);
+    if (response !== ui.Button.YES) return;
+    var result = reconcileControlledFixtureStep2Ambiguous(prospectId);
+    ui.alert('Reconcile selected CONTROLLED Step 2 AMBIGUOUS', 'Result: ' + result.status, ui.ButtonSet.OK);
   });
 }
 

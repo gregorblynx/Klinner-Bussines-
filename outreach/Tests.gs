@@ -4598,6 +4598,342 @@ function test_N11_suppressionAndEveryLiveHistoryBlockRecovery_() {
   });
 }
 
+// N12 — Google-real post-send decode incident and exact, read-only-Gmail
+// reconciliation of the one immutable controlled Step-2 AMBIGUOUS row.
+
+function n12_expectThrow_(fn, expectedText) {
+  var threw = false;
+  try { fn(); } catch (e) {
+    threw = true;
+    if (expectedText) assert_(String(e.message || e).indexOf(expectedText) !== -1,
+      'Expected thrown error to contain "' + expectedText + '", got: ' + e);
+  }
+  assert_(threw, 'Expected operation to fail closed.');
+}
+
+function n12_textPlainResource_(encoded) {
+  return { payload: { mimeType: 'text/plain', filename: '', body: { data: encoded }, headers: [] } };
+}
+
+function test_N12_gmailBase64UrlDecoderHandlesRealPayloadShapes_() {
+  var text = 'Hi \u083e \u2713\r\nline 2\nline 3';
+  var padded = Utilities.base64EncodeWebSafe(text, Utilities.Charset.UTF_8);
+  var unpadded = padded.replace(/=+$/, '');
+  assert_(unpadded.indexOf('-') !== -1, 'Fixture must exercise the URL-safe "-" alphabet, not only ordinary base64.');
+  assert_(padded.length > unpadded.length, 'Fixture must exercise Gmail\'s omitted padding shape.');
+
+  // Emulate the strict Apps Script decoder behavior that exposed the real
+  // incident. The production helper must add valid omitted padding BEFORE
+  // calling it; Node Buffer's permissive decoder would otherwise hide this.
+  var originalDecode = Utilities.base64DecodeWebSafe;
+  Utilities.base64DecodeWebSafe = function (value) {
+    if (String(value).length % 4 !== 0) throw new Error('No se pudo descifrar la cadena.');
+    return originalDecode(value);
+  };
+  try {
+    assertEquals_(text, decodeGmailApiMessageBodyUtf8_(n12_textPlainResource_(unpadded)),
+      'Unpadded real Gmail base64url must decode exactly, preserving UTF-8, CRLF and multiline text.');
+    assertEquals_(text, decodeGmailApiMessageBodyUtf8_(n12_textPlainResource_(padded)),
+      'Padded Gmail base64url must continue to decode exactly.');
+
+    var nested = { payload: { mimeType: 'multipart/alternative', body: {}, parts: [
+      { mimeType: 'text/plain', filename: '', body: { data: unpadded } },
+      { mimeType: 'text/html', filename: '', body: { data: Utilities.base64EncodeWebSafe('<p>ignored</p>').replace(/=+$/, '') } }
+    ] } };
+    assertEquals_(text, decodeGmailApiMessageBodyUtf8_(nested),
+      'The verifier must select the one inline text/plain part from a realistic multipart payload.');
+  } finally {
+    Utilities.base64DecodeWebSafe = originalDecode;
+  }
+}
+
+function test_N12_gmailBase64UrlDecoderRejectsMalformedOrAmbiguousPayloads_() {
+  [n12_textPlainResource_('abc$'), n12_textPlainResource_('abcde'), n12_textPlainResource_('_w')]
+    .forEach(function (resource) {
+      n12_expectThrow_(function () { decodeGmailApiMessageBodyUtf8_(resource); }, 'Gmail verification failed');
+    });
+  n12_expectThrow_(function () {
+    decodeGmailApiMessageBodyUtf8_({ payload: { mimeType: 'multipart/alternative', parts: [] } });
+  }, 'exactly one inline text/plain body');
+  n12_expectThrow_(function () {
+    decodeGmailApiMessageBodyUtf8_({ payload: { mimeType: 'multipart/mixed', parts: [
+      { mimeType: 'text/plain', body: { data: 'QQ==' } },
+      { mimeType: 'text/plain', body: { data: 'Qg==' } }
+    ] } });
+  }, 'exactly one inline text/plain body');
+}
+
+function n12_assertPostSendMismatchBecomesAmbiguous_(tag, mutateResource) {
+  withLiveModeEnabledForTest_(function () {
+    var setup = n5_setupFollowUpDueProspect_('n12-' + tag, getConfig());
+    GmailApp._resetCallCounts();
+    var originalGet = Gmail.Users.Messages.get;
+    Gmail.Users.Messages.get = function (userId, messageId, options) {
+      var resource = originalGet(userId, messageId, options);
+      if (messageId !== setup.priorMessageId) mutateResource(resource);
+      return resource;
+    };
+    var threw = false;
+    try { sendFollowUp(setup.p.Prospect_ID, 2); } catch (e) { threw = true; }
+    finally { Gmail.Users.Messages.get = originalGet; }
+    assert_(threw, tag + ' mismatch must make the post-send outcome ambiguous.');
+    var row = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === setup.p.Prospect_ID && Number(r.values.Step) === 2 && r.values.Mode === LEDGER_MODE.LIVE;
+    })[0];
+    assert_(!!row, 'The durable LIVE row must exist.');
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, row.values.State);
+    assertEquals_(1, GmailApp._callCounts.apiSend, 'A verification failure must never retry Gmail SEND.');
+    var replay = sendFollowUp(setup.p.Prospect_ID, 2);
+    assert_(replay.status !== 'SENT', 'The AMBIGUOUS key must block replay.');
+    assertEquals_(1, GmailApp._callCounts.apiSend, 'Replay must make zero additional SEND calls.');
+  });
+}
+
+function test_N12_followUpVerificationRejectsSenderAndReplyHeaderMismatches_() {
+  n12_assertPostSendMismatchBecomesAmbiguous_('sender', function (resource) {
+    resource.payload.headers.forEach(function (h) { if (h.name === 'From') h.value = 'wrong-sender@example.net'; });
+  });
+  n12_assertPostSendMismatchBecomesAmbiguous_('in-reply-to', function (resource) {
+    resource.payload.headers.forEach(function (h) { if (h.name === 'In-Reply-To') h.value = '<wrong@example.net>'; });
+  });
+  n12_assertPostSendMismatchBecomesAmbiguous_('references', function (resource) {
+    resource.payload.headers.forEach(function (h) { if (h.name === 'References') h.value = '<wrong@example.net>'; });
+  });
+}
+
+function test_N12_followUpVerificationRejectsBodyMismatch_() {
+  n12_assertPostSendMismatchBecomesAmbiguous_('body', function (resource) {
+    resource.payload.body.data = Utilities.base64EncodeWebSafe('different body').replace(/=+$/, '');
+  });
+}
+
+function n12_withIncidentConfig_(fn) {
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  var rowByKey = {};
+  values.forEach(function (row, i) { rowByKey[row[0]] = i + 2; });
+  var overrides = {
+    DRY_RUN: 'TRUE', PAUSE_ALL: 'TRUE', MAX_PER_RUN: '1',
+    SENDER_EMAIL: CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Sender_Email,
+    REPLY_TO: CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Sender_Email,
+    PHYSICAL_ADDRESS: '526 Grove Creek Ave, Nashville, TN 37214',
+    UNSUBSCRIBE_LINE: 'If you would prefer not to receive further emails, reply unsubscribe.'
+  };
+  var originals = {};
+  Object.keys(overrides).forEach(function (key) {
+    originals[key] = sheet.getRange(rowByKey[key], 2).getValue();
+    sheet.getRange(rowByKey[key], 2).setValue(overrides[key]);
+  });
+  var originalEffectiveUser = Session.getEffectiveUser;
+  Session.getEffectiveUser = function () {
+    return { getEmail: function () { return CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Sender_Email; } };
+  };
+  resetConfigCache_();
+  try { return fn(); }
+  finally {
+    Session.getEffectiveUser = originalEffectiveUser;
+    Object.keys(overrides).forEach(function (key) { sheet.getRange(rowByKey[key], 2).setValue(originals[key]); });
+    resetConfigCache_();
+  }
+}
+
+function n12_setupAmbiguousIncident_() {
+  var incident = CONTROLLED_STEP2_AMBIGUOUS_INCIDENT;
+  var config = getConfig();
+  var past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  var confirmedAt = new Date(Date.now() - 60 * 1000);
+  var subject = 'A quick note about Klinner Step2 Verification Fixture';
+  var thread = GmailApp._seedLiveThread(incident.Email_Normalized, incident.Sender_Email, {
+    threadId: incident.Thread_ID, messageId: incident.Prior_Message_ID,
+    rfcMessageId: incident.Prior_Rfc_Message_ID, internalDate: past.getTime(),
+    subject: subject, body: 'Controlled Step-1 body.'
+  });
+  _testCreatedThreadIds_.push(thread.getId());
+  var row = addTestProspectRow_({
+    Prospect_ID: incident.Prospect_ID, Source: incident.Source,
+    Business_Name: 'Klinner Step2 Verification Fixture', Contact_Name: 'Test Contact',
+    Email: incident.Email_Normalized, Email_Normalized: incident.Email_Normalized,
+    Domain: 'gmail.com', Domain_Type: DOMAIN_TYPE.PUBLIC,
+    Problem_Found: 'controlled Step-2 verification fixture',
+    Personalization_Line: 'This is a controlled internal verification of the follow-up workflow.',
+    Status: STATUS.NEEDS_REVIEW, Sequence_Step: 1,
+    Step1_Sent_At: past, Last_Contacted: past, Next_Action_Date: past,
+    Thread_ID: incident.Thread_ID, Last_Message_ID: incident.Prior_Message_ID
+  });
+  var p = getTestProspectByRow_(row);
+  var rendered = renderTemplateForStep_(2, p, config);
+  var bodyHash = computeDraftFingerprint_(incident.Email_Normalized, subject, rendered.body);
+  GmailApp._makeApiSentMessage({
+    From: config.SENDER_NAME + ' <' + incident.Sender_Email + '>', To: incident.Email_Normalized, Subject: subject,
+    'In-Reply-To': incident.Prior_Rfc_Message_ID, References: incident.Prior_Rfc_Message_ID,
+    'X-Klinner-Body-SHA256': bodyHash, body: rendered.body
+  }, incident.Thread_ID, {
+    messageId: incident.Message_ID, rfcMessageId: incident.Rfc_Message_ID, internalDate: confirmedAt.getTime()
+  });
+  appendLedgerRow_({
+    Run_ID: incident.Run_ID, Claimed_At: past, Prospect_ID: incident.Prospect_ID,
+    Email_Normalized: incident.Email_Normalized, Step: 2,
+    Idempotency_Key: getIdempotencyKey_(incident.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE,
+    State: LEDGER_STATE.AMBIGUOUS, Thread_ID: incident.Thread_ID, Message_ID: '', Draft_ID: '', Confirmed_At: '',
+    Error: 'Exception: No se pudo descifrar la cadena. (ambiguous outcome after Gmail API send invocation — durably blocked; SEND is never retried)'
+  });
+  return { p: p, confirmedAt: confirmedAt, rendered: rendered };
+}
+
+function n12_cleanupIncident_() {
+  var incident = CONTROLLED_STEP2_AMBIGUOUS_INCIDENT;
+  n8_deleteFixtureRow_(incident.Prospect_ID);
+  var sheet = getLedgerSheet_();
+  var rows = readAllLedgerRows_();
+  for (var i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].values.Prospect_ID === incident.Prospect_ID) sheet.deleteRow(rows[i].rowIndex);
+  }
+}
+
+function test_N12_exactAmbiguousIncidentReconcilesWithoutSendAndIsIdempotent_() {
+  n12_withIncidentConfig_(function () {
+    var setup = n12_setupAmbiguousIncident_();
+    try {
+      var before = findRowById_(setup.p.Prospect_ID).values;
+      var ledgerCountBefore = readAllLedgerRows_().length;
+      GmailApp._resetCallCounts();
+      var result = reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID);
+      assertEquals_('RECONCILED_SENT', result.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Reconciliation must have no Gmail SEND primitive.');
+      assertEquals_(0, GmailApp._callCounts.send, 'Reconciliation must never invoke draft.send().');
+      assertEquals_(0, GmailApp._callCounts.reply, 'Reconciliation must never invoke thread.reply().');
+      assertEquals_(ledgerCountBefore, readAllLedgerRows_().length, 'Reconciliation must update the same ledger row, not append one.');
+      var ledger = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === setup.p.Prospect_ID; });
+      assertEquals_(1, ledger.length);
+      assertEquals_(LEDGER_STATE.SENT, ledger[0].values.State);
+      assertEquals_(CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Message_ID, ledger[0].values.Message_ID);
+      assert_(!!ledger[0].values.Confirmed_At, 'Confirmed_At must come from the exact Gmail message internalDate.');
+      assert_(String(ledger[0].values.Error).indexOf('RECONCILED_FROM_AMBIGUOUS:') === 0,
+        'The original ambiguity must remain preserved in the same row audit marker.');
+      assert_(String(ledger[0].values.Error).indexOf('No se pudo descifrar la cadena') !== -1,
+        'The original decoder incident must not be erased.');
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.IN_SEQUENCE, after.Status);
+      assertEquals_(2, Number(after.Sequence_Step));
+      assertEquals_(setup.confirmedAt.getTime(), new Date(after.Step2_Sent_At).getTime());
+      assertEquals_(setup.confirmedAt.getTime(), new Date(after.Last_Contacted).getTime());
+      assertEquals_(CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Message_ID, after.Last_Message_ID);
+      assertEquals_(before.Thread_ID, after.Thread_ID);
+      assertEquals_(new Date(before.Step1_Sent_At).getTime(), new Date(after.Step1_Sent_At).getTime());
+      assert_(!!after.Next_Action_Date, 'Normal Step-3 cadence must be calculated.');
+      var authorizedChanges = {
+        Status: true, Sequence_Step: true, Next_Action_Date: true,
+        Last_Contacted: true, Step2_Sent_At: true, Last_Message_ID: true
+      };
+      Object.keys(before).forEach(function (field) {
+        if (authorizedChanges[field]) return;
+        var b = before[field] instanceof Date ? before[field].getTime() : before[field];
+        var a = after[field] instanceof Date ? after[field].getTime() : after[field];
+        assertEquals_(b, a, 'Reconciliation must preserve unauthorized Prospect field ' + field + '.');
+      });
+      var firstStep2Time = new Date(after.Step2_Sent_At).getTime();
+      var nextDate = new Date(after.Next_Action_Date).getTime();
+      var second = reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID);
+      assertEquals_('ALREADY_RECONCILED', second.status);
+      var afterSecond = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(firstStep2Time, new Date(afterSecond.Step2_Sent_At).getTime(), 'Replay must not change Step2_Sent_At.');
+      assertEquals_(nextDate, new Date(afterSecond.Next_Action_Date).getTime(), 'Replay must not advance cadence again.');
+      assertEquals_(ledgerCountBefore, readAllLedgerRows_().length, 'Replay must not add a ledger row.');
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Replay must still make zero SEND calls.');
+    } finally { n12_cleanupIncident_(); }
+  });
+}
+
+function test_N12_reconciliationResumesAfterLedgerCommitWithoutSending_() {
+  n12_withIncidentConfig_(function () {
+    var setup = n12_setupAmbiguousIncident_();
+    var originalWrite = writeRowById_;
+    var blockedOnce = false;
+    try {
+      GmailApp._resetCallCounts();
+      writeRowById_ = function () {
+        if (!blockedOnce) {
+          blockedOnce = true;
+          throw new Error('simulated crash after the durable ledger commit');
+        }
+        return originalWrite.apply(this, arguments);
+      };
+      n12_expectThrow_(function () {
+        reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID);
+      }, 'simulated crash');
+      writeRowById_ = originalWrite;
+
+      var midLedger = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID;
+      })[0];
+      assertEquals_(LEDGER_STATE.SENT, midLedger.values.State,
+        'A crash after exact Gmail verification must leave the idempotency key durably SENT.');
+      assertEquals_(STATUS.NEEDS_REVIEW, findRowById_(setup.p.Prospect_ID).values.Status,
+        'Precondition for resume: CRM is still at its pre-reconciliation state.');
+
+      var resumed = reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID);
+      assertEquals_('RECONCILED_SENT', resumed.status,
+        'A second operator invocation must finish CRM persistence without another send.');
+      assertEquals_(2, Number(findRowById_(setup.p.Prospect_ID).values.Sequence_Step));
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Neither failed nor resumed reconciliation may invoke Gmail SEND.');
+      assertEquals_(1, readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID;
+      }).length, 'Resume must still update the original row only.');
+    } finally {
+      writeRowById_ = originalWrite;
+      n12_cleanupIncident_();
+    }
+  });
+}
+
+function test_N12_reconciliationRejectsWrongTargetAndUnsafeEvidence_() {
+  n12_withIncidentConfig_(function () {
+    assertEquals_('REJECTED_RECONCILIATION_TARGET', reconcileControlledFixtureStep2Ambiguous('real-prospect-id').status);
+    var setup = n12_setupAmbiguousIncident_();
+    try {
+      GmailApp._resetCallCounts();
+      var found = findRowById_(setup.p.Prospect_ID);
+      setRawCellForTest_(found.rowIndex, 'Source', 'REAL_PROSPECT');
+      assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID).status);
+      setRawCellForTest_(found.rowIndex, 'Source', CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Source);
+      var ledger = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === setup.p.Prospect_ID; })[0];
+      updateLedgerRow_(ledger.rowIndex, { Run_ID: 'wrong-run-id' });
+      assertEquals_('REJECTED_STEP2_LEDGER_EVIDENCE', reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID).status);
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Every rejected reconciliation must have zero Gmail SEND calls.');
+      assertEquals_(LEDGER_STATE.AMBIGUOUS, readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID;
+      })[0].values.State, 'Rejected evidence must leave AMBIGUOUS untouched.');
+    } finally { n12_cleanupIncident_(); }
+  });
+}
+
+function test_N12_reconciliationRejectsGmailMismatchOrDuplicate_() {
+  n12_withIncidentConfig_(function () {
+    var setup = n12_setupAmbiguousIncident_();
+    try {
+      GmailApp._resetCallCounts();
+      var message = GmailApp._messagesById[CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Message_ID];
+      var originalRfc = message._headers['Message-ID'];
+      message._headers['Message-ID'] = '<wrong@example.test>';
+      assertEquals_('REJECTED_RFC_MESSAGE_ID', reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID).status);
+      message._headers['Message-ID'] = originalRfc;
+      var preparedBody = setup.rendered.body;
+      GmailApp._makeApiSentMessage({
+        From: getConfig().SENDER_NAME + ' <' + CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Sender_Email + '>',
+        To: CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Email_Normalized,
+        Subject: 'A quick note about Klinner Step2 Verification Fixture',
+        'In-Reply-To': CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Prior_Rfc_Message_ID,
+        References: CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Prior_Rfc_Message_ID,
+        'X-Klinner-Body-SHA256': computeDraftFingerprint_(CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Email_Normalized,
+          'A quick note about Klinner Step2 Verification Fixture', preparedBody),
+        body: preparedBody
+      }, CONTROLLED_STEP2_AMBIGUOUS_INCIDENT.Thread_ID);
+      assertEquals_('REJECTED_DUPLICATE_OR_MISSING_MESSAGE', reconcileControlledFixtureStep2Ambiguous(setup.p.Prospect_ID).status);
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Gmail mismatch/duplicate checks are read-only and must never SEND.');
+    } finally { n12_cleanupIncident_(); }
+  });
+}
+
 /**
  * Tests 21/22/23 (task's own numbering) are deliberately NOT new tests:
  * 21 — "Step-1 controlled action remains unchanged" is exactly what the
@@ -5913,6 +6249,14 @@ var F1_TEST_FUNCTIONS = [
   ['N11_realAndWrongSourceRejected', test_N11_realProspectAndWrongSourceRejected_],
   ['N11_invalidFixtureStateRejected', test_N11_recoveryRejectsInvalidFixtureState_],
   ['N11_suppressionAndLiveHistoryRejected', test_N11_suppressionAndEveryLiveHistoryBlockRecovery_],
+  ['N12_gmailBase64UrlRealShapes', test_N12_gmailBase64UrlDecoderHandlesRealPayloadShapes_],
+  ['N12_gmailBase64UrlMalformedFailsClosed', test_N12_gmailBase64UrlDecoderRejectsMalformedOrAmbiguousPayloads_],
+  ['N12_followUpSenderAndReplyHeadersVerified', test_N12_followUpVerificationRejectsSenderAndReplyHeaderMismatches_],
+  ['N12_followUpBodyVerified', test_N12_followUpVerificationRejectsBodyMismatch_],
+  ['N12_exactAmbiguousReconciliation', test_N12_exactAmbiguousIncidentReconcilesWithoutSendAndIsIdempotent_],
+  ['N12_reconciliationResumesAfterLedgerCommit', test_N12_reconciliationResumesAfterLedgerCommitWithoutSending_],
+  ['N12_reconciliationGuards', test_N12_reconciliationRejectsWrongTargetAndUnsafeEvidence_],
+  ['N12_reconciliationGmailEvidence', test_N12_reconciliationRejectsGmailMismatchOrDuplicate_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],
@@ -6238,7 +6582,8 @@ function snapshotSandboxState_() {
       callCounts = {
         createDraft: GmailApp._callCounts.createDraft, createDraftReply: GmailApp._callCounts.createDraftReply,
         send: GmailApp._callCounts.send, reply: GmailApp._callCounts.reply,
-        apiSend: GmailApp._callCounts.apiSend, apiGet: GmailApp._callCounts.apiGet
+        apiSend: GmailApp._callCounts.apiSend, apiGet: GmailApp._callCounts.apiGet,
+        apiThreadGet: GmailApp._callCounts.apiThreadGet
       };
     }
   } catch (e) { gmailState = { drafts: 'GMAIL_STATE_FAILED', threads: '', labels: '', sentIndex: '', callCounts: '' }; }
@@ -6257,6 +6602,8 @@ function snapshotSandboxState_() {
     'GmailApp.getThreadById': GmailApp.getThreadById,
     'Gmail.Users.Messages.send': Gmail.Users.Messages.send,
     'Gmail.Users.Messages.get': Gmail.Users.Messages.get,
+    'Gmail.Users.Threads.get': Gmail.Users.Threads.get,
+    'Session.getEffectiveUser': Session.getEffectiveUser,
     'appendLedgerRow_': appendLedgerRow_,
     'updateLedgerRow_': updateLedgerRow_,
     'writeLedgerMetadataThenState_': writeLedgerMetadataThenState_,

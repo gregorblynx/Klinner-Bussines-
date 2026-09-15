@@ -148,6 +148,21 @@ check('step2: Message_ID comes from messages.send and is verified by exact messa
 check('step2: GmailThread.reply is absent from executable source',
   !/^\s*(?!\*|\/\/).*\bthread\.reply\(/m.test(MAILER_SOURCE));
 
+check('N12: controlled AMBIGUOUS reconciliation has no outbound send path',
+  (function () {
+    var start = MAILER_SOURCE.indexOf('reconcileControlledFixtureStep2Ambiguous = function');
+    var end = MAILER_SOURCE.indexOf('function markFollowUpAmbiguous_', start);
+    if (start === -1 || end === -1 || end <= start) return false;
+    var body = MAILER_SOURCE.slice(start, end);
+    return !/(Gmail\.Users\.Messages\.send\s*\(|\bsendFollowUp\s*\(|\bsendBatch\s*\(|\bsendStep1\s*\(|\bexecuteLiveSendForStep_\s*\()/.test(body);
+  })()
+);
+
+check('N12: Gmail body decoder validates and restores omitted base64url padding',
+  /remainder === 2 \? '=='/.test(MAILER_SOURCE) &&
+  /Utilities\.base64DecodeWebSafe\(padded\)/.test(MAILER_SOURCE) &&
+  /decoded body is not valid canonical UTF-8/.test(MAILER_SOURCE));
+
 // --- N5: LIVE send concurrency/ambiguous-outcome hardening.
 // Round 1 verified this statically (findings #7/#8's established method,
 // since this project's policy was to never flip DRY_RUN=FALSE even

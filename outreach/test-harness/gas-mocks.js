@@ -380,12 +380,12 @@ function createMockGmailApp() {
   // counts ("exactly one send ever happened"), which is a far stronger
   // proof than inspecting resulting state — state can look identical
   // whether an operation ran once or twice-with-one-failure.
-  var callCounts = { createDraft: 0, createDraftReply: 0, send: 0, reply: 0, apiSend: 0, apiGet: 0 };
+  var callCounts = { createDraft: 0, createDraftReply: 0, send: 0, reply: 0, apiSend: 0, apiGet: 0, apiThreadGet: 0 };
 
   function makeMessage(from, to, subject, body, metadata) {
     messageCounter++;
-    var id = 'msg-' + messageCounter;
     metadata = metadata || {};
+    var id = metadata.messageId || ('msg-' + messageCounter);
     var message = {
       _id: id,
       _threadId: metadata.threadId || '',
@@ -396,6 +396,7 @@ function createMockGmailApp() {
         'X-Klinner-Body-SHA256': metadata.bodyHash || ''
       },
       _body: body,
+      _internalDate: metadata.internalDate || Date.now(),
       getId: function () { return id; },
       getFrom: function () { return from; },
       getTo: function () { return to; },
@@ -496,7 +497,8 @@ function createMockGmailApp() {
     }, 'SENT_INDEX_ENUMERATION_FAILED');
 
     var countSig = 'createDraft=' + callCounts.createDraft + ',createDraftReply=' + callCounts.createDraftReply +
-      ',send=' + callCounts.send + ',reply=' + callCounts.reply + ',apiSend=' + callCounts.apiSend + ',apiGet=' + callCounts.apiGet;
+      ',send=' + callCounts.send + ',reply=' + callCounts.reply + ',apiSend=' + callCounts.apiSend + ',apiGet=' + callCounts.apiGet +
+      ',apiThreadGet=' + callCounts.apiThreadGet;
 
     return { drafts: draftSig, threads: threadSig, labels: labelSig, sentIndex: sentSig, callCounts: countSig };
   }
@@ -508,7 +510,7 @@ function createMockGmailApp() {
     _callCounts: callCounts,
     _resetCallCounts: function () {
       callCounts.createDraft = 0; callCounts.createDraftReply = 0; callCounts.send = 0; callCounts.reply = 0;
-      callCounts.apiSend = 0; callCounts.apiGet = 0;
+      callCounts.apiSend = 0; callCounts.apiGet = 0; callCounts.apiThreadGet = 0;
     },
     /** P3: full shared-state signature — see stateSignature() above. */
     _stateSignature: stateSignature,
@@ -525,6 +527,7 @@ function createMockGmailApp() {
       callCounts.reply = values.reply || 0;
       callCounts.apiSend = values.apiSend || 0;
       callCounts.apiGet = values.apiGet || 0;
+      callCounts.apiThreadGet = values.apiThreadGet || 0;
     },
     _labelNames: function () { return Object.keys(labels).slice(); },
     /** P3: teardown for a label a test created. */
@@ -575,10 +578,17 @@ function createMockGmailApp() {
      * outbound message, so tests can exercise thread.reply()/
      * thread.createDraftReply() and getThreadById() against something real.
      */
-    _seedLiveThread: function (recipientEmail, senderEmail) {
+    _seedLiveThread: function (recipientEmail, senderEmail, options) {
       threadCounter++;
-      var threadId = 'live-thread-' + threadCounter;
-      var messages = [makeMessage(senderEmail, recipientEmail, 'A quick note', 'Original outreach body.', { threadId: threadId })];
+      options = options || {};
+      var threadId = options.threadId || ('live-thread-' + threadCounter);
+      var messages = [makeMessage(senderEmail, recipientEmail, options.subject || 'A quick note',
+        options.body || 'Original outreach body.', {
+          threadId: threadId,
+          messageId: options.messageId,
+          rfcMessageId: options.rfcMessageId,
+          internalDate: options.internalDate
+        })];
       var thread = {
         getId: function () { return threadId; },
         getMessages: function () { return messages.slice(); },
@@ -599,10 +609,12 @@ function createMockGmailApp() {
       return thread;
     },
     _messagesById: messagesById,
-    _makeApiSentMessage: function (fields, threadId) {
+    _makeApiSentMessage: function (fields, threadId, options) {
+      options = options || {};
       var message = makeMessage(fields.From, fields.To, fields.Subject, fields.body, {
         threadId: threadId, inReplyTo: fields['In-Reply-To'], references: fields.References,
-        bodyHash: fields['X-Klinner-Body-SHA256']
+        bodyHash: fields['X-Klinner-Body-SHA256'], messageId: options.messageId,
+        rfcMessageId: options.rfcMessageId, internalDate: options.internalDate
       });
       message._threadId = threadId;
       if (!threads[threadId]) throw new Error('Mock Gmail API: unknown threadId ' + threadId);
@@ -635,8 +647,10 @@ function createMockGmailAdvancedService(gmailApp) {
     return {
       id: message._id,
       threadId: message._threadId,
+      internalDate: String(message._internalDate),
       payload: {
-        body: { data: Buffer.from(String(message._body || ''), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_') },
+        mimeType: 'text/plain',
+        body: { data: Buffer.from(String(message._body || ''), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') },
         headers: Object.keys(message._headers).filter(function (name) { return message._headers[name] !== ''; }).map(function (name) {
           return { name: name, value: message._headers[name] };
         })
@@ -657,6 +671,13 @@ function createMockGmailAdvancedService(gmailApp) {
         var message = gmailApp._messagesById[messageId];
         if (!message) throw new Error('Mock Gmail API: message not found: ' + messageId);
         return resourceFor(message);
+      }
+    }, Threads: {
+      get: function (userId, threadId) {
+        gmailApp._callCounts.apiThreadGet++;
+        var thread = gmailApp._threads[threadId];
+        if (!thread) throw new Error('Mock Gmail API: thread not found: ' + threadId);
+        return { id: threadId, messages: thread.getMessages().map(resourceFor) };
       }
     } }
   };
