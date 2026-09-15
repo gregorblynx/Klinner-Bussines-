@@ -22,6 +22,7 @@ function onOpen() {
     .addItem('Send selected CONTROLLED fixture (LIVE)', 'menu_sendControlledFixtureLive_')
     .addItem('Make selected CONTROLLED fixture due now', 'menu_makeControlledFixtureDueNow_')
     .addItem('Send selected CONTROLLED fixture Step 2 (LIVE)', 'menu_sendControlledFixtureStep2Live_')
+    .addItem('Recover selected CONTROLLED Step 2 pre-send failure', 'menu_recoverControlledFixtureStep2PreSendFailure_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
     .addItem('Stop prospect (selected row)', 'menu_stopProspect_')
@@ -218,6 +219,20 @@ function menu_sendControlledFixtureStep2Live_() {
     if (response !== ui.Button.YES) return;
     var result = sendControlledFixtureStep2Live(prospectId);
     ui.alert('Send selected CONTROLLED fixture Step 2 (LIVE)', 'Result: ' + result.status, ui.ButtonSet.OK);
+  });
+}
+
+/** One-fixture recovery for the documented userinfo.email pre-claim failure. */
+function menu_recoverControlledFixtureStep2PreSendFailure_() {
+  guardedMenuAction_(function (ui) {
+    var prospectId = getSelectedProspectId_(ui);
+    var response = ui.alert('Recover selected CONTROLLED Step 2 pre-send failure',
+      'This can recover ONLY the exact approved controlled fixture when Step 2 has NO LIVE ledger history. ' +
+      'It changes only Status from NEEDS_REVIEW to IN_SEQUENCE and never sends email. Prospect_ID: ' + prospectId +
+      '\n\nContinue?', ui.ButtonSet.YES_NO);
+    if (response !== ui.Button.YES) return;
+    var result = recoverControlledFixtureStep2PreSendFailure(prospectId);
+    ui.alert('Recover selected CONTROLLED Step 2 pre-send failure', 'Result: ' + result.status, ui.ButtonSet.OK);
   });
 }
 

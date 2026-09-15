@@ -263,3 +263,53 @@ function makeControlledFixtureDueNow(prospectId) {
   flushLog_();
   return { status: 'DUE_NOW', prospectId: prospectId, nextActionDate: dueDate };
 }
+
+/**
+ * Recovers exactly the one controlled Google-real Step-2 fixture from a
+ * documented pre-CLAIM/pre-SEND failure. It is deliberately not a generic
+ * clear-NEEDS_REVIEW action: a real prospect, another fixture, or any LIVE
+ * Step-2 history is rejected before a write. The LIVE path flushes CLAIMED
+ * before Gmail send, so zero LIVE rows proves this workflow never reached a
+ * durable claim or Gmail send. Only Status may change; error evidence stays.
+ */
+function recoverControlledFixtureStep2PreSendFailure(prospectId) {
+  if (prospectId !== CONTROLLED_STEP2_RECOVERY_PROSPECT_ID) {
+    return { status: 'REJECTED_RECOVERY_TARGET', prospectId: prospectId };
+  }
+  var matchCount = countProspectRowsById_(prospectId);
+  if (matchCount !== 1) return { status: 'REJECTED_AMBIGUOUS_ID', matchCount: matchCount };
+
+  var found = findRowById_(prospectId);
+  if (!found) return { status: 'REJECTED_NOT_FOUND' };
+  var p = found.values;
+  if (p.Source !== 'CONTROLLED_INTERNAL_STEP2_RETEST') return { status: 'REJECTED_SOURCE_NOT_CONTROLLED', source: p.Source };
+  if (p.Status !== STATUS.NEEDS_REVIEW) return { status: 'REJECTED_WRONG_STATUS', prospectStatus: p.Status };
+  if (Number(p.Sequence_Step) !== 1) return { status: 'REJECTED_WRONG_SEQUENCE_STEP', sequenceStep: p.Sequence_Step };
+  if (!p.Step1_Sent_At) return { status: 'REJECTED_MISSING_STEP1_SENT_AT' };
+  if (p.Step2_Sent_At) return { status: 'REJECTED_STEP2_ALREADY_SENT' };
+  if (!p.Thread_ID) return { status: 'REJECTED_MISSING_THREAD_ID' };
+  if (!p.Last_Message_ID) return { status: 'REJECTED_MISSING_LAST_MESSAGE_ID' };
+  if (!p.Next_Action_Date || new Date(p.Next_Action_Date).getTime() > Date.now()) {
+    return { status: 'REJECTED_NOT_DUE', nextActionDate: p.Next_Action_Date };
+  }
+  if (p.Replied === true) return { status: 'REJECTED_REPLIED' };
+  if (p.Stop_Contact === true) return { status: 'REJECTED_STOP_CONTACT' };
+  if (p.Do_Not_Contact_Reason) return { status: 'REJECTED_DNC', reason: p.Do_Not_Contact_Reason };
+  if (isSuppressed_(p.Email_Normalized, p.Domain)) return { status: 'REJECTED_SUPPRESSED' };
+
+  var step2LiveRows = readAllLedgerRows_().filter(function (row) {
+    return row.values.Prospect_ID === prospectId && row.values.Step === 2 && row.values.Mode === LEDGER_MODE.LIVE;
+  });
+  if (step2LiveRows.length > 0) {
+    return { status: 'REJECTED_STEP2_LIVE_HISTORY', states: step2LiveRows.map(function (row) { return row.values.State; }) };
+  }
+
+  writeRowById_(prospectId, { Status: STATUS.IN_SEQUENCE }, {
+    origin: ORIGIN.ADMIN,
+    operation: OPERATION.ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY
+  });
+  logEvent_(LOG_LEVEL.INFO, LOG_EVENT.FIXTURE_STEP2_RECOVERY, prospectId, p.Email_Normalized, 2,
+    'Recovered exact controlled fixture from NEEDS_REVIEW after verified pre-CLAIM/pre-SEND failure. Historical error fields preserved.');
+  flushLog_();
+  return { status: 'RECOVERED_PRE_SEND_FAILURE', prospectId: prospectId };
+}

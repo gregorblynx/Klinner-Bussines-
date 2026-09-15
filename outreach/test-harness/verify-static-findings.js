@@ -36,6 +36,23 @@ function check(name, condition) {
 
 var APPSSCRIPT_JSON = JSON.parse(fs.readFileSync(path.join(OUTREACH_DIR, 'appsscript.json'), 'utf8'));
 var DECLARED_SCOPES = APPSSCRIPT_JSON.oauthScopes || [];
+var REQUIRED_SCOPE_BASELINE = [
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/gmail.compose',
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/script.send_mail',
+  'https://www.googleapis.com/auth/script.scriptapp',
+  'https://www.googleapis.com/auth/script.container.ui',
+  'https://www.googleapis.com/auth/userinfo.email'
+];
+
+check(
+  'N1: every prior production scope plus userinfo.email is declared exactly once',
+  REQUIRED_SCOPE_BASELINE.every(function (scope) {
+    return DECLARED_SCOPES.filter(function (declared) { return declared === scope; }).length === 1;
+  }) && DECLARED_SCOPES.length === REQUIRED_SCOPE_BASELINE.length
+);
 
 var ALL_GS_SOURCE = {};
 fs.readdirSync(OUTREACH_DIR).filter(function (f) { return f.endsWith('.gs'); }).forEach(function (f) {
@@ -70,6 +87,15 @@ var SCOPE_REQUIREMENTS = [
   { api: 'SpreadsheetApp.getUi (menu, alerts, prompts)', pattern: /SpreadsheetApp\.getUi\(\)/, scope: 'https://www.googleapis.com/auth/script.container.ui' }
 ];
 
+// Session.getEffectiveUser().getEmail() is a deliberate live-sender
+// identity guard in Mailer.gs. Explicit oauthScopes disable auto-detection,
+// so this mapping prevents a repeat of the Google-real missing-scope block.
+SCOPE_REQUIREMENTS.push({
+  api: 'Session.getEffectiveUser().getEmail (authorized execution identity)',
+  pattern: /Session\.getEffectiveUser\(\)\.getEmail\(\)/,
+  scope: 'https://www.googleapis.com/auth/userinfo.email'
+});
+
 SCOPE_REQUIREMENTS.forEach(function (req) {
   var isUsed = req.pattern.test(COMBINED_SOURCE);
   var isDeclared = DECLARED_SCOPES.indexOf(req.scope) !== -1;
@@ -79,6 +105,11 @@ SCOPE_REQUIREMENTS.forEach(function (req) {
     !isUsed || isDeclared
   );
 });
+
+check(
+  'step2: effective-user sender identity guard remains active',
+  /Session\.getEffectiveUser\(\)\.getEmail\(\)/.test(MAILER_SOURCE)
+);
 
 // --- Step-2 Google-real incident: never infer a follow-up recipient via
 // GmailThread.reply(); use the Advanced Gmail API with explicit RFC fields.

@@ -4501,6 +4501,103 @@ function test_N10_postSendPersistenceFailureRetainsN6SemanticsViaStep2FixturePat
   }, { MAX_PER_RUN: '1', MAX_PER_DAY: '5' });
 }
 
+// N11 — one exact controlled fixture recovery after the Google-real
+// userinfo.email pre-CLAIM failure. The fixture ID is deliberately the same
+// literal production constant; every test removes its own row immediately.
+function n11_setupRecoveryFixture_(emailTag, overrides) {
+  var past = new Date(); past.setDate(past.getDate() - 3);
+  var base = {
+    Prospect_ID: CONTROLLED_STEP2_RECOVERY_PROSPECT_ID,
+    Status: STATUS.NEEDS_REVIEW,
+    Sequence_Step: 1,
+    Next_Action_Date: past
+  };
+  return n9_setupControlledStep2Fixture_(emailTag, Object.assign(base, overrides || {}));
+}
+
+function test_N11_validControlledPreSendFailureRecoversOnlyStatus_() {
+  var setup = n11_setupRecoveryFixture_('n11accept');
+  try {
+    var before = findRowById_(setup.p.Prospect_ID).values;
+    GmailApp._resetCallCounts();
+    var ledgerBefore = readAllLedgerRows_().length;
+    var result = recoverControlledFixtureStep2PreSendFailure(setup.p.Prospect_ID);
+    assertEquals_('RECOVERED_PRE_SEND_FAILURE', result.status);
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.IN_SEQUENCE, after.Status);
+    ['Sequence_Step', 'Step1_Sent_At', 'Step2_Sent_At', 'Thread_ID', 'Last_Message_ID', 'Next_Action_Date', 'Email', 'Source', 'Error_Count', 'Last_Error'].forEach(function (field) {
+      assertEquals_(String(before[field]), String(after[field]), 'Recovery must preserve ' + field + '.');
+    });
+    assertEquals_(ledgerBefore, readAllLedgerRows_().length, 'Recovery must not create a ledger row.');
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'Recovery must never invoke Gmail API send.');
+    assertEquals_(0, GmailApp._callCounts.send, 'Recovery must never invoke draft.send.');
+    assert_(canSend_(after, 2, getConfig(), new Date()), 'The normal canSend_ guard must see the recovered fixture as eligible for due Step 2.');
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N11_realProspectAndWrongSourceRejected_() {
+  var real = n5_setupFollowUpDueProspect_('n11real', getConfig());
+  assertEquals_('REJECTED_RECOVERY_TARGET', recoverControlledFixtureStep2PreSendFailure(real.p.Prospect_ID).status);
+  var setup = n11_setupRecoveryFixture_('n11source', { Source: 'CONTROLLED_INTERNAL_STEP2_RETEST_OLD' });
+  try {
+    assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', recoverControlledFixtureStep2PreSendFailure(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N11_recoveryRejectsInvalidFixtureState_() {
+  var cases = [
+    [{ Status: STATUS.IN_SEQUENCE }, 'REJECTED_WRONG_STATUS'],
+    [{ Sequence_Step: 2 }, 'REJECTED_WRONG_SEQUENCE_STEP'],
+    [{ Step1_Sent_At: '' }, 'REJECTED_MISSING_STEP1_SENT_AT'],
+    [{ Step2_Sent_At: new Date() }, 'REJECTED_STEP2_ALREADY_SENT'],
+    [{ Thread_ID: '' }, 'REJECTED_MISSING_THREAD_ID'],
+    [{ Last_Message_ID: '' }, 'REJECTED_MISSING_LAST_MESSAGE_ID'],
+    [{ Next_Action_Date: new Date(Date.now() + 60000) }, 'REJECTED_NOT_DUE'],
+    [{ Replied: true }, 'REJECTED_REPLIED'],
+    [{ Stop_Contact: true }, 'REJECTED_STOP_CONTACT'],
+    [{ Do_Not_Contact_Reason: DNC_REASON.MANUAL }, 'REJECTED_DNC']
+  ];
+  cases.forEach(function (entry, i) {
+    var setup = n11_setupRecoveryFixture_('n11state' + i, entry[0]);
+    try {
+      assertEquals_(entry[1], recoverControlledFixtureStep2PreSendFailure(setup.p.Prospect_ID).status);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  });
+}
+
+function test_N11_suppressionAndEveryLiveHistoryBlockRecovery_() {
+  var suppressed = n11_setupRecoveryFixture_('n11suppressed');
+  addSuppression_(suppressed.p.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.MANUAL, 'test');
+  _testCreatedSuppressionValues.push(suppressed.p.Email_Normalized);
+  try {
+    assertEquals_('REJECTED_SUPPRESSED', recoverControlledFixtureStep2PreSendFailure(suppressed.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(suppressed.p.Prospect_ID);
+  }
+
+  [LEDGER_STATE.CLAIMED, LEDGER_STATE.SENT, LEDGER_STATE.AMBIGUOUS, LEDGER_STATE.FAILED].forEach(function (state, i) {
+    var setup = n11_setupRecoveryFixture_('n11ledger' + i);
+    try {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: setup.p.Prospect_ID,
+        Email_Normalized: setup.p.Email_Normalized, Step: 2,
+        Idempotency_Key: getIdempotencyKey_(setup.p.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE,
+        State: state, Thread_ID: setup.p.Thread_ID, Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
+      });
+      assertEquals_('REJECTED_STEP2_LIVE_HISTORY', recoverControlledFixtureStep2PreSendFailure(setup.p.Prospect_ID).status,
+        'Any LIVE Step-2 history, including FAILED, must reject this known pre-CLAIM-only recovery.');
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  });
+}
+
 /**
  * Tests 21/22/23 (task's own numbering) are deliberately NOT new tests:
  * 21 — "Step-1 controlled action remains unchanged" is exactly what the
@@ -5812,6 +5909,10 @@ var F1_TEST_FUNCTIONS = [
   ['N10_quotaExhaustedRejected', test_N10_dailyQuotaExhaustedFixtureRejected_],
   ['N10_maxPerRunNotOneRejected', test_N10_maxPerRunNotOneFixtureRejected_],
   ['N10_postSendPersistenceN6Semantics', test_N10_postSendPersistenceFailureRetainsN6SemanticsViaStep2FixturePath_],
+  ['N11_validPreSendRecoveryOnlyStatus', test_N11_validControlledPreSendFailureRecoversOnlyStatus_],
+  ['N11_realAndWrongSourceRejected', test_N11_realProspectAndWrongSourceRejected_],
+  ['N11_invalidFixtureStateRejected', test_N11_recoveryRejectsInvalidFixtureState_],
+  ['N11_suppressionAndLiveHistoryRejected', test_N11_suppressionAndEveryLiveHistoryBlockRecovery_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],
