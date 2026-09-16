@@ -1020,15 +1020,43 @@ var executeLiveSendForStep_;
 var reconcileControlledFixtureStep2Ambiguous;
 
 /**
- * Gmail API MessagePartBody.data is base64url. Gmail commonly omits the
- * optional trailing '=' padding, while Apps Script's decoder requires a
- * complete four-character quantum for some payload lengths. Normalize only
- * that permitted omission, validate the alphabet/shape first, and verify a
- * UTF-8 round trip so corrupt bytes never become replacement characters and
- * accidentally pass body verification.
+ * Gmail's REST body.data is base64url, but the Apps Script Advanced Service
+ * can materialize the same field as a signed Byte[] (observed in both
+ * Messages.get and Threads.get). Accept only those two representations.
+ * Validate the bytes and their UTF-8 round trip so corrupt data cannot pass
+ * exact body verification.
  */
+function decodeGmailApiBodyBytesUtf8_(bytes) {
+  if (!Array.isArray(bytes) || !bytes.length) {
+    throw new Error('Gmail verification failed: malformed body byte array.');
+  }
+  var signed = [];
+  for (var i = 0; i < bytes.length; i++) {
+    var value = bytes[i];
+    if (typeof value !== 'number' || !isFinite(value) || Math.floor(value) !== value || value < -128 || value > 255) {
+      throw new Error('Gmail verification failed: malformed body byte array.');
+    }
+    signed.push(value > 127 ? value - 256 : value);
+  }
+  var decoded = Utilities.newBlob(signed).getDataAsString('UTF-8');
+  var roundTrip = Utilities.newBlob(decoded).getBytes();
+  if (roundTrip.length !== signed.length) {
+    throw new Error('Gmail verification failed: decoded body is not valid canonical UTF-8.');
+  }
+  for (var j = 0; j < signed.length; j++) {
+    if (roundTrip[j] !== signed[j]) {
+      throw new Error('Gmail verification failed: decoded body is not valid canonical UTF-8.');
+    }
+  }
+  return decoded;
+}
+
 function decodeGmailApiBase64UrlUtf8_(encoded) {
-  var input = String(encoded || '');
+  if (Array.isArray(encoded)) return decodeGmailApiBodyBytesUtf8_(encoded);
+  if (typeof encoded !== 'string') {
+    throw new Error('Gmail verification failed: malformed body data type.');
+  }
+  var input = encoded;
   if (!input || !/^[A-Za-z0-9_-]+={0,2}$/.test(input) || /=/.test(input.replace(/={1,2}$/, ''))) {
     throw new Error('Gmail verification failed: malformed base64url body data.');
   }
@@ -1044,7 +1072,7 @@ function decodeGmailApiBase64UrlUtf8_(encoded) {
   } catch (e) {
     throw new Error('Gmail verification failed: base64url body decode error: ' + e);
   }
-  var decoded = Utilities.newBlob(bytes).getDataAsString('UTF-8');
+  var decoded = decodeGmailApiBodyBytesUtf8_(bytes);
   var roundTrip = Utilities.base64EncodeWebSafe(decoded, Utilities.Charset.UTF_8).replace(/=+$/, '');
   if (roundTrip !== unpadded) {
     throw new Error('Gmail verification failed: decoded body is not valid canonical UTF-8.');

@@ -4615,6 +4615,36 @@ function n12_textPlainResource_(encoded) {
   return { payload: { mimeType: 'text/plain', filename: '', body: { data: encoded }, headers: [] } };
 }
 
+function test_N12_realAppsScriptGmailByteArrayBody_() {
+  // Captured shape, length and digest from Gmail Advanced Service under the
+  // actual Jhessyca Apps Script runtime for message 1a0a6999b8bf445f.
+  // Messages.get and Threads.get both returned this signed Byte[] shape.
+  var body = [
+    'Hi Test Contact,',
+    '',
+    'Following up on my note about Klinner Step2 Verification Fixture — happy to send over what I found if useful.',
+    '',
+    'Best,',
+    'Klinner Cleaning & Maintenance',
+    'klinnercleaning.com',
+    '',
+    '526 Grove Creek Ave, Nashville, TN 37214',
+    'If you\'d prefer not to receive further emails from Klinner, reply "unsubscribe" and we\'ll remove you from future outreach.'
+  ].join('\n');
+  var bytes = Utilities.newBlob(body).getBytes();
+  assertEquals_(352, bytes.length, 'Real Gmail body.data had exactly 352 signed bytes.');
+  assertEquals_('e9830d57eab74074b5a1574e3d3fd9612c450971cd47096f5abde4a266433e7c',
+    bytesToHex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, body, Utilities.Charset.UTF_8)),
+    'Regression text must match the real Gmail payload digest.');
+  assert_(bytes.some(function (value) { return value < 0; }), 'Real payload includes signed UTF-8 bytes.');
+  assert_(String(bytes).indexOf(',') !== -1, 'Old String(byteArray) conversion created invalid commas.');
+  assertEquals_(body, decodeGmailApiMessageBodyUtf8_(n12_textPlainResource_(bytes)),
+    'Exact real Apps Script Byte[] payload must decode without changing the body.');
+  assertEquals_(body, decodeGmailApiMessageBodyUtf8_(n12_textPlainResource_(bytes.map(function (value) {
+    return value < 0 ? value + 256 : value;
+  }))), 'Equivalent unsigned byte arrays must also decode exactly.');
+}
+
 function test_N12_gmailBase64UrlDecoderHandlesRealPayloadShapes_() {
   var text = 'Hi \u083e \u2713\r\nline 2\nline 3';
   var padded = Utilities.base64EncodeWebSafe(text, Utilities.Charset.UTF_8);
@@ -4648,7 +4678,10 @@ function test_N12_gmailBase64UrlDecoderHandlesRealPayloadShapes_() {
 }
 
 function test_N12_gmailBase64UrlDecoderRejectsMalformedOrAmbiguousPayloads_() {
-  [n12_textPlainResource_('abc$'), n12_textPlainResource_('abcde'), n12_textPlainResource_('_w')]
+  [n12_textPlainResource_('abc$'), n12_textPlainResource_('abcde'), n12_textPlainResource_('_w'),
+    n12_textPlainResource_([]), n12_textPlainResource_([256]), n12_textPlainResource_([-129]),
+    n12_textPlainResource_([72, 1.5]), n12_textPlainResource_([72, '105']),
+    n12_textPlainResource_([-1]), n12_textPlainResource_({ 0: 72, length: 1 })]
     .forEach(function (resource) {
       n12_expectThrow_(function () { decodeGmailApiMessageBodyUtf8_(resource); }, 'Gmail verification failed');
     });
@@ -6249,6 +6282,7 @@ var F1_TEST_FUNCTIONS = [
   ['N11_realAndWrongSourceRejected', test_N11_realProspectAndWrongSourceRejected_],
   ['N11_invalidFixtureStateRejected', test_N11_recoveryRejectsInvalidFixtureState_],
   ['N11_suppressionAndLiveHistoryRejected', test_N11_suppressionAndEveryLiveHistoryBlockRecovery_],
+  ['N12_realAppsScriptGmailByteArray', test_N12_realAppsScriptGmailByteArrayBody_],
   ['N12_gmailBase64UrlRealShapes', test_N12_gmailBase64UrlDecoderHandlesRealPayloadShapes_],
   ['N12_gmailBase64UrlMalformedFailsClosed', test_N12_gmailBase64UrlDecoderRejectsMalformedOrAmbiguousPayloads_],
   ['N12_followUpSenderAndReplyHeadersVerified', test_N12_followUpVerificationRejectsSenderAndReplyHeaderMismatches_],

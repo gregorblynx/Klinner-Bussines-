@@ -343,7 +343,13 @@ function createMockUtilities() {
       return Array.prototype.slice.call(Buffer.from(standard, 'base64'));
     },
     newBlob: function (bytes) {
-      return { getDataAsString: function () { return Buffer.from(bytes).toString('utf8'); } };
+      var buffer = Buffer.from(bytes);
+      return {
+        getDataAsString: function () { return buffer.toString('utf8'); },
+        getBytes: function () {
+          return Array.prototype.map.call(buffer, function (value) { return value > 127 ? value - 256 : value; });
+        }
+      };
     },
     /**
      * Real Apps Script Utilities.computeDigest(algorithm, value, charset)
@@ -644,13 +650,19 @@ function createMockGmailAdvancedService(gmailApp) {
   }
 
   function resourceFor(message) {
+    // The real Apps Script Advanced Gmail service materializes body.data as
+    // a signed Byte[], not the base64url JSON string returned by REST.
+    var bodyBytes = Buffer.from(String(message._body || ''), 'utf8');
     return {
       id: message._id,
       threadId: message._threadId,
       internalDate: String(message._internalDate),
       payload: {
         mimeType: 'text/plain',
-        body: { data: Buffer.from(String(message._body || ''), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') },
+        body: {
+          data: Array.prototype.map.call(bodyBytes, function (value) { return value > 127 ? value - 256 : value; }),
+          size: bodyBytes.length
+        },
         headers: Object.keys(message._headers).filter(function (name) { return message._headers[name] !== ''; }).map(function (name) {
           return { name: name, value: message._headers[name] };
         })
