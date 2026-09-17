@@ -4968,6 +4968,355 @@ function test_N12_reconciliationRejectsGmailMismatchOrDuplicate_() {
 }
 
 /**
+ * N13 (automatic unsubscribe from inbound reply): processThreadForReplies_
+ * now detects unsubscribe intent in the NEW, isolated portion of an inbound
+ * reply and routes it through the SAME proven applyUnsubscribeEffects_
+ * primitive the manual admin path uses (Recon.gs) — via the new, narrowly-
+ * scoped OPERATION.SYSTEM_AUTO_UNSUBSCRIBE (Constants.gs), which is
+ * structurally no wider than ADMIN_UNSUBSCRIBE's own grant.
+ *
+ * Fake thread/message objects are used throughout — deliberately NOT built
+ * from GmailApp._seedLiveThread — so these tests touch none of the shared
+ * Gmail mock's internal state (_threads/_drafts/_callCounts/_sentIndex),
+ * which is the simplest possible guarantee of zero isolation leakage.
+ */
+function n13_makeFakeMessage_(fromEmail, subject, plainBody) {
+  return {
+    getFrom: function () { return fromEmail; },
+    getSubject: function () { return subject || ''; },
+    getPlainBody: function () { return plainBody; },
+    getBody: function () { return plainBody; },
+    getRawContent: function () {
+      return 'From: ' + fromEmail + '\r\nSubject: ' + (subject || '') + '\r\n\r\n' + plainBody;
+    }
+  };
+}
+
+function n13_makeFakeThread_(messages) {
+  var id = 'n13-fake-thread-' + Utilities.getUuid();
+  return {
+    getId: function () { return id; },
+    getMessages: function () { return messages; },
+    getLabels: function () { return []; },
+    addLabel: function () {}
+  };
+}
+
+/** A READY prospect — passes processThreadForReplies_'s top guard (Replied!=true, Status not BOUNCED/STOPPED). */
+function n13_setupReplyProspect_(emailTag) {
+  return n5_setupReadyProspect_(emailTag);
+}
+
+var KLINNER_FOOTER_TEXT_ = 'Best,\nKlinner Cleaning & Maintenance\nklinnercleaning.com\n\n' +
+  '526 Grove Creek Ave, Nashville, TN 37214\n' +
+  'If you\'d prefer not to receive further emails from Klinner, reply "unsubscribe" and we\'ll remove you from future outreach.';
+
+function n13_quotedOutboundBody_(newTopText) {
+  return newTopText + '\n\nOn Mon, Sep 14, 2026 at 2:30 PM Klinner Cleaning & Maintenance <outreach@klinnerpro.com> wrote:\n' +
+    '> Hi there,\n> \n> ' + KLINNER_FOOTER_TEXT_.split('\n').join('\n> ');
+}
+
+// ---------------------------------------------------------------------
+// Part 6, items 1-10 — positive phrase detection (pure, unit-level).
+// ---------------------------------------------------------------------
+function test_N13_positivePhrasesDetected_() {
+  var cases = [
+    'unsubscribe',
+    'UNSUBSCRIBE',
+    'UnSubScRiBe',
+    'please unsubscribe me',
+    'stop',
+    'stop emailing me',
+    'remove me',
+    'remove me from your list',
+    'do not contact me',
+    "don't contact me"
+  ];
+  cases.forEach(function (text) {
+    assert_(detectUnsubscribeIntent_(text), 'Must detect unsubscribe intent in: "' + text + '"');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Part 6, items 11-15 — false-positive prevention.
+// ---------------------------------------------------------------------
+function test_N13_ordinaryReplyTextDoesNotSuppress_() {
+  assert_(!detectUnsubscribeIntent_("Sounds good, let's talk Tuesday!"), 'An ordinary reply must not trigger detection.');
+  assert_(!detectUnsubscribeIntent_('Thanks, I stopped by your shop and it looks great.'),
+    '"stopped" (not a bare whole-word "stop") must not trigger detection.');
+  assert_(!detectUnsubscribeIntent_('We run a nonstop operation here.'), '"nonstop" must not trigger detection.');
+}
+
+function test_N13_quotedKlinnerFooterDoesNotSuppress_() {
+  var fullBody = n13_quotedOutboundBody_("Sounds good, let's talk Tuesday!");
+  assert_(fullBody.indexOf('unsubscribe') !== -1, 'Precondition: the full quoted body must actually contain the word "unsubscribe".');
+  var msg = n13_makeFakeMessage_('prospect@example-corp-test.com', 'Re: A quick note', fullBody);
+  var isolated = extractNewReplyText_(msg);
+  assertEquals_("Sounds good, let's talk Tuesday!", isolated, 'Isolation must cut at the quote boundary.');
+  assert_(!detectUnsubscribeIntent_(isolated), 'The quoted Klinner footer must NEVER cause a false unsubscribe detection.');
+}
+
+function test_N13_quotedPriorEmailDoesNotFalsePositive_() {
+  var fullBody = 'No thanks, not interested right now.\n\n' +
+    '> On Mon, Sep 14, 2026, Prospect <prospect@example-corp-test.com> wrote:\n' +
+    '> please unsubscribe me from this list\n' +
+    '> (this was an OLDER quoted message in the thread, not the new reply)';
+  var msg = n13_makeFakeMessage_('prospect@example-corp-test.com', 'Re: A quick note', fullBody);
+  var isolated = extractNewReplyText_(msg);
+  assertEquals_('No thanks, not interested right now.', isolated);
+  assert_(!detectUnsubscribeIntent_(isolated), 'A quoted PRIOR message containing unsubscribe language must not false-positive on the current reply.');
+}
+
+function test_N13_quotedLineStartingWithAngleBracketExcluded_() {
+  var fullBody = 'Please stop.\n> unsubscribe unsubscribe unsubscribe (quoted spam-like content)';
+  var msg = n13_makeFakeMessage_('prospect@example-corp-test.com', '', fullBody);
+  var isolated = extractNewReplyText_(msg);
+  assertEquals_('Please stop.', isolated, 'The ">"-quoted line and everything after it must be excluded.');
+  assert_(detectUnsubscribeIntent_(isolated), 'The genuine new-text "stop" must still be detected once isolated.');
+}
+
+function test_N13_signatureOutsideIsolatedTextDoesNotTrigger_() {
+  var fullBody = "Let's connect next week.\n\n" +
+    'On Tue, Sep 15, 2026 at 9:00 AM Someone <someone@example.com> wrote:\n' +
+    '> --\n> Sent from a mailing list. To unsubscribe from THIS unrelated list, click here.';
+  var msg = n13_makeFakeMessage_('prospect@example-corp-test.com', '', fullBody);
+  var isolated = extractNewReplyText_(msg);
+  assertEquals_("Let's connect next week.", isolated);
+  assert_(!detectUnsubscribeIntent_(isolated), 'Quoted disclaimer/signature text outside the isolated new reply must not trigger.');
+}
+
+// ---------------------------------------------------------------------
+// Part 6, items 16-21 — state guarantees on a genuine auto-detected unsubscribe.
+// ---------------------------------------------------------------------
+function test_N13_autoUnsubscribeSetsAllFourGuarantees_() {
+  var p = n13_setupReplyProspect_('n13autostate');
+  var config = getConfig();
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var outbound = n13_makeFakeMessage_(senderEmail, 'A quick note', 'Hi, following up.');
+  var inbound = n13_makeFakeMessage_(p.Email, 'Re: A quick note', 'unsubscribe');
+  var thread = n13_makeFakeThread_([outbound, inbound]);
+
+  processThreadForReplies_(thread, p, config);
+
+  var after = findRowById_(p.Prospect_ID).values;
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason, 'Do_Not_Contact_Reason must be "unsubscribe".');
+  assertEquals_(true, after.Stop_Contact, 'Stop_Contact must be true.');
+  assertEquals_(STATUS.STOPPED, after.Status, 'Status must be STOPPED (never REPLIED) for an unsubscribe.');
+  assertEquals_('', String(after.Next_Action_Date || ''), 'Next_Action_Date must be blank.');
+  assertEquals_(false, after.Replied === true, 'Replied must not be forced true by this path (unchanged from setup).');
+
+  var suppressionRow = findSuppressionEntry_(after.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE);
+  assert_(!!suppressionRow, 'An exact EMAIL-scope Suppression(reason=unsubscribe) row must exist.');
+  _testCreatedSuppressionValues.push(after.Email_Normalized);
+}
+
+// ---------------------------------------------------------------------
+// Part 6, item 22 — duplicate processing is idempotent.
+// ---------------------------------------------------------------------
+function test_N13_duplicateProcessingIsIdempotent_() {
+  var p = n13_setupReplyProspect_('n13dupe');
+  var config = getConfig();
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var outbound = n13_makeFakeMessage_(senderEmail, 'A quick note', 'Hi, following up.');
+  var inbound = n13_makeFakeMessage_(p.Email, 'Re: A quick note', 'STOP');
+  var thread = n13_makeFakeThread_([outbound, inbound]);
+
+  processThreadForReplies_(thread, p, config);
+  var afterFirst = findRowById_(p.Prospect_ID).values;
+  _testCreatedSuppressionValues.push(afterFirst.Email_Normalized);
+
+  var countBefore = readAllSuppression_().filter(function (r) {
+    return r.Value === afterFirst.Email_Normalized && r.Scope === SUPPRESSION_SCOPE.EMAIL && r.Reason === DNC_REASON.UNSUBSCRIBE;
+  }).length;
+  assertEquals_(1, countBefore, 'Exactly one Suppression row after the first processing.');
+
+  // Re-process the SAME thread (as a real sweep would if it ran again
+  // before the label/window advanced). processThreadForReplies_'s own top
+  // guard (Status===STOPPED) must short-circuit before any further write.
+  processThreadForReplies_(thread, afterFirst, config);
+
+  var countAfter = readAllSuppression_().filter(function (r) {
+    return r.Value === afterFirst.Email_Normalized && r.Scope === SUPPRESSION_SCOPE.EMAIL && r.Reason === DNC_REASON.UNSUBSCRIBE;
+  }).length;
+  assertEquals_(1, countAfter, 'Reprocessing the same thread must NOT create a second Suppression row.');
+
+  var afterSecond = findRowById_(p.Prospect_ID).values;
+  assertEquals_(STATUS.STOPPED, afterSecond.Status);
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, afterSecond.Do_Not_Contact_Reason);
+}
+
+// ---------------------------------------------------------------------
+// Part 6, item 23 — ordinary reply behavior preserved, unchanged.
+// ---------------------------------------------------------------------
+function test_N13_ordinaryReplyBehaviorUnchanged_() {
+  var p = n13_setupReplyProspect_('n13ordinary');
+  var config = getConfig();
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var outbound = n13_makeFakeMessage_(senderEmail, 'A quick note', 'Hi, following up.');
+  var inbound = n13_makeFakeMessage_(p.Email, 'Re: A quick note', "Sounds good, let's talk Tuesday!");
+  var thread = n13_makeFakeThread_([outbound, inbound]);
+
+  processThreadForReplies_(thread, p, config);
+
+  var after = findRowById_(p.Prospect_ID).values;
+  assertEquals_(STATUS.REPLIED, after.Status, 'An ordinary reply must still set Status=REPLIED, unchanged.');
+  assertEquals_(true, after.Replied, 'Replied must still be set true, unchanged.');
+  assert_(!!after.Replied_At, 'Replied_At must still be populated, unchanged.');
+  assertEquals_('', String(after.Next_Action_Date || ''), 'Next_Action_Date still cleared, unchanged.');
+  assertEquals_('', String(after.Do_Not_Contact_Reason || ''), 'An ordinary reply must NOT set Do_Not_Contact_Reason.');
+  assertEquals_(false, after.Stop_Contact === true, 'An ordinary reply must NOT set Stop_Contact.');
+  assert_(!findSuppressionEntry_(after.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE),
+    'An ordinary reply must NOT create an unsubscribe Suppression row.');
+}
+
+// ---------------------------------------------------------------------
+// Part 6, items 24-25 — durability: reset cannot reopen; canSend_/eligibility stay blocked.
+// ---------------------------------------------------------------------
+function test_N13_resetCannotReopenAutoUnsubscribe_() {
+  var p = n13_setupReplyProspect_('n13resetblock');
+  var config = getConfig();
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var thread = n13_makeFakeThread_([
+    n13_makeFakeMessage_(senderEmail, 'A quick note', 'Hi, following up.'),
+    n13_makeFakeMessage_(p.Email, 'Re: A quick note', 'remove me from your list')
+  ]);
+  processThreadForReplies_(thread, p, config);
+  _testCreatedSuppressionValues.push(findRowById_(p.Prospect_ID).values.Email_Normalized);
+
+  var result = resetProspect(p.Prospect_ID);
+  assertEquals_(false, result.success, 'resetProspect must refuse a Stop_Contact-blocked, auto-unsubscribed prospect.');
+
+  var after = findRowById_(p.Prospect_ID).values;
+  assertEquals_(STATUS.STOPPED, after.Status, 'Status must remain STOPPED after a refused reset attempt.');
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+}
+
+function test_N13_canSendRemainsBlockedAfterAutoUnsubscribe_() {
+  var p = n13_setupReplyProspect_('n13cansendblock');
+  var config = getConfig();
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var thread = n13_makeFakeThread_([
+    n13_makeFakeMessage_(senderEmail, 'A quick note', 'Hi, following up.'),
+    n13_makeFakeMessage_(p.Email, 'Re: A quick note', 'do not contact me')
+  ]);
+  processThreadForReplies_(thread, p, config);
+  var after = findRowById_(p.Prospect_ID).values;
+  _testCreatedSuppressionValues.push(after.Email_Normalized);
+
+  assert_(!canSend_(after, 1, config, new Date()), 'canSend_ must refuse step 1 for an auto-unsubscribed prospect.');
+  assert_(!isEligibleForNextStep_(after, config, new Date()), 'isEligibleForNextStep_ must exclude it from any future queue.');
+}
+
+// ---------------------------------------------------------------------
+// Part 6, item 26 — public-domain email stays EMAIL-scoped, never domain-wide.
+// ---------------------------------------------------------------------
+function test_N13_publicDomainAutoUnsubscribeStaysEmailScoped_() {
+  var uid = Utilities.getUuid().substring(0, 8);
+  var email = 'klinner-test-n13publicdomain-' + uid + '@gmail.com';
+  var emailNormalized = normalizeEmail_(email);
+  var row = addTestProspectRow_({
+    Email: email, Email_Normalized: emailNormalized, Domain: 'gmail.com',
+    Domain_Type: DOMAIN_TYPE.PUBLIC, Problem_Found: 'x', Status: STATUS.READY
+  });
+  var id = Utilities.getUuid();
+  assignNewProspectIdAndFields_(row, { Prospect_ID: id, Date_Added: new Date(), Status: STATUS.READY },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+  var p = getTestProspectByRow_(row);
+
+  var config = getConfig();
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var thread = n13_makeFakeThread_([
+    n13_makeFakeMessage_(senderEmail, 'A quick note', 'Hi, following up.'),
+    n13_makeFakeMessage_(email, 'Re: A quick note', 'unsubscribe')
+  ]);
+  processThreadForReplies_(thread, p, config);
+  _testCreatedSuppressionValues.push(emailNormalized);
+
+  assert_(!!findSuppressionEntry_(emailNormalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE),
+    'The exact gmail.com address must have its own EMAIL-scope Suppression row.');
+  assert_(!findSuppressionEntry_('gmail.com', SUPPRESSION_SCOPE.DOMAIN),
+    'gmail.com itself must NEVER be suppressed at domain scope — every other gmail.com prospect must remain reachable.');
+}
+
+// ---------------------------------------------------------------------
+// Part 6, items 27-30 — permission surface.
+// ---------------------------------------------------------------------
+function test_N13_autoUnsubscribeOperationOnlyPermitsApprovedValue_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n13perm1'), Problem_Found: 'x' });
+  var id = Utilities.getUuid();
+  assignNewProspectIdAndFields_(row, { Prospect_ID: id, Date_Added: new Date(), Status: STATUS.READY },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+
+  // Positive: the one value production actually writes.
+  writeRowById_(id, { Do_Not_Contact_Reason: DNC_REASON.UNSUBSCRIBE },
+    { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_AUTO_UNSUBSCRIBE });
+  assertEquals_(DNC_REASON.UNSUBSCRIBE, getTestProspectByRow_(row).Do_Not_Contact_Reason);
+
+  // Negative: no other DNC reason is permitted through this operation.
+  var otherReasons = DNC_REASON_VALUES.filter(function (r) { return r !== DNC_REASON.UNSUBSCRIBE; });
+  otherReasons.forEach(function (reason) {
+    var threw = false;
+    try {
+      writeRowById_(id, { Do_Not_Contact_Reason: reason }, { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_AUTO_UNSUBSCRIBE });
+    } catch (e) { threw = true; }
+    assert_(threw, 'SYSTEM_AUTO_UNSUBSCRIBE must reject Do_Not_Contact_Reason="' + reason + '".');
+  });
+
+  // Negative: no column outside the approved set (mirrors ADMIN_UNSUBSCRIBE exactly).
+  var threwOnColumn = false;
+  try {
+    writeRowById_(id, { Sequence_Step: 1 }, { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_AUTO_UNSUBSCRIBE });
+  } catch (e) { threwOnColumn = true; }
+  assert_(threwOnColumn, 'SYSTEM_AUTO_UNSUBSCRIBE must reject a column outside {Stop_Contact, Do_Not_Contact_Reason, Status, Next_Action_Date}.');
+
+  // Negative: no Status outside STOPPED.
+  var threwOnStatus = false;
+  try {
+    writeRowById_(id, { Status: STATUS.IN_SEQUENCE }, { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_AUTO_UNSUBSCRIBE });
+  } catch (e) { threwOnStatus = true; }
+  assert_(threwOnStatus, 'SYSTEM_AUTO_UNSUBSCRIBE must reject any Status other than STOPPED.');
+}
+
+function test_N13_existingSystemOperationsStillCannotWriteUnsubscribe_() {
+  var row = addTestProspectRow_({ Email: testUniqueEmail_('n13perm2'), Problem_Found: 'x' });
+  var id = Utilities.getUuid();
+  assignNewProspectIdAndFields_(row, { Prospect_ID: id, Date_Added: new Date(), Status: STATUS.READY },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_VALIDATE });
+
+  [OPERATION.SYSTEM_REPLY_SYNC, OPERATION.SYSTEM_NIGHTLY_RECON].forEach(function (op) {
+    var threw = false;
+    try {
+      writeRowById_(id, { Do_Not_Contact_Reason: DNC_REASON.UNSUBSCRIBE }, { origin: ORIGIN.SYSTEM, operation: op });
+    } catch (e) { threw = true; }
+    assert_(threw, 'N13 regression: ' + op + ' must remain structurally forbidden from writing DNC="unsubscribe" — the new operation must not have weakened this.');
+  });
+}
+
+function test_N13_unrelatedSystemOperationPermissionsUnchanged_() {
+  // "No drift" check: the exact shape of the two pre-existing SYSTEM
+  // operations' grants, byte-for-byte, must be untouched by this feature.
+  var replySync = OPERATION_PERMISSIONS[OPERATION.SYSTEM_REPLY_SYNC];
+  assertEquals_(
+    JSON.stringify(['Stop_Contact', 'Do_Not_Contact_Reason', 'Status', 'Next_Action_Date', 'Replied', 'Replied_At']),
+    JSON.stringify(replySync.columns), 'SYSTEM_REPLY_SYNC columns must be byte-for-byte unchanged.');
+  assertEquals_(JSON.stringify([STATUS.REPLIED, STATUS.BOUNCED, STATUS.STOPPED]), JSON.stringify(replySync.statuses),
+    'SYSTEM_REPLY_SYNC statuses must be unchanged.');
+
+  var nightlyRecon = OPERATION_PERMISSIONS[OPERATION.SYSTEM_NIGHTLY_RECON];
+  assertEquals_(
+    JSON.stringify(['Stop_Contact', 'Do_Not_Contact_Reason', 'Status', 'Sequence_Step', 'Next_Action_Date', 'Error_Count', 'Last_Error']),
+    JSON.stringify(nightlyRecon.columns), 'SYSTEM_NIGHTLY_RECON columns must be byte-for-byte unchanged.');
+
+  // The new operation's grant must be exactly as wide as ADMIN_UNSUBSCRIBE's (same shape, different origin only).
+  var adminUnsub = OPERATION_PERMISSIONS[OPERATION.ADMIN_UNSUBSCRIBE];
+  var autoUnsub = OPERATION_PERMISSIONS[OPERATION.SYSTEM_AUTO_UNSUBSCRIBE];
+  assertEquals_(JSON.stringify(adminUnsub.columns), JSON.stringify(autoUnsub.columns),
+    'SYSTEM_AUTO_UNSUBSCRIBE must have the EXACT SAME column grant as ADMIN_UNSUBSCRIBE — no wider.');
+  assertEquals_(JSON.stringify(adminUnsub.statuses), JSON.stringify(autoUnsub.statuses));
+  assertEquals_(JSON.stringify(adminUnsub.restrictedValues), JSON.stringify(autoUnsub.restrictedValues));
+}
+
+/**
  * Tests 21/22/23 (task's own numbering) are deliberately NOT new tests:
  * 21 — "Step-1 controlled action remains unchanged" is exactly what the
  *      existing N8 suite already proves; sendControlledFixtureStep2Live
@@ -6291,6 +6640,21 @@ var F1_TEST_FUNCTIONS = [
   ['N12_reconciliationResumesAfterLedgerCommit', test_N12_reconciliationResumesAfterLedgerCommitWithoutSending_],
   ['N12_reconciliationGuards', test_N12_reconciliationRejectsWrongTargetAndUnsafeEvidence_],
   ['N12_reconciliationGmailEvidence', test_N12_reconciliationRejectsGmailMismatchOrDuplicate_],
+  ['N13_positivePhrasesDetected', test_N13_positivePhrasesDetected_],
+  ['N13_ordinaryReplyTextNoSuppress', test_N13_ordinaryReplyTextDoesNotSuppress_],
+  ['N13_quotedKlinnerFooterNoSuppress', test_N13_quotedKlinnerFooterDoesNotSuppress_],
+  ['N13_quotedPriorEmailNoFalsePositive', test_N13_quotedPriorEmailDoesNotFalsePositive_],
+  ['N13_quotedAngleBracketExcluded', test_N13_quotedLineStartingWithAngleBracketExcluded_],
+  ['N13_signatureOutsideIsolatedTextNoTrigger', test_N13_signatureOutsideIsolatedTextDoesNotTrigger_],
+  ['N13_autoUnsubscribeSetsGuarantees', test_N13_autoUnsubscribeSetsAllFourGuarantees_],
+  ['N13_duplicateProcessingIdempotent', test_N13_duplicateProcessingIsIdempotent_],
+  ['N13_ordinaryReplyBehaviorUnchanged', test_N13_ordinaryReplyBehaviorUnchanged_],
+  ['N13_resetCannotReopen', test_N13_resetCannotReopenAutoUnsubscribe_],
+  ['N13_canSendRemainsBlocked', test_N13_canSendRemainsBlockedAfterAutoUnsubscribe_],
+  ['N13_publicDomainStaysEmailScoped', test_N13_publicDomainAutoUnsubscribeStaysEmailScoped_],
+  ['N13_operationOnlyPermitsApprovedValue', test_N13_autoUnsubscribeOperationOnlyPermitsApprovedValue_],
+  ['N13_existingSystemOpsStillCannotUnsubscribe', test_N13_existingSystemOperationsStillCannotWriteUnsubscribe_],
+  ['N13_unrelatedPermissionsUnchanged', test_N13_unrelatedSystemOperationPermissionsUnchanged_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

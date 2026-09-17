@@ -391,6 +391,7 @@ var OPERATION = {
   ADMIN_RESET: 'ADMIN_RESET', // Reset prospect
   SYSTEM_REPLY_SYNC: 'SYSTEM_REPLY_SYNC', // syncReplies
   SYSTEM_NIGHTLY_RECON: 'SYSTEM_NIGHTLY_RECON', // nightlyRecon
+  SYSTEM_AUTO_UNSUBSCRIBE: 'SYSTEM_AUTO_UNSUBSCRIBE', // processThreadForReplies_ — auto-detected unsubscribe intent ONLY
   ADMIN_FIXTURE_DUE_OVERRIDE: 'ADMIN_FIXTURE_DUE_OVERRIDE', // makeControlledFixtureDueNow — controlled fixtures ONLY
   ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY: 'ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY', // one exact controlled fixture only
   ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION: 'ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION' // one exact already-sent incident only
@@ -404,6 +405,7 @@ OPERATION_ORIGIN[OPERATION.ADMIN_UNSUBSCRIBE] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.ADMIN_RESET] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.SYSTEM_REPLY_SYNC] = ORIGIN.SYSTEM;
 OPERATION_ORIGIN[OPERATION.SYSTEM_NIGHTLY_RECON] = ORIGIN.SYSTEM;
+OPERATION_ORIGIN[OPERATION.SYSTEM_AUTO_UNSUBSCRIBE] = ORIGIN.SYSTEM;
 OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_STEP2_PRE_SEND_RECOVERY] = ORIGIN.ADMIN;
 OPERATION_ORIGIN[OPERATION.ADMIN_FIXTURE_STEP2_AMBIGUOUS_RECONCILIATION] = ORIGIN.ADMIN;
@@ -504,6 +506,24 @@ OPERATION_PERMISSIONS[OPERATION.SYSTEM_NIGHTLY_RECON] = {
     Do_Not_Contact_Reason: DNC_REASON_VALUES.filter(function (r) { return r !== DNC_REASON.UNSUBSCRIBE; })
   },
   statuses: [STATUS.STOPPED, STATUS.SEQUENCE_DONE, STATUS.NEEDS_REVIEW]
+};
+
+/**
+ * Automatic unsubscribe (inbound reply). Deliberately NOT a broadening of
+ * SYSTEM_REPLY_SYNC or SYSTEM_NIGHTLY_RECON — both remain structurally
+ * forbidden from writing DNC="unsubscribe" (see the N4 block above). This
+ * is instead its own narrowly-scoped operation, modeled EXACTLY on
+ * ADMIN_UNSUBSCRIBE's shape (same columns, same statuses, same
+ * restrictedValues), so its permission grant is provably no wider than the
+ * already-proven manual unsubscribe path — the only difference is origin.
+ * The sole caller is processThreadForReplies_ (ReplySync.gs), and only
+ * after detectUnsubscribeIntent_ matches text already isolated by
+ * extractNewReplyText_ — never on raw/quoted body content.
+ */
+OPERATION_PERMISSIONS[OPERATION.SYSTEM_AUTO_UNSUBSCRIBE] = {
+  columns: ['Stop_Contact', 'Do_Not_Contact_Reason', 'Status', 'Next_Action_Date'],
+  statuses: [STATUS.STOPPED],
+  restrictedValues: { Do_Not_Contact_Reason: [DNC_REASON.UNSUBSCRIBE] }
 };
 
 /**

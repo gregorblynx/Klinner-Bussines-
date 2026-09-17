@@ -53,6 +53,84 @@ function isBounceSender_(fromAddress) {
 }
 
 /**
+ * Auto-unsubscribe, step 1 — body isolation.
+ *
+ * The Klinner outbound footer itself contains the literal instruction
+ * 'reply "unsubscribe" and we'll remove you from future outreach.' Gmail's
+ * default top-posting client quotes the ENTIRE prior message — footer
+ * included — below any reply. Matching against the full body would
+ * therefore self-trigger on every quoted reply in the thread, forever.
+ * This function returns ONLY the new, human-authored text above the first
+ * quote boundary — matching against anything else is unsafe.
+ *
+ * Two boundary markers are recognized, whichever occurs first:
+ *   - Gmail's own "On <date>, <sender> wrote:" quote header line.
+ *   - A classic plain-text quoted line beginning with '>'.
+ * Both are standard, client-inserted quoting conventions — this does not
+ * attempt to parse arbitrary forwarded-message banners or signatures, only
+ * the two forms Gmail itself produces when quoting a prior message.
+ */
+function extractNewReplyText_(message) {
+  var body = message.getPlainBody ? message.getPlainBody() : message.getBody();
+  body = String(body || '');
+
+  var cutIndex = body.length;
+
+  var quoteHeaderMatch = /^On .+ wrote:\s*$/m.exec(body);
+  if (quoteHeaderMatch && quoteHeaderMatch.index < cutIndex) cutIndex = quoteHeaderMatch.index;
+
+  var quotedLineMatch = /^>/m.exec(body);
+  if (quotedLineMatch && quotedLineMatch.index < cutIndex) cutIndex = quotedLineMatch.index;
+
+  return body.slice(0, cutIndex).trim();
+}
+
+/**
+ * Auto-unsubscribe, step 2 — intent detection.
+ *
+ * Deterministic phrase matching ONLY — no substring search across
+ * unbounded text, no semantic/NLP guessing. Each phrase is matched with
+ * word boundaries (`\b`) against normalized text, so 'stop' matches a
+ * bare "Stop." but never matches inside "stopped by" or "nonstop" — this
+ * matters because a short, common word like 'stop' would otherwise false-
+ * positive on completely ordinary replies. The trade-off is intentional
+ * and matches the industry-standard "reply STOP to unsubscribe"
+ * convention: a bare, whole-word "stop" is treated as opt-out intent.
+ *
+ * Normalization: lowercase, apostrophes/curly-quotes stripped (so "don't"
+ * and "dont" match the same phrase), repeated whitespace collapsed. This
+ * is intentionally NOT called on the raw message body — the caller must
+ * pass text already isolated by extractNewReplyText_.
+ */
+var UNSUBSCRIBE_INTENT_PHRASES_ = [
+  'unsubscribe',
+  'stop',
+  'stop emailing me',
+  'remove me',
+  'remove me from your list',
+  'do not contact me',
+  'dont contact me'
+];
+
+function normalizeReplyTextForIntentMatch_(text) {
+  return String(text || '')
+    .replace(/[‘’']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function detectUnsubscribeIntent_(newReplyText) {
+  var normalized = normalizeReplyTextForIntentMatch_(newReplyText);
+  if (!normalized) return false;
+  for (var i = 0; i < UNSUBSCRIBE_INTENT_PHRASES_.length; i++) {
+    var re = new RegExp('\\b' + UNSUBSCRIBE_INTENT_PHRASES_[i] + '\\b');
+    if (re.test(normalized)) return true;
+  }
+  return false;
+}
+
+/**
  * Classifies one inbound Gmail message relative to our own sends.
  * Cheap checks (sender, subject regex) run first; getRawContent() —
  * expensive — is only called for messages that survive the cheap filter.
@@ -135,7 +213,20 @@ function processThreadForReplies_(thread, prospect, config) {
       logEvent_(LOG_LEVEL.INFO, LOG_EVENT.AUTOREPLY, prospect.Prospect_ID, prospect.Email_Normalized, '', '');
       continue;
     }
-    // REPLY — human response. Terminal; stop the sequence.
+    // REPLY — human response. Check unsubscribe intent on the ISOLATED new
+    // reply text (never the full/quoted body — see extractNewReplyText_)
+    // BEFORE the generic terminal write below: STOPPED must supersede
+    // REPLIED for an unsubscribe request, and the generic REPLIED write
+    // must never happen for it.
+    var newReplyText = extractNewReplyText_(msg);
+    if (detectUnsubscribeIntent_(newReplyText)) {
+      writeRowById_(prospect.Prospect_ID, { Do_Not_Contact_Reason: DNC_REASON.UNSUBSCRIBE },
+        { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_AUTO_UNSUBSCRIBE });
+      applyUnsubscribeEffects_(prospect.Prospect_ID, ORIGIN.SYSTEM, OPERATION.SYSTEM_AUTO_UNSUBSCRIBE);
+      return;
+    }
+
+    // Ordinary human reply. Terminal; stop the sequence.
     writeRowById_(prospect.Prospect_ID, { Status: STATUS.REPLIED, Replied: true, Replied_At: new Date(), Next_Action_Date: '' },
       { origin: ORIGIN.SYSTEM, operation: OPERATION.SYSTEM_REPLY_SYNC });
     logEvent_(LOG_LEVEL.INFO, LOG_EVENT.REPLY, prospect.Prospect_ID, prospect.Email_Normalized, '', '');
