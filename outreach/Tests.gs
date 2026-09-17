@@ -5317,6 +5317,372 @@ function test_N13_unrelatedSystemOperationPermissionsUnchanged_() {
 }
 
 /**
+ * N14 (Google-real ReplySync discovery failure, controlled Thread_ID
+ * 1a0a125e8dde9823): syncReplies()'s old combined
+ * `label:"X" newer_than:3d` query required a SINGLE message to carry both
+ * properties, but applyOutreachLabel_ (Mailer.gs) labels only the
+ * messages present in a thread at the moment it's called — a later
+ * inbound reply never inherits it. Once the labeled outbound message ages
+ * past the window, no message satisfies both clauses and the whole
+ * thread silently vanishes from discovery, even though the reply is
+ * sitting right there. Fixed by decoupling: `label:"X"` alone finds the
+ * thread; recency is now checked in code via getLastMessageDate().
+ *
+ * These tests exercise the FULL syncReplies() -> processThreadForReplies_
+ * pipeline (discovery included) — distinct from N13's tests, which called
+ * processThreadForReplies_ directly and never touched discovery at all.
+ */
+
+/** Forces the reply-sync operational window open, regardless of real time-of-day/timezone — restored in finally. */
+function n14_withReplySyncWindowForced_(fn) {
+  var original = isWithinReplySyncWindow_;
+  isWithinReplySyncWindow_ = function () { return true; };
+  try {
+    return fn();
+  } finally {
+    isWithinReplySyncWindow_ = original;
+  }
+}
+
+/**
+ * Builds the EXACT Google-real shape: a thread with one OLD outbound
+ * message that already carries the KLINNER/Outreach label (simulating
+ * applyOutreachLabel_ having been called days ago), and a prospect row
+ * pointing at it. No inbound message yet — callers add one via
+ * thread._appendMessageForTest to control its own sender/age/body.
+ */
+function n14_setupLabeledOldThreadProspect_(emailTag, config, overrides) {
+  var email = testUniqueEmail_(emailTag);
+  var emailNormalized = normalizeEmail_(email);
+  var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+  var labelName = config.GMAIL_LABEL || DEFAULT_GMAIL_LABEL;
+  var oldDate = new Date(); oldDate.setDate(oldDate.getDate() - 5); // Older than the 3-day recency window.
+  var dueDate = new Date(); dueDate.setDate(dueDate.getDate() - 1); // Already due for step 2 — see canSend_ discriminator note below.
+
+  var thread = GmailApp._seedLiveThread(email, senderEmail, { internalDate: oldDate.getTime() });
+  _testCreatedThreadIds_.push(thread.getId());
+  var label = GmailApp.getUserLabelByName(labelName) || GmailApp.createLabel(labelName);
+  thread.addLabel(label); // Only the OLD outbound message existed at this point — the real Gmail behavior.
+
+  // Next_Action_Date is deliberately DUE (not blank) by default: this makes
+  // canSend_(_, 2, ...) a genuine discriminator in
+  // test_N14_canSendProtectionsUnchangedViaFullPipeline_ — if auto-
+  // unsubscribe protection were silently skipped (e.g. discovery still
+  // broken), this prospect would otherwise be immediately eligible for a
+  // real step-2 send. A blank Next_Action_Date would block canSend_ for an
+  // unrelated reason (I6) regardless of whether protection actually fired,
+  // which would make that test pass even when it shouldn't.
+  var base = {
+    Prospect_ID: Utilities.getUuid(), Email: email, Email_Normalized: emailNormalized,
+    Domain: extractDomain_(emailNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE,
+    Problem_Found: 'x', Status: STATUS.IN_SEQUENCE, Sequence_Step: 1,
+    Step1_Sent_At: oldDate, Last_Contacted: oldDate, Next_Action_Date: dueDate, Thread_ID: thread.getId()
+  };
+  var merged = Object.assign({}, base, overrides || {});
+  var row = addTestProspectRow_(merged);
+  return { p: getTestProspectByRow_(row), thread: thread, email: email, emailNormalized: emailNormalized, senderEmail: senderEmail };
+}
+
+// ---------------------------------------------------------------------
+// Item 1 — the exact reproduction: old labeled outbound + recent
+// UNLABELED inbound reply is discovered and processed.
+// ---------------------------------------------------------------------
+function test_N14_oldLabeledThreadWithRecentUnlabeledReplyIsDiscovered_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14discover', config);
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', "Thanks, I'll take a look.", Date.now());
+
+    syncReplies();
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.REPLIED, after.Status,
+      'A recent inbound reply on an old-labeled thread must be discovered and processed, despite carrying no label itself.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 2 — label-only old thread, no recent inbound activity: skipped.
+// ---------------------------------------------------------------------
+function test_N14_labelOnlyOldThreadWithNoRecentReplyNotProcessed_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14stale', config);
+    // No inbound message appended — the thread's only message is the old outbound one.
+
+    syncReplies();
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.IN_SEQUENCE, after.Status, 'An old, inactive labeled thread must be skipped — never processed.');
+    assertEquals_(false, after.Replied === true);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 3 — a thread not mapped to any known prospect Thread_ID is ignored,
+// even if labeled and recent.
+// ---------------------------------------------------------------------
+function test_N14_unmappedThreadIgnoredEvenIfLabeledAndRecent_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var labelName = config.GMAIL_LABEL || DEFAULT_GMAIL_LABEL;
+    var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+    var thread = GmailApp._seedLiveThread('unmapped-' + Utilities.getUuid() + '@example-corp-test.com', senderEmail, {});
+    _testCreatedThreadIds_.push(thread.getId());
+    var label = GmailApp.getUserLabelByName(labelName) || GmailApp.createLabel(labelName);
+    thread.addLabel(label);
+    thread._appendMessageForTest('someone-unrelated@example-corp-test.com', 'Re: A quick note', 'unsubscribe', Date.now());
+    // Deliberately NO prospect row points at this Thread_ID.
+
+    var before = readAllProspects().length;
+    syncReplies(); // Must not throw, must not write anything for an unrecognized thread.
+    var after = readAllProspects().length;
+    assertEquals_(before, after, 'No prospect row may be created or altered by an unrecognized Gmail thread.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 4 — boundary: a reply just inside the recency window is processed.
+// ---------------------------------------------------------------------
+function test_N14_replyJustInsideRecencyWindowIsProcessed_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14boundary', config);
+    var justInside = new Date(); justInside.setDate(justInside.getDate() - 2); // Inside the default 3-day window.
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', 'Yes, interested — send details.', justInside.getTime());
+
+    syncReplies();
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.REPLIED, after.Status, 'A reply within the recency window (2 of 3 days) must be processed.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 5 — ordinary reply still becomes REPLIED, through the FULL pipeline.
+// ---------------------------------------------------------------------
+function test_N14_ordinaryReplyBecomesRepliedViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14normal', config);
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', "Sounds good, let's talk Tuesday!", Date.now());
+
+    syncReplies();
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.REPLIED, after.Status);
+    assertEquals_(true, after.Replied);
+    assert_(!!after.Replied_At);
+    assertEquals_('', String(after.Do_Not_Contact_Reason || ''));
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 6 — auto-unsubscribe reply becomes STOPPED + DNC + Suppression,
+// through the FULL pipeline (discovery included, not bypassed).
+// ---------------------------------------------------------------------
+function test_N14_autoUnsubscribeViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14fullunsub', config);
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', 'unsubscribe', Date.now());
+
+    syncReplies();
+    _testCreatedSuppressionValues.push(setup.emailNormalized);
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.STOPPED, after.Status, 'Must be STOPPED, not REPLIED, once discovery is fixed.');
+    assertEquals_(true, after.Stop_Contact);
+    assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+    assertEquals_('', String(after.Next_Action_Date || ''));
+    assert_(!!findSuppressionEntry_(setup.emailNormalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE),
+      'The auto-unsubscribe Suppression row must exist once the reply is actually discovered.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 7 — quoted Klinner footer does not false-positive, through the
+// FULL pipeline.
+// ---------------------------------------------------------------------
+function test_N14_quotedFooterNoFalsePositiveViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14footer', config);
+    var fullBody = n13_quotedOutboundBody_("Sounds good, let's talk Tuesday!");
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', fullBody, Date.now());
+
+    syncReplies();
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.REPLIED, after.Status, 'The quoted Klinner footer ("unsubscribe") must NOT trigger auto-unsubscribe once discovery actually finds the message.');
+    assertEquals_('', String(after.Do_Not_Contact_Reason || ''));
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 8 — bounce behavior preserved.
+// ---------------------------------------------------------------------
+function test_N14_bounceBehaviorPreservedViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14bounce', config);
+    setup.thread._appendMessageForTest('mailer-daemon@googlemail.com', 'Delivery Status Notification (Failure)',
+      'Address not found.', Date.now());
+
+    syncReplies();
+    _testCreatedSuppressionValues.push(setup.emailNormalized);
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.BOUNCED, after.Status);
+    assertEquals_(DNC_REASON.BOUNCE, after.Do_Not_Contact_Reason);
+    assert_(!!findSuppressionEntry_(setup.emailNormalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.BOUNCE));
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 9 — autoreply behavior preserved.
+// ---------------------------------------------------------------------
+function test_N14_autoreplyBehaviorPreservedViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14autoreply', config);
+    var before = findRowById_(setup.p.Prospect_ID).values;
+    setup.thread._appendMessageForTest(setup.email, 'Automatic reply: A quick note', 'I am out of office.', Date.now());
+
+    syncReplies();
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(STATUS.IN_SEQUENCE, after.Status, 'An autoreply must not terminate the sequence.');
+    assertEquals_(false, after.Replied === true);
+    assert_(String(after.Next_Action_Date || '') !== String(before.Next_Action_Date || ''),
+      'An autoreply must push Next_Action_Date forward.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 10 — duplicate processing across two full syncReplies() runs stays idempotent.
+// ---------------------------------------------------------------------
+function test_N14_duplicateSyncRunsRemainIdempotent_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14fulldupe', config);
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', 'stop', Date.now());
+
+    syncReplies();
+    _testCreatedSuppressionValues.push(setup.emailNormalized);
+    var countAfterFirst = readAllSuppression_().filter(function (r) {
+      return r.Value === setup.emailNormalized && r.Scope === SUPPRESSION_SCOPE.EMAIL && r.Reason === DNC_REASON.UNSUBSCRIBE;
+    }).length;
+    assertEquals_(1, countAfterFirst);
+
+    syncReplies(); // Second full run over the exact same Gmail/Sheet state.
+
+    var countAfterSecond = readAllSuppression_().filter(function (r) {
+      return r.Value === setup.emailNormalized && r.Scope === SUPPRESSION_SCOPE.EMAIL && r.Reason === DNC_REASON.UNSUBSCRIBE;
+    }).length;
+    assertEquals_(1, countAfterSecond, 'A second full syncReplies() run must not create a duplicate Suppression row.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 11 — unknown Thread_ID cannot modify a prospect (complementary to
+// item 3: here the Gmail thread IS unmapped, checked against a REAL
+// concurrently-existing prospect to prove no cross-contamination).
+// ---------------------------------------------------------------------
+function test_N14_unknownThreadCannotModifyAnyProspect_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var real = n14_setupLabeledOldThreadProspect_('n14realprotected', config);
+    // A second, completely unrelated labeled+recent thread with no prospect mapping.
+    var labelName = config.GMAIL_LABEL || DEFAULT_GMAIL_LABEL;
+    var senderEmail = config.SENDER_EMAIL || 'outreach-test@example.com';
+    var strayThread = GmailApp._seedLiveThread('stray-' + Utilities.getUuid() + '@example-corp-test.com', senderEmail, {});
+    _testCreatedThreadIds_.push(strayThread.getId());
+    var label = GmailApp.getUserLabelByName(labelName) || GmailApp.createLabel(labelName);
+    strayThread.addLabel(label);
+    strayThread._appendMessageForTest('stray-prospect@example-corp-test.com', 'Re: A quick note', 'unsubscribe', Date.now());
+
+    var realBefore = findRowById_(real.p.Prospect_ID).values;
+    syncReplies();
+    var realAfter = findRowById_(real.p.Prospect_ID).values;
+
+    assertEquals_(realBefore.Status, realAfter.Status, 'A real, protected prospect must be untouched by an unrelated unmapped thread.');
+    assertEquals_(0, readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === real.p.Prospect_ID; }).length);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 12 — real/protected prospect isolation: two known prospects, only
+// the one with genuinely recent activity changes.
+// ---------------------------------------------------------------------
+function test_N14_onlyGenuinelyActiveProspectChangesAmongMultiple_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var active = n14_setupLabeledOldThreadProspect_('n14multiactive', config);
+    var quiet = n14_setupLabeledOldThreadProspect_('n14multiquiet', config); // No inbound message appended at all.
+    active.thread._appendMessageForTest(active.email, 'Re: A quick note', 'Sounds great!', Date.now());
+
+    syncReplies();
+
+    var activeAfter = findRowById_(active.p.Prospect_ID).values;
+    var quietAfter = findRowById_(quiet.p.Prospect_ID).values;
+    assertEquals_(STATUS.REPLIED, activeAfter.Status);
+    assertEquals_(STATUS.IN_SEQUENCE, quietAfter.Status, 'A prospect with no recent activity must remain completely untouched.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 13 — public-domain (gmail.com) suppression stays EMAIL-scoped.
+// ---------------------------------------------------------------------
+function test_N14_publicDomainSuppressionStaysEmailScopedViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var uid = Utilities.getUuid().substring(0, 8);
+    var email = 'klinner-test-n14publicdomain-' + uid + '@gmail.com';
+    var emailNormalized = normalizeEmail_(email);
+    // Prospect row fields override to the real gmail.com address; the
+    // inbound message below is explicitly sent From that same address
+    // (independent of whatever placeholder recipient the helper used to
+    // seed the underlying Gmail thread) — what processThreadForReplies_
+    // actually keys on is Thread_ID, not the seed thread's own recipient.
+    var setup = n14_setupLabeledOldThreadProspect_('n14publicdomainbase', config, {
+      Email: email, Email_Normalized: emailNormalized, Domain: 'gmail.com', Domain_Type: DOMAIN_TYPE.PUBLIC
+    });
+    setup.thread._appendMessageForTest(email, 'Re: A quick note', 'unsubscribe', Date.now());
+
+    syncReplies();
+    _testCreatedSuppressionValues.push(emailNormalized);
+
+    assert_(!!findSuppressionEntry_(emailNormalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.UNSUBSCRIBE));
+    assert_(!findSuppressionEntry_('gmail.com', SUPPRESSION_SCOPE.DOMAIN),
+      'gmail.com must never be suppressed at domain scope through the full discovery pipeline either.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 14 — canSend_/eligibility protections unchanged, through the FULL pipeline.
+// ---------------------------------------------------------------------
+function test_N14_canSendProtectionsUnchangedViaFullPipeline_() {
+  n14_withReplySyncWindowForced_(function () {
+    var config = getConfig();
+    var setup = n14_setupLabeledOldThreadProspect_('n14cansend', config);
+    // Precondition: absent any protection, this fixture (IN_SEQUENCE, step
+    // 1 done, Next_Action_Date already due) would be immediately eligible
+    // for a real step-2 send — the genuine discriminator this test needs.
+    var before = findRowById_(setup.p.Prospect_ID).values;
+    assert_(canSend_(before, 2, config, new Date()), 'Precondition: this fixture must start genuinely eligible for step 2.');
+
+    setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', 'do not contact me', Date.now());
+    syncReplies();
+    _testCreatedSuppressionValues.push(setup.emailNormalized);
+
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assert_(!canSend_(after, 2, config, new Date()), 'canSend_ must refuse step 2 once auto-unsubscribe protection has actually fired.');
+    assert_(!isEligibleForNextStep_(after, config, new Date()));
+  });
+}
+
+/**
  * Tests 21/22/23 (task's own numbering) are deliberately NOT new tests:
  * 21 — "Step-1 controlled action remains unchanged" is exactly what the
  *      existing N8 suite already proves; sendControlledFixtureStep2Live
@@ -6655,6 +7021,20 @@ var F1_TEST_FUNCTIONS = [
   ['N13_operationOnlyPermitsApprovedValue', test_N13_autoUnsubscribeOperationOnlyPermitsApprovedValue_],
   ['N13_existingSystemOpsStillCannotUnsubscribe', test_N13_existingSystemOperationsStillCannotWriteUnsubscribe_],
   ['N13_unrelatedPermissionsUnchanged', test_N13_unrelatedSystemOperationPermissionsUnchanged_],
+  ['N14_oldLabeledRecentUnlabeledReplyDiscovered', test_N14_oldLabeledThreadWithRecentUnlabeledReplyIsDiscovered_],
+  ['N14_labelOnlyOldThreadNotProcessed', test_N14_labelOnlyOldThreadWithNoRecentReplyNotProcessed_],
+  ['N14_unmappedThreadIgnored', test_N14_unmappedThreadIgnoredEvenIfLabeledAndRecent_],
+  ['N14_replyJustInsideWindowProcessed', test_N14_replyJustInsideRecencyWindowIsProcessed_],
+  ['N14_ordinaryReplyRepliedFullPipeline', test_N14_ordinaryReplyBecomesRepliedViaFullPipeline_],
+  ['N14_autoUnsubscribeFullPipeline', test_N14_autoUnsubscribeViaFullPipeline_],
+  ['N14_quotedFooterNoFalsePositiveFullPipeline', test_N14_quotedFooterNoFalsePositiveViaFullPipeline_],
+  ['N14_bounceBehaviorPreservedFullPipeline', test_N14_bounceBehaviorPreservedViaFullPipeline_],
+  ['N14_autoreplyBehaviorPreservedFullPipeline', test_N14_autoreplyBehaviorPreservedViaFullPipeline_],
+  ['N14_duplicateSyncRunsIdempotent', test_N14_duplicateSyncRunsRemainIdempotent_],
+  ['N14_unknownThreadCannotModifyProspect', test_N14_unknownThreadCannotModifyAnyProspect_],
+  ['N14_onlyActiveProspectChangesAmongMultiple', test_N14_onlyGenuinelyActiveProspectChangesAmongMultiple_],
+  ['N14_publicDomainStaysEmailScopedFullPipeline', test_N14_publicDomainSuppressionStaysEmailScopedViaFullPipeline_],
+  ['N14_canSendProtectionsUnchangedFullPipeline', test_N14_canSendProtectionsUnchangedViaFullPipeline_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

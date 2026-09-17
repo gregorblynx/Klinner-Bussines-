@@ -409,6 +409,7 @@ function createMockGmailApp() {
       getSubject: function () { return subject; },
       getPlainBody: function () { return body; },
       getBody: function () { return body; },
+      getDate: function () { return new Date(message._internalDate); },
       getRawContent: function () {
         return 'From: ' + from + '\r\nTo: ' + to + '\r\nSubject: ' + subject + '\r\n\r\n' + body;
       }
@@ -444,11 +445,16 @@ function createMockGmailApp() {
         if (idx !== -1) drafts.splice(idx, 1);
         threadCounter++;
         var threadId = 'sent-thread-' + threadCounter;
+        var sentThreadLabelNames = [];
         var sentThread = {
           getId: function () { return threadId; },
           getMessages: function () { return [message]; },
-          getLabels: function () { return []; },
-          addLabel: function () {}
+          getLastMessageDate: function () { return new Date(message._internalDate); },
+          getLabels: function () { return sentThreadLabelNames.map(function (n) { return { getName: function () { return n; } }; }); },
+          addLabel: function (label) {
+            var n = label.getName();
+            if (sentThreadLabelNames.indexOf(n) === -1) sentThreadLabelNames.push(n);
+          }
         };
         message._ownerThread = sentThread;
         threads[threadId] = sentThread;
@@ -488,9 +494,15 @@ function createMockGmailApp() {
         if (!msgs) return tid + '#UNREADABLE';
         // Message-LEVEL detail: a reply appended to an already-existing
         // thread changes this even though the thread id set does not.
+        // N14: per-thread labels are now functional (addLabel/getLabels
+        // actually track state), so a test that labels a pre-existing
+        // shared thread and forgets to clean up must be a detectable leak.
+        var threadLabelPart = safe(function () {
+          return threads[tid].getLabels().map(function (l) { return l.getName(); }).sort().join(',');
+        }, 'LABELS_UNREADABLE');
         return tid + '#' + msgs.length + '#' + msgs.map(function (m) {
           return safe(function () { return m.getId(); }, 'UNREADABLE');
-        }).join(',');
+        }).join(',') + '#labels=' + threadLabelPart;
       }).join('|');
     }, 'THREAD_ENUMERATION_FAILED');
 
@@ -573,11 +585,47 @@ function createMockGmailApp() {
      * tests control what's in the index directly, which is a stronger,
      * more explicit form of control than simulating a date filter would be.
      */
+    /**
+     * N14: real (if minimal) query support for the two shapes this project
+     * actually issues — `to:<email>` (reconcileStaleLiveClaims_) and
+     * `label:"<name>"` (syncReplies() — deliberately NO `newer_than:` term
+     * combined into the same query anymore; see its docstring). This is
+     * NOT a general Gmail query parser — only these two forms.
+     */
     search: function (query) {
-      var m = /to:(\S+)/.exec(String(query || ''));
-      if (!m) return [];
-      var email = m[1].toLowerCase();
-      return sentIndex.filter(function (s) { return s.recipientEmail === email; }).map(function (s) { return s.thread; });
+      var q = String(query || '');
+      var toMatch = /to:(\S+)/.exec(q);
+      if (toMatch) {
+        var email = toMatch[1].toLowerCase();
+        return sentIndex.filter(function (s) { return s.recipientEmail === email; }).map(function (s) { return s.thread; });
+      }
+      var labelMatch = /label:"([^"]+)"/.exec(q);
+      if (labelMatch) {
+        var labelName = labelMatch[1];
+        var newerMatch = /newer_than:(\d+)d/.exec(q);
+        return Object.keys(threads).filter(function (tid) {
+          var t = threads[tid];
+          if (!t.getLabels || !t.getLabels().some(function (l) { return l.getName() === labelName; })) return false;
+          if (!newerMatch) return true; // label-only query.
+          // N14: a COMBINED `label:"X" newer_than:Nd` query, exactly as
+          // real Gmail evaluates it — a thread matches only if ONE
+          // message is simultaneously labeled AND recent. Deliberately
+          // reproduces the bug this whole fix exists to prove/catch: if
+          // the label was applied before a later, unlabeled message
+          // arrived, that later message does NOT count as "labeled",
+          // even though the thread itself carries the label.
+          if (typeof t._labelCutoffIndexForTest !== 'function') return true; // No cutoff tracking (e.g. a LIVE-send thread) — not exercised by this query shape.
+          var cutoffIndex = t._labelCutoffIndexForTest(labelName);
+          if (cutoffIndex < 0) return false;
+          var recencyCutoffMs = Date.now() - Number(newerMatch[1]) * 24 * 60 * 60 * 1000;
+          var msgs = t.getMessages();
+          for (var i = 0; i < cutoffIndex && i < msgs.length; i++) {
+            if (msgs[i].getDate().getTime() >= recencyCutoffMs) return true;
+          }
+          return false;
+        }).map(function (tid) { return threads[tid]; });
+      }
+      return [];
     },
     /**
      * Test-only helper: seeds a fake existing LIVE thread with one prior
@@ -595,11 +643,30 @@ function createMockGmailApp() {
           rfcMessageId: options.rfcMessageId,
           internalDate: options.internalDate
         })];
+      var threadLabelNames = [];
+      // N14: per-label, the message COUNT at the moment addLabel() was
+      // called — modeling real Gmail's actual behavior (confirmed by the
+      // Google-real evidence this fix is based on): a label applied via
+      // GmailThread.addLabel() marks only the messages present in the
+      // thread at that moment; it does NOT retroactively apply to
+      // messages that arrive afterward. This is what lets the mock
+      // correctly reproduce (and therefore let a regression test actually
+      // catch) the exact combined `label:"X" newer_than:Nd` query bug.
+      var threadLabelCutoffIndex = {};
       var thread = {
         getId: function () { return threadId; },
         getMessages: function () { return messages.slice(); },
-        getLabels: function () { return []; },
-        addLabel: function () {},
+        getLastMessageDate: function () { return new Date(messages[messages.length - 1]._internalDate); },
+        getLabels: function () { return threadLabelNames.map(function (n) { return { getName: function () { return n; } }; }); },
+        addLabel: function (label) {
+          var n = label.getName();
+          if (threadLabelNames.indexOf(n) === -1) threadLabelNames.push(n);
+          threadLabelCutoffIndex[n] = messages.length;
+        },
+        /** N14 test/mock-internal: how many of this thread's CURRENT messages existed when `name` was applied. -1 if never applied. */
+        _labelCutoffIndexForTest: function (name) {
+          return threadLabelCutoffIndex.hasOwnProperty(name) ? threadLabelCutoffIndex[name] : -1;
+        },
         /** Real GmailThread.reply() returns the GmailThread itself, NOT a GmailMessage — Codex finding #7. */
         reply: function (body) {
           callCounts.reply++;
@@ -609,6 +676,19 @@ function createMockGmailApp() {
         createDraftReply: function (body) {
           callCounts.createDraftReply++;
           return makeDraft(recipientEmail, 'Re: A quick note', body, thread);
+        },
+        /**
+         * N14 test-only: appends an arbitrary message — e.g. simulating a
+         * REAL inbound reply with a controllable sender and timestamp,
+         * independent of reply()'s "we sent this" shape and Date.now()
+         * default. Used to reproduce the exact Google-real discovery
+         * scenario: an old, labeled outbound message plus a new, unlabeled
+         * inbound one.
+         */
+        _appendMessageForTest: function (fromEmail, subject, body, internalDate) {
+          var m = makeMessage(fromEmail, senderEmail, subject, body, { threadId: threadId, internalDate: internalDate });
+          messages.push(m);
+          return m;
         }
       };
       threads[threadId] = thread;

@@ -153,7 +153,56 @@ function classifyInboundMessage_(message) {
   return 'REPLY';
 }
 
-/** Fast hourly sweep: recently active labeled threads only. */
+/**
+ * N14 (Google-real discovery failure — controlled Thread_ID
+ * 1a0a125e8dde9823): parses the days component out of a 'newer_than:<N>d'
+ * Config fragment into a millisecond window, computed here in JS rather
+ * than left to a Gmail query operator. See syncReplies()'s docstring for
+ * why label and recency can no longer be combined in a single search.
+ * Falls back to 3 days if unparseable, so an operator typo in
+ * FAST_SWEEP_QUERY_WINDOW never silently disables the recency filter
+ * (never silently WIDENS it either — an unparseable value could otherwise
+ * be read as "no limit").
+ */
+function parseNewerThanWindowMs_(queryFragment) {
+  var match = /newer_than:(\d+)d/.exec(String(queryFragment || ''));
+  var days = match ? Number(match[1]) : 3;
+  if (!isFinite(days) || days <= 0) days = 3;
+  return days * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Fast hourly sweep: recently active labeled threads only.
+ *
+ * N14 root cause (Google-real evidence, controlled Thread_ID
+ * 1a0a125e8dde9823): the query used to be a single combined
+ * `label:"X" newer_than:3d`. Gmail's search evaluates a query like that as
+ * a per-MESSAGE conjunction — a thread matches only if ONE message
+ * satisfies BOTH clauses together. `applyOutreachLabel_` (Mailer.gs) calls
+ * `GmailThread.addLabel()`, which — per observed real Gmail behavior —
+ * marks only the messages that existed in the thread at the moment it was
+ * called; it does NOT retroactively apply to messages that arrive in the
+ * thread later. So the label lives only on the original OUTBOUND
+ * message(s), and once those age past the recency window, NO message in
+ * the thread is simultaneously labeled AND recent — not even a brand-new
+ * INBOUND reply, which was never labeled at all. The combined query then
+ * correctly, silently returns zero, even though the thread (found by
+ * `label:"X"` alone) and the reply (found by a recency-only search) both
+ * genuinely exist. Confirmed directly: `label:"KLINNER/Outreach"` alone
+ * finds the thread; the combined query does not.
+ *
+ * Fix: decouple the two conditions. `label:"X"` alone (Part 2, architecture
+ * B) scopes the search to exactly the threads Klinner itself labeled —
+ * this still touches no unrelated Gmail, and does not depend on the
+ * inbound reply inheriting anything. Recency is then checked in code via
+ * `GmailThread.getLastMessageDate()` against each already-known-relevant
+ * thread — semantically identical to "does this thread have a message
+ * newer than the window", cheaper than iterating every message, and
+ * immune to the query-conjunction bug because it is not a Gmail query
+ * term at all. `byThreadId` remains the sole authorization boundary
+ * before any Prospects/Suppression write: an unrecognized Gmail thread —
+ * label or no label — is never touched.
+ */
 function syncReplies() {
   var config = getConfig();
   var now = new Date();
@@ -164,16 +213,19 @@ function syncReplies() {
 
   try {
     var labelName = config.GMAIL_LABEL || DEFAULT_GMAIL_LABEL;
-    var query = 'label:"' + labelName + '" ' + (config.FAST_SWEEP_QUERY_WINDOW || 'newer_than:3d');
+    var query = 'label:"' + labelName + '"';
     var threads = GmailApp.search(query);
 
     var rows = readAllProspects();
     var byThreadId = {};
     rows.forEach(function (r) { if (r.values.Thread_ID) byThreadId[r.values.Thread_ID] = r; });
 
+    var recencyCutoffMs = now.getTime() - parseNewerThanWindowMs_(config.FAST_SWEEP_QUERY_WINDOW);
+
     threads.forEach(function (thread) {
       var row = byThreadId[thread.getId()];
-      if (!row) return;
+      if (!row) return; // Unknown Gmail thread — never touched, label or no label.
+      if (thread.getLastMessageDate().getTime() < recencyCutoffMs) return; // No recent activity — skip, cheaply.
       processThreadForReplies_(thread, row.values, config);
     });
 
