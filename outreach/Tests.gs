@@ -5683,6 +5683,237 @@ function test_N14_canSendProtectionsUnchangedViaFullPipeline_() {
 }
 
 /**
+ * N15 (holiday enforcement gap): isWithinSendWindow_ previously checked
+ * SEND_DAYS and the hour window but never HOLIDAYS — HOLIDAYS was applied
+ * only inside addBusinessDays_ (future cadence math), never at the actual
+ * send-time gate. A trigger or manual invocation firing on a configured
+ * holiday during normal hours on a normal send day proceeded exactly as
+ * on any other day. Fixed by reusing isHoliday_ directly inside
+ * isWithinSendWindow_ — the ONE centralized gate every production LIVE
+ * send path funnels through.
+ */
+
+// ---------------------------------------------------------------------
+// Items 1, 2, 3, 4, 9 — baseline isWithinSendWindow_ behavior (SEND_DAYS,
+// hour boundaries, America/Chicago) is unaffected by the new holiday
+// check. Non-holiday dates throughout.
+// ---------------------------------------------------------------------
+function test_N15_baselineWindowBehaviorUnaffectedByHolidayCheck_() {
+  var config = getConfig();
+  assert_(config.HOLIDAYS.indexOf('2026-09-09') === -1, 'Precondition: 2026-09-09 must not itself be a configured holiday.');
+
+  // Item 1: normal weekday (Wed 2026-09-09) inside hours -> ALLOWED.
+  var weekdayInside = dateFromWallClock_(2026, 8, 9, 10, 0, 0, 'America/Chicago');
+  assert_(isWithinSendWindow_(weekdayInside, config), 'A normal non-holiday weekday inside hours must remain allowed.');
+
+  // Item 2: weekend (Sat 2026-09-05) -> BLOCKED.
+  var weekend = dateFromWallClock_(2026, 8, 5, 10, 0, 0, 'America/Chicago');
+  assert_(!isWithinSendWindow_(weekend, config), 'A weekend must remain blocked by SEND_DAYS.');
+
+  // Item 3: before SEND_START_HOUR (08:59) -> BLOCKED.
+  var beforeStart = dateFromWallClock_(2026, 8, 9, 8, 59, 0, 'America/Chicago');
+  assert_(!isWithinSendWindow_(beforeStart, config), 'Before SEND_START_HOUR must remain blocked.');
+
+  // Item 4: at/after SEND_END_HOUR (17:00, exclusive) -> BLOCKED.
+  var atEnd = dateFromWallClock_(2026, 8, 9, 17, 0, 0, 'America/Chicago');
+  assert_(!isWithinSendWindow_(atEnd, config), 'At/after SEND_END_HOUR must remain blocked.');
+
+  // Item 9: the boundary is computed in America/Chicago specifically —
+  // the same instant read as a DIFFERENT wall-clock hour in another zone
+  // must still evaluate against the Chicago hour, not the other zone's.
+  var chicagoNineAm = dateFromWallClock_(2026, 8, 9, 9, 0, 0, 'America/Chicago');
+  assert_(isWithinSendWindow_(chicagoNineAm, config), 'A real instant that reads as 09:00 in America/Chicago must be inside the window regardless of the executing machine/process timezone.');
+}
+
+// ---------------------------------------------------------------------
+// Item 5 — the exact regression date: 2026-09-07 (Monday, a configured
+// holiday and an ordinary SEND_DAYS weekday) must be BLOCKED.
+// ---------------------------------------------------------------------
+function test_N15_coreRegressionDateBlocked_() {
+  var config = getConfig();
+  assert_(config.HOLIDAYS.indexOf('2026-09-07') !== -1, 'Precondition: 2026-09-07 must be a configured holiday.');
+  var holidayMonday = dateFromWallClock_(2026, 8, 7, 10, 0, 0, 'America/Chicago'); // Mon, well inside default hours.
+  assert_(!isWithinSendWindow_(holidayMonday, config), '2026-09-07 (configured holiday, Monday, 10:00) must be BLOCKED.');
+}
+
+// ---------------------------------------------------------------------
+// Item 6 — a second configured holiday, on a DIFFERENT weekday
+// (2026-06-19, Juneteenth, a Friday) must also be BLOCKED.
+// ---------------------------------------------------------------------
+function test_N15_secondConfiguredHolidayBlocked_() {
+  var config = getConfig();
+  assert_(config.HOLIDAYS.indexOf('2026-06-19') !== -1, 'Precondition: 2026-06-19 must be a configured holiday.');
+  var juneteenth = dateFromWallClock_(2026, 5, 19, 10, 0, 0, 'America/Chicago'); // Fri.
+  assert_(!isWithinSendWindow_(juneteenth, config), '2026-06-19 (configured holiday, Friday, 10:00) must be BLOCKED.');
+}
+
+// ---------------------------------------------------------------------
+// Items 7, 8 — the day immediately before and immediately after a
+// configured holiday, otherwise inside the send window, must be ALLOWED.
+// ---------------------------------------------------------------------
+function test_N15_dayBeforeAndAfterHolidayAllowed_() {
+  var config = getConfig();
+  var dayBefore = dateFromWallClock_(2026, 8, 4, 10, 0, 0, 'America/Chicago'); // Fri 2026-09-04.
+  assert_(isWithinSendWindow_(dayBefore, config), 'The day immediately before a configured holiday must be allowed.');
+
+  var dayAfter = dateFromWallClock_(2026, 8, 8, 10, 0, 0, 'America/Chicago'); // Tue 2026-09-08.
+  assert_(isWithinSendWindow_(dayAfter, config), 'The day immediately after a configured holiday must be allowed.');
+}
+
+/**
+ * Shared setup for the full-pipeline holiday tests (items 10-17): forces
+ * TODAY's real America/Chicago date into HOLIDAYS via Config, with
+ * SEND_DAYS/hours wide open (the standard withLiveModeEnabledForTest_
+ * defaults) — so if the holiday guard were NOT reached, every one of
+ * these calls would otherwise succeed. That is the actual discriminator:
+ * it proves the guard, not an unrelated day/hour restriction, is what
+ * stops the send.
+ */
+function n15_withTodayForcedAsHoliday_(fn, extraOverrides) {
+  var todayYmd = formatDateYmd_(new Date());
+  var overrides = Object.assign({ HOLIDAYS: todayYmd }, extraOverrides || {});
+  return withLiveModeEnabledForTest_(fn, overrides);
+}
+
+// ---------------------------------------------------------------------
+// Item 10 — Step 1 LIVE path blocked on holiday. Folds in items 15-17
+// (zero Gmail calls, zero LIVE CLAIMED delta, prospect state unchanged).
+// ---------------------------------------------------------------------
+function test_N15_step1BlockedOnHolidayNoGmailNoClaimNoStateChange_() {
+  n15_withTodayForcedAsHoliday_(function () {
+    var p = n5_setupReadyProspect_('n15step1holiday');
+    var before = findRowById_(p.Prospect_ID).values;
+    GmailApp._resetCallCounts();
+    var ledgerBefore = readAllLedgerRows_().length;
+
+    var result = sendStep1(p.Prospect_ID);
+
+    assertEquals_('SKIPPED_OUTSIDE_WINDOW', result.status, 'Step 1 must be refused on a configured holiday.');
+    assertEquals_(0, GmailApp._callCounts.createDraft, 'No Gmail draft creation may occur.');
+    assertEquals_(0, GmailApp._callCounts.send, 'No Gmail send may occur.');
+    assertEquals_(ledgerBefore, readAllLedgerRows_().length, 'No LIVE CLAIMED (or any) ledger row may be created.');
+    var after = findRowById_(p.Prospect_ID).values;
+    assertEquals_(before.Status, after.Status, 'Prospect state must be completely unchanged.');
+    assertEquals_(String(before.Sequence_Step || ''), String(after.Sequence_Step || ''));
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 11 — Step 2 LIVE path blocked on holiday.
+// ---------------------------------------------------------------------
+function test_N15_step2BlockedOnHolidayNoGmailNoClaimNoStateChange_() {
+  n15_withTodayForcedAsHoliday_(function () {
+    var config = getConfig();
+    var setup = n5_setupFollowUpDueProspect_('n15step2holiday', config);
+    var before = findRowById_(setup.p.Prospect_ID).values;
+    GmailApp._resetCallCounts();
+    var ledgerBefore = readAllLedgerRows_().length;
+
+    var result = sendFollowUp(setup.p.Prospect_ID, 2);
+
+    assertEquals_('SKIPPED_OUTSIDE_WINDOW', result.status, 'Step 2 (follow-up) must be refused on a configured holiday.');
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'No Gmail API send may occur.');
+    assertEquals_(ledgerBefore, readAllLedgerRows_().length, 'No LIVE CLAIMED (or any) ledger row may be created.');
+    var after = findRowById_(setup.p.Prospect_ID).values;
+    assertEquals_(before.Status, after.Status, 'Prospect state must be completely unchanged.');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 12 — sendBatch() blocked on holiday.
+// ---------------------------------------------------------------------
+function test_N15_sendBatchBlockedOnHolidayNoGmailNoClaimNoStateChange_() {
+  n15_withTodayForcedAsHoliday_(function () {
+    var p = n5_setupReadyProspect_('n15batchholiday');
+    var before = findRowById_(p.Prospect_ID).values;
+    GmailApp._resetCallCounts();
+    var ledgerBefore = readAllLedgerRows_().length;
+
+    sendBatch(); // Checks isWithinSendWindow_ as its very first action — returns immediately.
+
+    assertEquals_(0, GmailApp._callCounts.createDraft);
+    assertEquals_(0, GmailApp._callCounts.send);
+    assertEquals_(0, GmailApp._callCounts.apiSend);
+    assertEquals_(ledgerBefore, readAllLedgerRows_().length, 'sendBatch must create no ledger rows for ANY prospect on a holiday.');
+    var after = findRowById_(p.Prospect_ID).values;
+    assertEquals_(before.Status, after.Status);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Item 13 — controlled Step-1 fixture path blocked on holiday.
+// ---------------------------------------------------------------------
+function test_N15_controlledStep1BlockedOnHolidayNoGmailNoClaimNoStateChange_() {
+  n15_withTodayForcedAsHoliday_(function () {
+    var setup = n8_setupControlledFixture_('n15ctrlstep1holiday');
+    try {
+      var before = findRowById_(setup.Prospect_ID).values;
+      GmailApp._resetCallCounts();
+      var ledgerBefore = readAllLedgerRows_().length;
+
+      var result = sendControlledFixtureLive(setup.Prospect_ID);
+
+      assertEquals_('SKIPPED_OUTSIDE_WINDOW', result.status, 'The controlled Step-1 path must inherit the holiday guard unchanged, via sendStep1.');
+      assertEquals_(0, GmailApp._callCounts.createDraft);
+      assertEquals_(0, GmailApp._callCounts.send);
+      assertEquals_(ledgerBefore, readAllLedgerRows_().length);
+      var after = findRowById_(setup.Prospect_ID).values;
+      assertEquals_(before.Status, after.Status);
+    } finally {
+      n8_deleteFixtureRow_(setup.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1' });
+}
+
+// ---------------------------------------------------------------------
+// Item 14 — controlled Step-2 fixture path blocked on holiday.
+// ---------------------------------------------------------------------
+function test_N15_controlledStep2BlockedOnHolidayNoGmailNoClaimNoStateChange_() {
+  n15_withTodayForcedAsHoliday_(function () {
+    var setup = n10_setupDueControlledStep2Fixture_('n15ctrlstep2holiday');
+    try {
+      var before = findRowById_(setup.p.Prospect_ID).values;
+      GmailApp._resetCallCounts();
+      var ledgerBefore = readAllLedgerRows_().length;
+
+      var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+
+      assertEquals_('SKIPPED_OUTSIDE_WINDOW', result.status, 'The controlled Step-2 path must inherit the holiday guard unchanged, via sendFollowUp.');
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+      assertEquals_(ledgerBefore, readAllLedgerRows_().length);
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(before.Status, after.Status);
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  }, { MAX_PER_RUN: '1' });
+}
+
+// ---------------------------------------------------------------------
+// Items 18, 19, 20 — malformed HOLIDAYS entries.
+// ---------------------------------------------------------------------
+function test_N15_malformedHolidaysEntryDoesNotCrashOrBlockUnrelatedDate_() {
+  var malformedConfig = { HOLIDAYS: ['not-a-date', '', '09/07/2026', '2026-13-99'], SEND_DAYS: ['MON', 'TUE', 'WED', 'THU', 'FRI'], SEND_START_HOUR: 9, SEND_END_HOUR: 17 };
+  var ordinaryWeekday = dateFromWallClock_(2026, 8, 9, 10, 0, 0, 'America/Chicago'); // Wed 2026-09-09, not a holiday.
+
+  var threw = false;
+  var result;
+  try {
+    result = isWithinSendWindow_(ordinaryWeekday, malformedConfig);
+  } catch (e) { threw = true; }
+
+  assert_(!threw, 'Item 18: malformed HOLIDAYS entries must never crash isWithinSendWindow_/isHoliday_.');
+  assertEquals_(true, result, 'Item 19: malformed entries must not accidentally block an unrelated, non-holiday date.');
+}
+
+function test_N15_validHolidayStillBlocksWhenMalformedEntriesCoexist_() {
+  var mixedConfig = { HOLIDAYS: ['not-a-date', '2026-09-07', 'also-garbage', ''], SEND_DAYS: ['MON', 'TUE', 'WED', 'THU', 'FRI'], SEND_START_HOUR: 9, SEND_END_HOUR: 17 };
+  var holidayMonday = dateFromWallClock_(2026, 8, 7, 10, 0, 0, 'America/Chicago');
+  assert_(!isWithinSendWindow_(holidayMonday, mixedConfig),
+    'Item 20: a genuinely valid, well-formed holiday entry must still block correctly even alongside malformed entries in the same list.');
+}
+
+/**
  * Tests 21/22/23 (task's own numbering) are deliberately NOT new tests:
  * 21 — "Step-1 controlled action remains unchanged" is exactly what the
  *      existing N8 suite already proves; sendControlledFixtureStep2Live
@@ -7035,6 +7266,17 @@ var F1_TEST_FUNCTIONS = [
   ['N14_onlyActiveProspectChangesAmongMultiple', test_N14_onlyGenuinelyActiveProspectChangesAmongMultiple_],
   ['N14_publicDomainStaysEmailScopedFullPipeline', test_N14_publicDomainSuppressionStaysEmailScopedViaFullPipeline_],
   ['N14_canSendProtectionsUnchangedFullPipeline', test_N14_canSendProtectionsUnchangedViaFullPipeline_],
+  ['N15_baselineWindowBehaviorUnaffected', test_N15_baselineWindowBehaviorUnaffectedByHolidayCheck_],
+  ['N15_coreRegressionDateBlocked', test_N15_coreRegressionDateBlocked_],
+  ['N15_secondHolidayBlocked', test_N15_secondConfiguredHolidayBlocked_],
+  ['N15_dayBeforeAfterHolidayAllowed', test_N15_dayBeforeAndAfterHolidayAllowed_],
+  ['N15_step1BlockedOnHoliday', test_N15_step1BlockedOnHolidayNoGmailNoClaimNoStateChange_],
+  ['N15_step2BlockedOnHoliday', test_N15_step2BlockedOnHolidayNoGmailNoClaimNoStateChange_],
+  ['N15_sendBatchBlockedOnHoliday', test_N15_sendBatchBlockedOnHolidayNoGmailNoClaimNoStateChange_],
+  ['N15_controlledStep1BlockedOnHoliday', test_N15_controlledStep1BlockedOnHolidayNoGmailNoClaimNoStateChange_],
+  ['N15_controlledStep2BlockedOnHoliday', test_N15_controlledStep2BlockedOnHolidayNoGmailNoClaimNoStateChange_],
+  ['N15_malformedHolidaysNoCrashNoBlock', test_N15_malformedHolidaysEntryDoesNotCrashOrBlockUnrelatedDate_],
+  ['N15_validHolidayBlocksWithMalformedCoexisting', test_N15_validHolidayStillBlocksWhenMalformedEntriesCoexist_],
   ['N5_reconZeroSearchNeverRetryable', test_N5_reconStaleClaimZeroSearchResultsNeverBecomesRetryable_],
   ['N5_reconSearchErrorFailsClosed', test_N5_reconStaleClaimSearchErrorFailsClosed_],
   ['N5_reconSingleMatchAmbiguous', test_N5_reconSingleUnrelatedMatchIsStillAmbiguous_],

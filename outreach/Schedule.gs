@@ -204,11 +204,36 @@ function computeNextActionDate_(completedStep, sentAt, config) {
   return addBusinessDays_(sentAt, offsetForNextStep, holidays);
 }
 
-/** True if `now` falls within the configured LIVE send window (day + hour). */
+/**
+ * True if `now` falls within the configured LIVE send window (day + hour
+ * + not a configured holiday).
+ *
+ * N15 (holiday enforcement gap): this is the ONE centralized gate every
+ * production LIVE send path funnels through — sendStep1/sendFollowUp (via
+ * executeLiveSendForStep_), sendBatch, and both controlled-fixture
+ * wrappers (which delegate to the first two, unchanged). Before this fix
+ * it checked SEND_DAYS and the hour window but never HOLIDAYS — HOLIDAYS
+ * was applied only inside addBusinessDays_ (cadence math for a FUTURE
+ * Next_Action_Date), never here, so a trigger or manual invocation firing
+ * on a configured holiday during normal hours on a normal send day
+ * proceeded exactly as on any other day.
+ *
+ * Fix: reuse isHoliday_ (Schedule.gs) directly — the SAME primitive
+ * addBusinessDays_ already relies on and this project's own tests already
+ * prove correct — rather than adding a second, parallel holiday check
+ * anywhere else. Because this function is checked upstream of every
+ * ledger claim/Gmail call on every path, a holiday rejection here is
+ * structurally pre-claim and pre-Gmail; nothing downstream needed to move.
+ * America/Chicago throughout, via the same getScriptTimeZone_() every
+ * other check in this function already uses — never UTC, never the
+ * executing machine's local timezone.
+ */
 function isWithinSendWindow_(now, config) {
   var sendDays = config.SEND_DAYS || [];
   var weekdayAbbrev = Utilities.formatDate(now, getScriptTimeZone_(), 'EEE').toUpperCase().substring(0, 3);
   if (sendDays.indexOf(weekdayAbbrev) === -1) return false;
+
+  if (isHoliday_(now, config.HOLIDAYS || [])) return false;
 
   var hour = Number(Utilities.formatDate(now, getScriptTimeZone_(), 'H'));
   return hour >= config.SEND_START_HOUR && hour < config.SEND_END_HOUR;
