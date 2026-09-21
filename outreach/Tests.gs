@@ -4127,6 +4127,275 @@ function test_N9_realProspectsRemainUntouched_() {
  */
 
 /**
+ * N16 (queue-first admin helper): makeControlledFixtureQueueFirst
+ * repositions ONE controlled Step-2 fixture to real production queue
+ * position #1, for the final autonomous E2E trigger test — the queue
+ * cannot safely be exercised via sendBatch while genuine real follow-ups
+ * sit ahead of a freshly-due controlled fixture. Shares its entire
+ * precondition chain with makeControlledFixtureDueNow (N9) via
+ * validateControlledFixtureForDateOverride_ — same guards, same
+ * rejection reasons, only a different resulting Next_Action_Date.
+ */
+
+/** A REAL (non-controlled Source) IN_SEQUENCE/step-1-done follow-up prospect with an explicit, controllable Next_Action_Date. */
+function n16_setupRealFollowUpProspect_(emailTag, nextActionDate) {
+  var email = testUniqueEmail_(emailTag);
+  var emailNormalized = normalizeEmail_(email);
+  var past = new Date(); past.setDate(past.getDate() - 3);
+  var row = addTestProspectRow_({
+    Prospect_ID: Utilities.getUuid(), Email: email, Email_Normalized: emailNormalized,
+    Domain: extractDomain_(emailNormalized), Domain_Type: DOMAIN_TYPE.CORPORATE,
+    Problem_Found: 'x', Status: STATUS.IN_SEQUENCE, Sequence_Step: 1,
+    Step1_Sent_At: past, Last_Contacted: past, Next_Action_Date: nextActionDate
+  });
+  return getTestProspectByRow_(row);
+}
+
+// ---------------------------------------------------------------------
+// Items 1-6, 19 — the core scenario: three real eligible follow-ups plus
+// a fresh READY prospect exist; the controlled fixture is repositioned
+// to exactly 1 minute before the EARLIEST of them, verified through the
+// ACTUAL production orderQueue_(), and every other prospect is proven
+// completely untouched.
+// ---------------------------------------------------------------------
+function test_N16_repositionsBeforeEarliestRealFollowUpAndSortsFirstInRealQueue_() {
+  var now = new Date();
+  var t1 = new Date(now.getTime() - 3 * 60000); // earliest
+  var t2 = new Date(now.getTime() - 2 * 60000);
+  var t3 = new Date(now.getTime() - 1 * 60000);
+  var real1 = n16_setupRealFollowUpProspect_('n16real1', t1);
+  var real2 = n16_setupRealFollowUpProspect_('n16real2', t2);
+  var real3 = n16_setupRealFollowUpProspect_('n16real3', t3);
+  var freshReady = n5_setupReadyProspect_('n16freshready');
+  var fixture = n9_setupControlledStep2Fixture_('n16queuefirst'); // Next_Action_Date 7 days out by default — not yet eligible.
+  var knownIds = [real1.Prospect_ID, real2.Prospect_ID, real3.Prospect_ID, freshReady.Prospect_ID, fixture.p.Prospect_ID];
+
+  // Confine eligibility to exactly these fixtures — without this, the
+  // test depends on no OTHER eligible follow-up existing anywhere in the
+  // sandbox, which is false whenever cleanup is disabled (isolation
+  // enforcement) or a leftover fixture from an earlier test leaks. This
+  // affects BOTH the production call inside makeControlledFixtureQueueFirst
+  // and this test's own re-verification call, since both go through the
+  // SAME global isEligibleForNextStep_.
+  var originalIsEligible = isEligibleForNextStep_;
+  isEligibleForNextStep_ = function (prospectValues, config, nowArg) {
+    if (knownIds.indexOf(prospectValues.Prospect_ID) === -1) return false;
+    return originalIsEligible(prospectValues, config, nowArg);
+  };
+
+  var real1Before = findRowById_(real1.Prospect_ID).values;
+  var real2Before = findRowById_(real2.Prospect_ID).values;
+  var real3Before = findRowById_(real3.Prospect_ID).values;
+  var freshBefore = findRowById_(freshReady.Prospect_ID).values;
+
+  try {
+    var config = getConfig();
+    assert_(!isEligibleForNextStep_(fixture.p, config, new Date()), 'Precondition: the fixture must not yet be eligible.');
+
+    var result = makeControlledFixtureQueueFirst(fixture.p.Prospect_ID);
+
+    assertEquals_('QUEUE_FIRST', result.status);
+    assertEquals_(real1.Prospect_ID, result.earliestOtherFollowUpProspectId, 'The earliest real follow-up must be identified correctly (real1, not real2/real3).');
+
+    // Item 2: derived dynamically from real1's OWN actual stored value —
+    // never a hardcoded date, per instruction.
+    var real1Actual = findRowById_(real1.Prospect_ID).values;
+    var fixtureAfter = findRowById_(fixture.p.Prospect_ID).values;
+    var expectedMs = new Date(real1Actual.Next_Action_Date).getTime() - 60000;
+    assertEquals_(expectedMs, new Date(fixtureAfter.Next_Action_Date).getTime(),
+      'The fixture must become exactly 1 minute before the earliest real follow-up (dynamically derived).');
+
+    // Item 3: prove it through the ACTUAL production orderQueue_(), not a
+    // re-implemented comparator.
+    var eligible = readAllProspects().filter(function (r) { return isEligibleForNextStep_(r.values, config, new Date()); });
+    var ordered = orderQueue_(eligible);
+    assert_(ordered.length > 0, 'Precondition: the real queue must be non-empty.');
+    assertEquals_(fixture.p.Prospect_ID, ordered[0].values.Prospect_ID,
+      'The controlled fixture must sort into position #1 of the ACTUAL production queue.');
+
+    // Items 4/5/6/19: every other prospect completely untouched.
+    var real2After = findRowById_(real2.Prospect_ID).values;
+    var real3After = findRowById_(real3.Prospect_ID).values;
+    var freshAfter = findRowById_(freshReady.Prospect_ID).values;
+    assertEquals_(String(real1Before.Next_Action_Date), String(real1Actual.Next_Action_Date), 'real1 must be unchanged.');
+    assertEquals_(String(real2Before.Next_Action_Date), String(real2After.Next_Action_Date), 'real2 must be unchanged.');
+    assertEquals_(String(real3Before.Next_Action_Date), String(real3After.Next_Action_Date), 'real3 must be unchanged.');
+    assertEquals_(freshBefore.Status, freshAfter.Status, 'A fresh READY (non-follow-up) prospect must be unchanged.');
+    assertEquals_(String(freshBefore.Next_Action_Date || ''), String(freshAfter.Next_Action_Date || ''));
+  } finally {
+    isEligibleForNextStep_ = originalIsEligible;
+    n8_deleteFixtureRow_(fixture.p.Prospect_ID);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Items 16, 17, 18 — only Next_Action_Date changes; zero Gmail calls;
+// zero SendLedger rows.
+// ---------------------------------------------------------------------
+function test_N16_onlyNextActionDateChangesNoGmailNoLedger_() {
+  var real1 = n16_setupRealFollowUpProspect_('n16onlyfieldreal', new Date(Date.now() - 60000));
+  var fixture = n9_setupControlledStep2Fixture_('n16onlyfield');
+  try {
+    var before = findRowById_(fixture.p.Prospect_ID).values;
+    GmailApp._resetCallCounts();
+    var ledgerBefore = readAllLedgerRows_().length;
+
+    makeControlledFixtureQueueFirst(fixture.p.Prospect_ID);
+
+    assertEquals_(0, GmailApp._callCounts.createDraft);
+    assertEquals_(0, GmailApp._callCounts.send);
+    assertEquals_(0, GmailApp._callCounts.apiSend);
+    assertEquals_(0, GmailApp._callCounts.apiGet);
+    assertEquals_(ledgerBefore, readAllLedgerRows_().length, 'No SendLedger row may be created by this admin helper.');
+
+    var after = findRowById_(fixture.p.Prospect_ID).values;
+    Object.keys(before).forEach(function (col) {
+      if (col === 'Next_Action_Date') return;
+      var b = before[col] instanceof Date ? before[col].getTime() : before[col];
+      var a = after[col] instanceof Date ? after[col].getTime() : after[col];
+      assertEquals_(b, a, 'Column "' + col + '" must be completely unchanged.');
+    });
+    assert_(new Date(after.Next_Action_Date).getTime() !== new Date(before.Next_Action_Date).getTime(),
+      'Next_Action_Date itself must actually have changed.');
+  } finally {
+    n8_deleteFixtureRow_(fixture.p.Prospect_ID);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Item 20 — no eligible follow-ups at all: safe now-minus-one-minute
+// fallback (the exact same semantics makeControlledFixtureDueNow uses).
+// ---------------------------------------------------------------------
+function test_N16_noEligibleFollowUpsFallsBackToNowMinusOneMinute_() {
+  var fixture = n9_setupControlledStep2Fixture_('n16fallback');
+  // Confine eligibility to exactly this fixture — without this, a leftover
+  // fixture from another test (visible whenever cleanup is disabled, e.g.
+  // isolation enforcement) could make the "no other eligible follow-up"
+  // precondition false even though this test itself created none.
+  var originalIsEligible = isEligibleForNextStep_;
+  isEligibleForNextStep_ = function (prospectValues, config, nowArg) {
+    if (prospectValues.Prospect_ID !== fixture.p.Prospect_ID) return false;
+    return originalIsEligible(prospectValues, config, nowArg);
+  };
+  try {
+    var config = getConfig();
+    var beforeCall = readAllProspects().filter(function (r) {
+      return r.values.Prospect_ID !== fixture.p.Prospect_ID && isEligibleForNextStep_(r.values, config, new Date()) &&
+        Number(r.values.Sequence_Step) >= 1;
+    });
+    assertEquals_(0, beforeCall.length, 'Precondition: no other eligible follow-up may exist for this test.');
+
+    var result = makeControlledFixtureQueueFirst(fixture.p.Prospect_ID);
+
+    assertEquals_('QUEUE_FIRST', result.status);
+    assertEquals_(null, result.earliestOtherFollowUpProspectId, 'No earliest-other-follow-up must be reported.');
+    var after = findRowById_(fixture.p.Prospect_ID).values;
+    assert_(new Date(after.Next_Action_Date).getTime() <= Date.now(), 'Fallback must produce an already-due date (<= now).');
+    assert_(new Date(after.Next_Action_Date).getTime() > Date.now() - 5 * 60000, 'Fallback must be recent (within the last few minutes), matching now-minus-one-minute semantics.');
+  } finally {
+    isEligibleForNextStep_ = originalIsEligible;
+    n8_deleteFixtureRow_(fixture.p.Prospect_ID);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Items 7-15 — the full shared precondition chain, re-verified against
+// the NEW entry point specifically (not assumed to carry over from N9's
+// own tests of makeControlledFixtureDueNow).
+// ---------------------------------------------------------------------
+function test_N16_nonAllowlistedSourceRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16wrongsource', { Source: 'CONTROLLED_INTERNAL_STEP2_RETEST_OLD' });
+  try {
+    assertEquals_('REJECTED_SOURCE_NOT_CONTROLLED', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_readyFixtureWithoutStep1EvidenceRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16ready', { Status: STATUS.READY });
+  try {
+    assertEquals_('REJECTED_WRONG_STATUS', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_missingStep1SentAtRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16missingsent', { Step1_Sent_At: '' });
+  try {
+    assertEquals_('REJECTED_MISSING_STEP1_SENT_AT', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_missingThreadIdRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16missingthread', { Thread_ID: '' });
+  try {
+    assertEquals_('REJECTED_MISSING_THREAD_ID', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_missingLastMessageIdRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16missingmsgid', { Last_Message_ID: '' });
+  try {
+    assertEquals_('REJECTED_MISSING_LAST_MESSAGE_ID', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_stoppedFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16stopped', { Stop_Contact: true });
+  try {
+    assertEquals_('REJECTED_STOP_CONTACT', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_repliedFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16replied', { Replied: true });
+  try {
+    assertEquals_('REJECTED_REPLIED', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_suppressedFixtureRejected_() {
+  var setup = n9_setupControlledStep2Fixture_('n16suppressed');
+  addSuppression_(setup.p.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.MANUAL, 'test');
+  _testCreatedSuppressionValues.push(setup.p.Email_Normalized);
+  try {
+    assertEquals_('REJECTED_SUPPRESSED', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status);
+  } finally {
+    n8_deleteFixtureRow_(setup.p.Prospect_ID);
+  }
+}
+
+function test_N16_blockedStep2LedgerFixtureRejected_() {
+  [LEDGER_STATE.CLAIMED, LEDGER_STATE.SENT, LEDGER_STATE.AMBIGUOUS].forEach(function (state) {
+    var setup = n9_setupControlledStep2Fixture_('n16blocked' + state.toLowerCase());
+    try {
+      appendLedgerRow_({
+        Run_ID: getRunId_(), Claimed_At: new Date(), Prospect_ID: setup.p.Prospect_ID, Email_Normalized: setup.p.Email_Normalized,
+        Step: 2, Idempotency_Key: getIdempotencyKey_(setup.p.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE, State: state,
+        Thread_ID: setup.p.Thread_ID, Message_ID: '', Draft_ID: '',
+        Confirmed_At: state === LEDGER_STATE.SENT ? new Date() : '', Error: ''
+      });
+      assertEquals_('REJECTED_LIVE_STEP2_BLOCKED', makeControlledFixtureQueueFirst(setup.p.Prospect_ID).status,
+        'A pre-existing ' + state + ' LIVE Step-2 row must block the queue-first override too.');
+    } finally {
+      n8_deleteFixtureRow_(setup.p.Prospect_ID);
+    }
+  });
+}
+
+/**
  * N10 (exact-target controlled Step-2 LIVE): sendControlledFixtureStep2Live
  * (Mailer.gs) — the Step-2 sibling of N8's sendControlledFixtureLive.
  * Same architecture, same delegation model, this time to
@@ -7205,6 +7474,18 @@ var F1_TEST_FUNCTIONS = [
   ['N9_blockingLiveStep2Rejected', test_N9_blockingLiveStep2RowRejected_],
   ['N9_onlyNextActionDateChanges', test_N9_onlyNextActionDateFieldChanges_],
   ['N9_realProspectsUntouched', test_N9_realProspectsRemainUntouched_],
+  ['N16_repositionsBeforeEarliestRealFollowUp', test_N16_repositionsBeforeEarliestRealFollowUpAndSortsFirstInRealQueue_],
+  ['N16_onlyNextActionDateChangesNoGmailNoLedger', test_N16_onlyNextActionDateChangesNoGmailNoLedger_],
+  ['N16_noEligibleFollowUpsFallback', test_N16_noEligibleFollowUpsFallsBackToNowMinusOneMinute_],
+  ['N16_nonAllowlistedSourceRejected', test_N16_nonAllowlistedSourceRejected_],
+  ['N16_readyFixtureRejected', test_N16_readyFixtureWithoutStep1EvidenceRejected_],
+  ['N16_missingStep1SentAtRejected', test_N16_missingStep1SentAtRejected_],
+  ['N16_missingThreadIdRejected', test_N16_missingThreadIdRejected_],
+  ['N16_missingLastMessageIdRejected', test_N16_missingLastMessageIdRejected_],
+  ['N16_stoppedFixtureRejected', test_N16_stoppedFixtureRejected_],
+  ['N16_repliedFixtureRejected', test_N16_repliedFixtureRejected_],
+  ['N16_suppressedFixtureRejected', test_N16_suppressedFixtureRejected_],
+  ['N16_blockedStep2LedgerRejected', test_N16_blockedStep2LedgerFixtureRejected_],
   ['N10_acceptedFixtureStep2Succeeds', test_N10_approvedFixtureStep2SucceedsThroughNormalPrimitive_],
   ['N10_realProspectRejected', test_N10_realProspectRejectedBeforeGmail_],
   ['N10_wrongSourceRejected', test_N10_wrongSourceRejected_],

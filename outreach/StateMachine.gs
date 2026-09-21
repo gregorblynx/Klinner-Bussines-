@@ -200,7 +200,22 @@ function stopProspect(prospectId, reason) {
  * A real prospect's Source is never in CONTROLLED_FIXTURE_SOURCES, so
  * this is refused before any write, always.
  */
-function makeControlledFixtureDueNow(prospectId) {
+/**
+ * N16 (queue-first admin helper): the shared precondition chain both
+ * controlled-fixture Next_Action_Date admin helpers require —
+ * makeControlledFixtureDueNow (above) and makeControlledFixtureQueueFirst
+ * (below). Identical guard order and rejection reasons for both callers,
+ * extracted here so the two can never silently drift apart; a change to
+ * one caller's safety requirements can no longer accidentally leave the
+ * other with a stale, weaker copy. This does not change
+ * makeControlledFixtureDueNow's own external behavior at all — every
+ * rejection status/field it returns is byte-identical to before this
+ * extraction.
+ * @return {{status: string, p: (Object|undefined)}} status='VALID' with
+ *   the validated prospect row on success; any REJECTED_* status
+ *   otherwise (returned verbatim to the external caller).
+ */
+function validateControlledFixtureForDateOverride_(prospectId) {
   // Guard 1: exactly one row for this id.
   var matchCount = countProspectRowsById_(prospectId);
   if (matchCount !== 1) {
@@ -250,6 +265,14 @@ function makeControlledFixtureDueNow(prospectId) {
     return { status: 'REJECTED_LIVE_STEP2_BLOCKED' };
   }
 
+  return { status: 'VALID', p: p };
+}
+
+function makeControlledFixtureDueNow(prospectId) {
+  var validation = validateControlledFixtureForDateOverride_(prospectId);
+  if (validation.status !== 'VALID') return validation;
+  var p = validation.p;
+
   // Every guard passed. The ONLY write: Next_Action_Date, already due.
   // One minute in the past, not "now" — avoids any exact-equality race
   // against the caller's own `now` a moment later. OPERATION.
@@ -262,6 +285,66 @@ function makeControlledFixtureDueNow(prospectId) {
     'Controlled fixture made due now for Step 2 retest. Next_Action_Date=' + dueDate);
   flushLog_();
   return { status: 'DUE_NOW', prospectId: prospectId, nextActionDate: dueDate };
+}
+
+/**
+ * N16 (queue-first admin helper): repositions ONE controlled Step-2
+ * fixture to deterministic queue position #1 in the REAL production
+ * eligible-follow-up queue — for the final autonomous E2E trigger test,
+ * which cannot safely use sendBatch while genuine overdue real follow-ups
+ * sit ahead of a freshly-due controlled fixture.
+ *
+ * Reuses the EXACT SAME eligibility (isEligibleForNextStep_) and ordering
+ * (orderQueue_) sendBatch itself uses to build its own queue — never a
+ * re-implemented comparator — so "queue position #1" here means the
+ * ACTUAL production queue position, not an approximation of it. The
+ * earliest OTHER eligible follow-up's Next_Action_Date is read directly
+ * off that real queue; the fixture is set to exactly one minute before
+ * it, using real Date epoch-ms arithmetic throughout (never a formatted/
+ * UTC date string), so the ordering is correct regardless of DST or which
+ * timezone the executing process happens to be in — orderQueue_'s own
+ * compareDates_ already compares this same way.
+ *
+ * Same preconditions as makeControlledFixtureDueNow (shared via
+ * validateControlledFixtureForDateOverride_ above) — not a weaker or
+ * different gate, only a different resulting Next_Action_Date. The ONLY
+ * write is Next_Action_Date, via the SAME ADMIN_FIXTURE_DUE_OVERRIDE
+ * operation grant (columns: ['Next_Action_Date'] only, statuses: []) —
+ * no broader permission needed or added.
+ *
+ * Fallback: if there is no other eligible follow-up at all, falls back to
+ * makeControlledFixtureDueNow's own now-minus-one-minute semantics — the
+ * safest existing behavior, not a new one.
+ */
+function makeControlledFixtureQueueFirst(prospectId) {
+  var validation = validateControlledFixtureForDateOverride_(prospectId);
+  if (validation.status !== 'VALID') return validation;
+  var p = validation.p;
+
+  var config = getConfig();
+  var now = new Date();
+  var eligibleOthers = readAllProspects().filter(function (r) {
+    return r.values.Prospect_ID !== prospectId && isEligibleForNextStep_(r.values, config, now);
+  });
+  var ordered = orderQueue_(eligibleOthers);
+  var earliestFollowUp = ordered.filter(function (r) { return Number(r.values.Sequence_Step) >= 1; })[0];
+
+  var dueDate = earliestFollowUp
+    ? new Date(new Date(earliestFollowUp.values.Next_Action_Date).getTime() - 60000)
+    : new Date(Date.now() - 60000); // No eligible follow-up exists — same fallback makeControlledFixtureDueNow uses.
+
+  writeRowById_(prospectId, { Next_Action_Date: dueDate },
+    { origin: ORIGIN.ADMIN, operation: OPERATION.ADMIN_FIXTURE_DUE_OVERRIDE });
+  logEvent_(LOG_LEVEL.INFO, LOG_EVENT.FIXTURE_DUE_OVERRIDE, prospectId, p.Email_Normalized, 2,
+    'Controlled fixture repositioned to queue-first for Step 2 autonomous E2E test. Next_Action_Date=' + dueDate +
+    (earliestFollowUp
+      ? ' (1 minute before earliest real follow-up ' + earliestFollowUp.values.Prospect_ID + ')'
+      : ' (no other eligible follow-up exists; now-minus-one-minute fallback)'));
+  flushLog_();
+  return {
+    status: 'QUEUE_FIRST', prospectId: prospectId, nextActionDate: dueDate,
+    earliestOtherFollowUpProspectId: earliestFollowUp ? earliestFollowUp.values.Prospect_ID : null
+  };
 }
 
 /**
