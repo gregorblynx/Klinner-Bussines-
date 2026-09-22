@@ -207,9 +207,12 @@ var CONTROLLED_STEP2_AMBIGUOUS_INCIDENT = {
  * already-reconciled Step-1 incident, same Thread_ID since Step 2 continues
  * the same Gmail thread); Run_ID/Message_ID/recipients come from the
  * Google-real evidence gathered for THIS incident's read-only audit.
- * Confirmed_At is the real Gmail send instant (2026-09-11 15:37
+ * Confirmed_At is the real Gmail send instant (2026-09-11 15:37:28
  * America/Chicago = CDT = UTC-5), stored as UTC so no local timezone
- * assumption is baked into the constant itself.
+ * assumption is baked into the constant itself. Exact to the second —
+ * corrected from an initial 20:37:00Z placeholder once the precise
+ * Google-real Gmail timestamp (20:37:28Z) was confirmed; never round or
+ * truncate this value.
  */
 var ACME_MISDIRECTED_STEP2_INCIDENT = {
   Prospect_ID: '2f4d0c6c-ccd7-420b-8dd3-22c915a792f4',
@@ -219,7 +222,7 @@ var ACME_MISDIRECTED_STEP2_INCIDENT = {
   Message_ID: '1a0923084e6c87f8',
   Expected_Recipient: 'info+testa@klinnercleaning.com',
   Actual_Recipient: 'jhessyca@klinnerpro.com',
-  Confirmed_At: '2026-09-11T20:37:00Z'
+  Confirmed_At: '2026-09-11T20:37:28Z'
 };
 
 /** SendLedger enums. */
