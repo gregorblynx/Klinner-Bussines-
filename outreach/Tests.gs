@@ -7346,6 +7346,293 @@ function test_preexistingRow500SurvivesNestedGhostAndSentinelTests_() {
   }
 }
 
+/**
+ * V1.0.1 patch — Acme Plumbing LLC misdirected Step-2 reconciliation.
+ * reconcileMisdirectedLiveIncident_ (Recon.gs) is ledger-only: unlike
+ * reconcileControlledFixtureStep2Ambiguous (N12 above), it makes no Gmail
+ * call at all and re-verifies nothing against Gmail — the real evidence was
+ * already established Google-real in the preceding read-only audit round.
+ * These tests build the exact pre-reconciliation ledger/Prospects shape
+ * directly and assert the reconciliation's own guard chain and final state,
+ * not a Gmail round trip.
+ */
+function nAcme_setupIncidentRow_(overrides) {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  var past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  var row = addTestProspectRow_(Object.assign({
+    Prospect_ID: incident.Prospect_ID,
+    Business_Name: 'Acme Plumbing LLC', Contact_Name: 'Dana Ruiz',
+    Email: incident.Expected_Recipient, Email_Normalized: incident.Expected_Recipient,
+    Domain: 'klinnercleaning.com', Domain_Type: DOMAIN_TYPE.PUBLIC,
+    Status: STATUS.NEEDS_REVIEW, Sequence_Step: 1,
+    Step1_Sent_At: past, Last_Contacted: past, Next_Action_Date: '',
+    Thread_ID: incident.Thread_ID, Last_Message_ID: 'prior-step1-message-id'
+  }, overrides || {}));
+  return getTestProspectByRow_(row);
+}
+
+function nAcme_appendAmbiguousLedgerRow_(fieldOverrides) {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  var base = {
+    Run_ID: incident.Run_ID, Claimed_At: new Date(Date.now() - 60000), Prospect_ID: incident.Prospect_ID,
+    Email_Normalized: incident.Expected_Recipient, Step: incident.Step,
+    Idempotency_Key: getIdempotencyKey_(incident.Prospect_ID, incident.Step), Mode: LEDGER_MODE.LIVE,
+    State: LEDGER_STATE.AMBIGUOUS, Thread_ID: incident.Thread_ID, Message_ID: '', Draft_ID: '', Confirmed_At: '',
+    Error: 'Exception: No se pudo descifrar la cadena (ambiguous outcome after Gmail API send invocation — ' +
+      'durably blocked; SEND is never retried)'
+  };
+  return appendLedgerRow_(Object.assign({}, base, fieldOverrides || {}));
+}
+
+/**
+ * Manual, self-contained teardown for the pinned incident's Prospect_ID —
+ * deliberately NOT relying on the generic per-test sweeps:
+ * cleanupTestLedgerAndLog_ only matches by the harness's OWN generated
+ * Run_ID (never this pinned one), and cleanupTestRows_'s Source-based sweep
+ * is a courtesy, not a guarantee this fixture can lean on — several test
+ * functions below reuse this SAME hardcoded Prospect_ID (required: the
+ * whole point of pinning is that only one exact ID is ever accepted), so
+ * each one must independently guarantee zero residue, exactly like N12's
+ * n12_cleanupIncident_ does for its own pinned fixture. Deletes bottom-up
+ * and by exact Prospect_ID match (not by row index or count), so it is
+ * correct even if an earlier failure already left more than one row behind.
+ */
+function nAcme_cleanupIncidentLedgerRows_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  var ledgerSheet = getLedgerSheet_();
+  var ledgerRows = readAllLedgerRows_();
+  for (var i = ledgerRows.length - 1; i >= 0; i--) {
+    if (ledgerRows[i].values.Prospect_ID === incident.Prospect_ID) ledgerSheet.deleteRow(ledgerRows[i].rowIndex);
+  }
+}
+
+/** Full teardown: every ledger row for the pinned Prospect_ID, plus its Prospects row(s). */
+function nAcme_cleanupIncident_() {
+  nAcme_cleanupIncidentLedgerRows_();
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  var pSheet = getSheet_(SHEET_NAMES.PROSPECTS);
+  var pLastRow = pSheet.getLastRow();
+  if (pLastRow >= 2) {
+    var idCol = pSheet.getRange(2, PROSPECTS_COLUMNS.Prospect_ID, pLastRow - 1, 1).getValues();
+    for (var j = idCol.length - 1; j >= 0; j--) {
+      if (idCol[j][0] === incident.Prospect_ID) pSheet.deleteRow(j + 2);
+    }
+  }
+}
+
+function test_NAcme_exactPinnedIncidentReconcilesAndIsIdempotent_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  nAcme_setupIncidentRow_();
+  nAcme_appendAmbiguousLedgerRow_();
+  try {
+    var before = findRowById_(incident.Prospect_ID).values;
+    var ledgerCountBefore = readAllLedgerRows_().length;
+    GmailApp._resetCallCounts();
+
+    var result = reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    assertEquals_('RECONCILED_MISDIRECTED', result.status);
+
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'Reconciliation must make no Gmail SEND primitive.');
+    assertEquals_(0, GmailApp._callCounts.send, 'Reconciliation must never invoke draft.send().');
+    assertEquals_(0, GmailApp._callCounts.reply, 'Reconciliation must never invoke thread.reply().');
+
+    assertEquals_(ledgerCountBefore, readAllLedgerRows_().length, 'Reconciliation must update the same ledger row, never append one.');
+    var ledger = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; });
+    assertEquals_(1, ledger.length);
+    assertEquals_(LEDGER_STATE.MISDIRECTED, ledger[0].values.State);
+    assertEquals_(incident.Message_ID, ledger[0].values.Message_ID);
+    assert_(!!ledger[0].values.Confirmed_At, 'Confirmed_At must be populated with the real Gmail send instant.');
+    assertEquals_(new Date(incident.Confirmed_At).getTime(), new Date(ledger[0].values.Confirmed_At).getTime());
+    assert_(String(ledger[0].values.Error).indexOf('No se pudo descifrar la cadena') !== -1,
+      'The original AMBIGUOUS history must remain preserved, not overwritten.');
+    assert_(String(ledger[0].values.Error).indexOf('MISDIRECTED_RECONCILIATION:') !== -1,
+      'A reconciliation marker must be appended.');
+    assert_(String(ledger[0].values.Error).indexOf(incident.Expected_Recipient) !== -1 &&
+      String(ledger[0].values.Error).indexOf(incident.Actual_Recipient) !== -1,
+      'Both the expected and actual recipient must be recorded in the marker.');
+    assertEquals_(incident.Run_ID, ledger[0].values.Run_ID, 'Run_ID must never change.');
+    assertEquals_(getIdempotencyKey_(incident.Prospect_ID, incident.Step), ledger[0].values.Idempotency_Key);
+    assertEquals_(incident.Thread_ID, ledger[0].values.Thread_ID);
+    assertEquals_(LEDGER_MODE.LIVE, ledger[0].values.Mode);
+
+    var after = findRowById_(incident.Prospect_ID).values;
+    Object.keys(before).forEach(function (field) {
+      var b = before[field] instanceof Date ? before[field].getTime() : before[field];
+      var a = after[field] instanceof Date ? after[field].getTime() : after[field];
+      assertEquals_(b, a, 'Prospects field ' + field + ' must be byte-identical: reconciliation makes zero Prospects writes.');
+    });
+    assertEquals_(STATUS.NEEDS_REVIEW, after.Status);
+    assertEquals_(1, Number(after.Sequence_Step));
+    assert_(!after.Step2_Sent_At, 'Step2_Sent_At must remain blank — never credited.');
+
+    // Idempotent replay.
+    var second = reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    assertEquals_('ALREADY_RECONCILED', second.status);
+    assertEquals_(ledgerCountBefore, readAllLedgerRows_().length, 'Replay must not add a ledger row.');
+    var ledgerAfterReplay = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; });
+    assertEquals_(1, ledgerAfterReplay.length);
+    assertEquals_(ledger[0].values.Error, ledgerAfterReplay[0].values.Error, 'Replay must not append a second marker.');
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'Replay must still make zero Gmail calls.');
+  } finally { nAcme_cleanupIncident_(); }
+}
+
+function test_NAcme_wrongTargetIdentifiersRejected_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  assertEquals_('REJECTED_RECONCILIATION_TARGET', reconcileMisdirectedLiveIncident_('some-other-real-prospect-id').status);
+
+  nAcme_setupIncidentRow_();
+  nAcme_appendAmbiguousLedgerRow_();
+  try {
+    GmailApp._resetCallCounts();
+    var ledger = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; })[0];
+
+    updateLedgerRow_(ledger.rowIndex, { Run_ID: 'wrong-run-id' });
+    assertEquals_('REJECTED_RUN_ID_MISMATCH', reconcileMisdirectedLiveIncident_(incident.Prospect_ID).status);
+    updateLedgerRow_(ledger.rowIndex, { Run_ID: incident.Run_ID });
+
+    updateLedgerRow_(ledger.rowIndex, { Thread_ID: 'wrong-thread-id' });
+    assertEquals_('REJECTED_THREAD_ID_MISMATCH', reconcileMisdirectedLiveIncident_(incident.Prospect_ID).status);
+    updateLedgerRow_(ledger.rowIndex, { Thread_ID: incident.Thread_ID });
+
+    updateLedgerRow_(ledger.rowIndex, { State: LEDGER_STATE.SENT });
+    assertEquals_('REJECTED_UNEXPECTED_LEDGER_SHAPE', reconcileMisdirectedLiveIncident_(incident.Prospect_ID).status);
+    updateLedgerRow_(ledger.rowIndex, { State: LEDGER_STATE.AMBIGUOUS });
+
+    updateLedgerRow_(ledger.rowIndex, { Idempotency_Key: 'wrong:2' });
+    assertEquals_('REJECTED_IDEMPOTENCY_KEY_MISMATCH', reconcileMisdirectedLiveIncident_(incident.Prospect_ID).status);
+    updateLedgerRow_(ledger.rowIndex, { Idempotency_Key: getIdempotencyKey_(incident.Prospect_ID, incident.Step) });
+
+    updateLedgerRow_(ledger.rowIndex, { Email_Normalized: 'someone-else@example.com' });
+    assertEquals_('REJECTED_EXPECTED_RECIPIENT_MISMATCH', reconcileMisdirectedLiveIncident_(incident.Prospect_ID).status);
+    updateLedgerRow_(ledger.rowIndex, { Email_Normalized: incident.Expected_Recipient });
+
+    assertEquals_(0, GmailApp._callCounts.apiSend, 'Every rejected reconciliation must make zero Gmail calls.');
+    var stillAmbiguous = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; })[0];
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, stillAmbiguous.values.State, 'Every rejection above must leave AMBIGUOUS untouched.');
+    assert_(!stillAmbiguous.values.Message_ID, 'A rejected reconciliation must never populate Message_ID.');
+  } finally { nAcme_cleanupIncident_(); }
+}
+
+function test_NAcme_wrongStepAndWrongMessageIdEvidenceRejected_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  nAcme_setupIncidentRow_();
+  try {
+    // Wrong Step: a Step-1 LIVE row for the same prospect must never match.
+    nAcme_appendAmbiguousLedgerRow_({
+      Step: 1, Idempotency_Key: getIdempotencyKey_(incident.Prospect_ID, 1)
+    });
+    assertEquals_('REJECTED_STEP2_LEDGER_COUNT', reconcileMisdirectedLiveIncident_(incident.Prospect_ID).status,
+      'A Step-1 row must not be mistaken for the pinned Step-2 incident.');
+    nAcme_cleanupIncidentLedgerRows_(); // Ledger-only: this test's Prospects row must survive for the next assertion below.
+
+    // Wrong Message_ID evidence: the row already carries evidence that
+    // conflicts with the pinned incident (tampered/corrupted row) — must
+    // reject rather than silently overwrite mismatched evidence.
+    nAcme_appendAmbiguousLedgerRow_({ Message_ID: 'some-other-message-id' });
+    var result = reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    assertEquals_('REJECTED_UNEXPECTED_LEDGER_SHAPE', result.status);
+    var row = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; })[0];
+    assertEquals_('some-other-message-id', row.values.Message_ID, 'A rejected reconciliation must never touch the conflicting evidence.');
+    assertEquals_(LEDGER_STATE.AMBIGUOUS, row.values.State);
+  } finally { nAcme_cleanupIncident_(); }
+}
+
+function test_NAcme_duplicateMatchingLedgerRowsRejected_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  nAcme_setupIncidentRow_();
+  nAcme_appendAmbiguousLedgerRow_();
+  nAcme_appendAmbiguousLedgerRow_({ Claimed_At: new Date() }); // a second, duplicate LIVE Step-2 row for the same key.
+  try {
+    GmailApp._resetCallCounts();
+    var result = reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    assertEquals_('REJECTED_STEP2_LEDGER_COUNT', result.status);
+    assertEquals_(2, result.count);
+    assertEquals_(0, GmailApp._callCounts.apiSend);
+    var rows = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; });
+    assertEquals_(2, rows.length, 'Duplicate rows must be left exactly as found — no merge, no delete.');
+    rows.forEach(function (r) { assertEquals_(LEDGER_STATE.AMBIGUOUS, r.values.State); });
+  } finally { nAcme_cleanupIncident_(); }
+}
+
+function test_NAcme_isLiveKeyBlockedTrueBeforeFalseAfterReconciliation_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  nAcme_setupIncidentRow_();
+  nAcme_appendAmbiguousLedgerRow_();
+  try {
+    assertEquals_(true, isLiveKeyBlocked_(incident.Prospect_ID, incident.Step),
+      'AMBIGUOUS must block the key before reconciliation.');
+    reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    assertEquals_(false, isLiveKeyBlocked_(incident.Prospect_ID, incident.Step),
+      'MISDIRECTED must be non-blocking after reconciliation — isLiveKeyBlocked_ only checks CLAIMED/SENT/AMBIGUOUS.');
+  } finally { nAcme_cleanupIncident_(); }
+}
+
+function test_NAcme_dailyCountAndDigestNeverCreditMisdirectedAsSent_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  nAcme_setupIncidentRow_();
+  nAcme_appendAmbiguousLedgerRow_();
+  try {
+    reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    var ledger = readAllLedgerRows_().filter(function (r) { return r.values.Prospect_ID === incident.Prospect_ID; })[0];
+    assertEquals_(LEDGER_STATE.MISDIRECTED, ledger.values.State);
+    assert_(!!ledger.values.Confirmed_At, 'Confirmed_At is populated for audit completeness.');
+
+    // getDailyLiveSentCount_ gates strictly on State===SENT — a populated
+    // Confirmed_At on a MISDIRECTED row must never inflate it, even if the
+    // real send instant happens to fall on "today" in some timezone.
+    var dailyCountBefore = getDailyLiveSentCount_();
+    var reAppended = appendLedgerRow_({
+      Run_ID: 'unrelated-run', Claimed_At: new Date(), Prospect_ID: incident.Prospect_ID,
+      Email_Normalized: incident.Expected_Recipient, Step: 99, Idempotency_Key: incident.Prospect_ID + ':99',
+      Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.MISDIRECTED, Thread_ID: '', Message_ID: '', Draft_ID: '',
+      Confirmed_At: new Date(), Error: 'unrelated diagnostic row, deleted below'
+    });
+    assertEquals_(dailyCountBefore, getDailyLiveSentCount_(), 'A MISDIRECTED row, however recent, must never count toward the daily LIVE sent quota.');
+    getLedgerSheet_().deleteRow(reAppended);
+
+    var digest = computeDigest_();
+    assert_(digest.text.indexOf('Enviados LIVE hoy: 0') !== -1 ||
+      digest.text.indexOf('Enviados LIVE hoy:') !== -1 && digest.text.split('Enviados LIVE hoy: ')[1].charAt(0) === '0',
+      'The digest\'s LIVE-sent-today line must not have been inflated by the MISDIRECTED row.');
+  } finally { nAcme_cleanupIncident_(); }
+}
+
+function test_NAcme_unrelatedProspectAndLedgerRowsUntouched_() {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  nAcme_setupIncidentRow_();
+  nAcme_appendAmbiguousLedgerRow_();
+  var unrelatedEmail = testUniqueEmail_('nacme-unrelated');
+  var unrelated = addTestProspectRow_({
+    Prospect_ID: Utilities.getUuid(), Email: unrelatedEmail, Email_Normalized: normalizeEmail_(unrelatedEmail),
+    Domain: extractDomain_(normalizeEmail_(unrelatedEmail)), Domain_Type: DOMAIN_TYPE.CORPORATE,
+    Status: STATUS.IN_SEQUENCE, Sequence_Step: 1, Step1_Sent_At: new Date(), Next_Action_Date: new Date()
+  });
+  var unrelatedProspect = getTestProspectByRow_(unrelated);
+  var unrelatedLedgerRow = appendLedgerRow_({
+    Run_ID: 'unrelated-run-id', Claimed_At: new Date(), Prospect_ID: unrelatedProspect.Prospect_ID,
+    Email_Normalized: unrelatedProspect.Email_Normalized, Step: 2,
+    Idempotency_Key: getIdempotencyKey_(unrelatedProspect.Prospect_ID, 2), Mode: LEDGER_MODE.LIVE,
+    State: LEDGER_STATE.AMBIGUOUS, Thread_ID: 'unrelated-thread', Message_ID: '', Draft_ID: '', Confirmed_At: '',
+    Error: 'unrelated ambiguous row that must survive untouched'
+  });
+  try {
+    var unrelatedBefore = readAllLedgerRows_().filter(function (r) { return r.rowIndex === unrelatedLedgerRow; })[0].values;
+    reconcileMisdirectedLiveIncident_(incident.Prospect_ID);
+    var unrelatedAfter = readAllLedgerRows_().filter(function (r) { return r.rowIndex === unrelatedLedgerRow; })[0].values;
+    assertEquals_(JSON.stringify(unrelatedBefore), JSON.stringify(unrelatedAfter),
+      'An unrelated prospect\'s ledger row must be completely unaffected by Acme\'s reconciliation.');
+    assertEquals_(STATUS.IN_SEQUENCE, findRowById_(unrelatedProspect.Prospect_ID).values.Status,
+      'An unrelated prospect\'s Status must be unaffected.');
+  } finally {
+    nAcme_cleanupIncident_();
+    var unrelatedLedgerLeftover = readAllLedgerRows_().filter(function (r) {
+      return r.values.Prospect_ID === unrelatedProspect.Prospect_ID;
+    });
+    if (unrelatedLedgerLeftover.length > 0) getLedgerSheet_().deleteRow(unrelatedLedgerLeftover[0].rowIndex);
+    n8_deleteFixtureRow_(unrelatedProspect.Prospect_ID); // Self-contained, independent of cleanupTestRows_'s Source sweep.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -7580,7 +7867,14 @@ var F1_TEST_FUNCTIONS = [
   ['N3_repairSendLedgerColumns', test_N3_repairSendLedgerColumnsIsIdempotentAndAdditive_],
   ['ghostRowsNeverBecomeProspects', test_ghostRowsNeverBecomeProspects_],
   ['ghostRowFixtureNonDestructive', test_ghostRowFixtureIsNonDestructive_],
-  ['preexistingRow500SurvivesNested', test_preexistingRow500SurvivesNestedGhostAndSentinelTests_]
+  ['preexistingRow500SurvivesNested', test_preexistingRow500SurvivesNestedGhostAndSentinelTests_],
+  ['NAcme_exactPinnedIncidentReconcilesIdempotent', test_NAcme_exactPinnedIncidentReconcilesAndIsIdempotent_],
+  ['NAcme_wrongTargetIdentifiersRejected', test_NAcme_wrongTargetIdentifiersRejected_],
+  ['NAcme_wrongStepAndMessageIdEvidenceRejected', test_NAcme_wrongStepAndWrongMessageIdEvidenceRejected_],
+  ['NAcme_duplicateMatchingLedgerRowsRejected', test_NAcme_duplicateMatchingLedgerRowsRejected_],
+  ['NAcme_isLiveKeyBlockedBeforeAndAfter', test_NAcme_isLiveKeyBlockedTrueBeforeFalseAfterReconciliation_],
+  ['NAcme_dailyCountAndDigestNeverCredit', test_NAcme_dailyCountAndDigestNeverCreditMisdirectedAsSent_],
+  ['NAcme_unrelatedRowsUntouched', test_NAcme_unrelatedProspectAndLedgerRowsUntouched_]
 ];
 
 /** Run manually once a real Gmail thread has been set up per its docstring — not part of the automated suite. */

@@ -196,6 +196,32 @@ var CONTROLLED_STEP2_AMBIGUOUS_INCIDENT = {
   Prior_Rfc_Message_ID: '<CABTxQ3j5XhXY6=++FAF6a3foFJ9+V2t=F59VJujUUByCCO4UNg@mail.gmail.com>'
 };
 
+/**
+ * The one real, already-confirmed misdirected LIVE Step-2 send: Gmail
+ * confirmed the message was delivered, but to a recipient other than the
+ * one this prospect's own send attempt was claimed for (Acme Plumbing LLC,
+ * 2026-09-11). Immutable identifiers, deliberately code constants — a Sheet
+ * edit cannot widen this operator action to another prospect, run, message,
+ * thread, or recipient. Prospect_ID/Thread_ID come from
+ * N6_POST_LIVE_INCIDENT_REPORT.md (this prospect's earlier, unrelated,
+ * already-reconciled Step-1 incident, same Thread_ID since Step 2 continues
+ * the same Gmail thread); Run_ID/Message_ID/recipients come from the
+ * Google-real evidence gathered for THIS incident's read-only audit.
+ * Confirmed_At is the real Gmail send instant (2026-09-11 15:37
+ * America/Chicago = CDT = UTC-5), stored as UTC so no local timezone
+ * assumption is baked into the constant itself.
+ */
+var ACME_MISDIRECTED_STEP2_INCIDENT = {
+  Prospect_ID: '2f4d0c6c-ccd7-420b-8dd3-22c915a792f4',
+  Run_ID: '53cab5cd-44c8-42cc-9199-f43f3d5f1390',
+  Step: 2,
+  Thread_ID: '1a08200c7ad4ac0d',
+  Message_ID: '1a0923084e6c87f8',
+  Expected_Recipient: 'info+testa@klinnercleaning.com',
+  Actual_Recipient: 'jhessyca@klinnerpro.com',
+  Confirmed_At: '2026-09-11T20:37:00Z'
+};
+
 /** SendLedger enums. */
 var LEDGER_MODE = { LIVE: 'LIVE', DRY_RUN: 'DRY_RUN' };
 /**
@@ -241,7 +267,24 @@ var LEDGER_STATE = {
   // Neither is ever auto-resolved: only an explicit ADMIN action clears
   // them (see the recovery notes in Mailer.gs's previewStep docstring).
   PREVIEW_CLAIMED: 'PREVIEW_CLAIMED',
-  PREVIEW_AMBIGUOUS: 'PREVIEW_AMBIGUOUS'
+  PREVIEW_AMBIGUOUS: 'PREVIEW_AMBIGUOUS',
+  // ACME misdirected-incident reconciliation (V1.0.1 patch): a Gmail side
+  // effect is CONFIRMED to have occurred — unlike FAILED, which means we
+  // KNOW nothing was sent — but it reached a recipient OTHER than the one
+  // this key's claim recorded as intended (Ledger.gs's Email_Normalized
+  // column at CLAIM time). It must never read as SENT (no credit for
+  // contacting the intended prospect) and must never be conflated with
+  // AMBIGUOUS (an unresolved, still-maybe-nothing-happened outcome — this
+  // is resolved; Gmail's action is proven, just proven wrong).
+  // Deliberately excluded from isLiveKeyBlocked_'s CLAIMED/SENT/AMBIGUOUS
+  // check (Ledger.gs) — non-blocking by omission, exactly like
+  // SUPERSEDED/FAILED already are — so the key is free for a human-
+  // authorized future send attempt, once one is explicitly decided
+  // (a separate decision, out of scope for the reconciliation itself).
+  // Written ONLY by reconcileMisdirectedLiveIncident_ (Recon.gs),
+  // transitioning one exact, pinned AMBIGUOUS row in place — never
+  // appended fresh, never auto-transitioned by any sweep or trigger.
+  MISDIRECTED: 'MISDIRECTED'
 };
 
 /**
@@ -349,7 +392,8 @@ var LOG_EVENT = {
   DIGEST_SENT: 'DIGEST_SENT',
   FIXTURE_DUE_OVERRIDE: 'FIXTURE_DUE_OVERRIDE',
   FIXTURE_STEP2_RECOVERY: 'FIXTURE_STEP2_RECOVERY',
-  FIXTURE_STEP2_AMBIGUOUS_RECONCILED: 'FIXTURE_STEP2_AMBIGUOUS_RECONCILED'
+  FIXTURE_STEP2_AMBIGUOUS_RECONCILED: 'FIXTURE_STEP2_AMBIGUOUS_RECONCILED',
+  LIVE_MISDIRECTED_RECONCILED: 'LIVE_MISDIRECTED_RECONCILED'
 };
 
 /** Suppression sheet columns. */

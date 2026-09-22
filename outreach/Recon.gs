@@ -255,6 +255,98 @@ function reconcileStaleLiveClaims_(config) {
   return counters;
 }
 
+/**
+ * Reconciles ONE immutable, already-confirmed misdirected LIVE send:
+ * ACME_MISDIRECTED_STEP2_INCIDENT (Constants.gs). Gmail confirmed the
+ * message was delivered, but to a recipient other than the one this
+ * prospect's own send attempt was claimed for (Email_Normalized on the
+ * CLAIMED row, written from the prospect's own address at claim time —
+ * doFollowUpSend_, Mailer.gs). This is the structural opposite of
+ * reconcileControlledFixtureStep2Ambiguous (Mailer.gs), which exists to
+ * confirm a CORRECT-recipient send and credit SENT: this function exists
+ * specifically so a misdirected send is NEVER credited.
+ *
+ * Ledger-only, ADMIN, and non-Gmail: no Gmail call, no Prospects write.
+ * Acme's Prospects row (Status=NEEDS_REVIEW, Sequence_Step=1,
+ * Step2_Sent_At blank) is already the semantically correct business state
+ * — see ACME MISDIRECTED STEP-2 RECONCILIATION AUDIT — and this function
+ * leaves it completely untouched.
+ *
+ * Updates the EXISTING AMBIGUOUS ledger row in place (never appends a
+ * second row for this key): State -> MISDIRECTED, Message_ID/Confirmed_At
+ * populated with the already-known real Gmail evidence, and a
+ * reconciliation marker APPENDED to the row's existing Error text — the
+ * original AMBIGUOUS history is never overwritten, only added to.
+ *
+ * Every identifier is pinned in ACME_MISDIRECTED_STEP2_INCIDENT, so this
+ * cannot be repurposed for a real prospect, another AMBIGUOUS row, or a
+ * different incident merely by calling it with a different prospectId —
+ * only the exact pinned Prospect_ID reaches the write below.
+ */
+function reconcileMisdirectedLiveIncident_(prospectId) {
+  var incident = ACME_MISDIRECTED_STEP2_INCIDENT;
+  if (prospectId !== incident.Prospect_ID) {
+    return { status: 'REJECTED_RECONCILIATION_TARGET', prospectId: prospectId };
+  }
+
+  var matchCount = countProspectRowsById_(prospectId);
+  if (matchCount !== 1) return { status: 'REJECTED_AMBIGUOUS_ID', matchCount: matchCount };
+
+  var stepRows = readAllLedgerRows_().filter(function (row) {
+    return row.values.Prospect_ID === prospectId && Number(row.values.Step) === incident.Step &&
+      row.values.Mode === LEDGER_MODE.LIVE;
+  });
+
+  if (stepRows.length === 1 && stepRows[0].values.State === LEDGER_STATE.MISDIRECTED &&
+      stepRows[0].values.Message_ID === incident.Message_ID) {
+    return { status: 'ALREADY_RECONCILED', prospectId: prospectId, messageId: incident.Message_ID };
+  }
+
+  if (stepRows.length !== 1) return { status: 'REJECTED_STEP2_LEDGER_COUNT', count: stepRows.length };
+
+  var ledgerRow = stepRows[0];
+  var lv = ledgerRow.values;
+
+  if (lv.State !== LEDGER_STATE.AMBIGUOUS || lv.Message_ID) {
+    return { status: 'REJECTED_UNEXPECTED_LEDGER_SHAPE', ledgerState: lv.State };
+  }
+  if (lv.Run_ID !== incident.Run_ID) return { status: 'REJECTED_RUN_ID_MISMATCH' };
+  if (String(lv.Thread_ID || '') !== incident.Thread_ID) return { status: 'REJECTED_THREAD_ID_MISMATCH' };
+  if (lv.Idempotency_Key !== getIdempotencyKey_(prospectId, incident.Step)) {
+    return { status: 'REJECTED_IDEMPOTENCY_KEY_MISMATCH' };
+  }
+  if (normalizeEmail_(lv.Email_Normalized) !== incident.Expected_Recipient) {
+    return { status: 'REJECTED_EXPECTED_RECIPIENT_MISMATCH' };
+  }
+
+  var confirmedAt = new Date(incident.Confirmed_At);
+  var reconciliationMarker = ' | MISDIRECTED_RECONCILIATION: expected_recipient=' + incident.Expected_Recipient +
+    ' actual_recipient=' + incident.Actual_Recipient + ' reason=CONFIRMED_SENT_BUT_MISDIRECTED ' +
+    '(Gmail send succeeded but reached the wrong recipient; never credited as SENT to the intended prospect) ' +
+    'evidence_message_id=' + incident.Message_ID + ' evidence_thread_id=' + incident.Thread_ID +
+    ' reconciled_at=' + new Date().toISOString();
+
+  // Metadata first, MISDIRECTED state last — same ordering discipline as
+  // writeLedgerMetadataThenState_'s other callers: a killed execution can
+  // never publish the new State before the evidence it describes.
+  writeLedgerMetadataThenState_(ledgerRow.rowIndex, {
+    Message_ID: incident.Message_ID,
+    Confirmed_At: confirmedAt,
+    Error: String(lv.Error || '') + reconciliationMarker
+  }, LEDGER_STATE.MISDIRECTED);
+
+  logEvent_(LOG_LEVEL.INFO, LOG_EVENT.LIVE_MISDIRECTED_RECONCILED,
+    prospectId, incident.Expected_Recipient, incident.Step,
+    'AMBIGUOUS row transitioned in place to MISDIRECTED. Confirmed Gmail send reached ' +
+    incident.Actual_Recipient + ' instead of ' + incident.Expected_Recipient + '. Never credited as SENT.');
+  flushLog_();
+
+  return {
+    status: 'RECONCILED_MISDIRECTED', prospectId: prospectId, messageId: incident.Message_ID,
+    threadId: incident.Thread_ID, confirmedAt: confirmedAt
+  };
+}
+
 function closeFinishedSequences_(config) {
   var rows = readAllProspects();
   var closed = 0;
