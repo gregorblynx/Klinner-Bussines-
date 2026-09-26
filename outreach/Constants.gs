@@ -396,8 +396,25 @@ var LOG_EVENT = {
   FIXTURE_DUE_OVERRIDE: 'FIXTURE_DUE_OVERRIDE',
   FIXTURE_STEP2_RECOVERY: 'FIXTURE_STEP2_RECOVERY',
   FIXTURE_STEP2_AMBIGUOUS_RECONCILED: 'FIXTURE_STEP2_AMBIGUOUS_RECONCILED',
-  LIVE_MISDIRECTED_RECONCILED: 'LIVE_MISDIRECTED_RECONCILED'
+  LIVE_MISDIRECTED_RECONCILED: 'LIVE_MISDIRECTED_RECONCILED',
+  INVENTORY_ALERT_SENT: 'INVENTORY_ALERT_SENT',
+  INVENTORY_ALERT_FAILED: 'INVENTORY_ALERT_FAILED',
+  REPLY_ALERT_SENT: 'REPLY_ALERT_SENT',
+  REPLY_ALERT_FAILED: 'REPLY_ALERT_FAILED'
 };
+
+/**
+ * v1.0.2 operations alerts. Code-level fallbacks for Config keys that a
+ * pre-existing production Config sheet will not have until an operator adds
+ * the row (getConfig() never back-fills missing keys, by design).
+ */
+var DEFAULT_REPLY_ALERT_EMAIL = 'jhessybezerra@gmail.com';
+var DEFAULT_INVENTORY_REFILL_THRESHOLD = 20;
+var DEFAULT_INVENTORY_CRITICAL_THRESHOLD = 10;
+
+/** Script Properties keys for alert state (no new sheet, no new schema). */
+var INVENTORY_ALERT_STATE_PROPERTY = 'INVENTORY_ALERT_STATE'; // 'OK' (armed) | 'LOW' | 'CRITICAL' = strongest level alerted since the last refill.
+var REPLY_ALERT_PROPERTY_PREFIX = 'REPLY_ALERTED_'; // + Prospect_ID -> JSON array of alerted inbound Gmail Message_IDs.
 
 /** Suppression sheet columns. */
 var SUPPRESSION_COLUMNS = {

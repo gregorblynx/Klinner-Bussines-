@@ -40,7 +40,10 @@ function getConfigDefaults_() {
     ['FAST_SWEEP_QUERY_WINDOW', 'newer_than:3d', 'Gmail search window for the hourly reply sweep.'],
     ['RECON_LOOKBACK_DAYS', '35', 'Nightly reconciliation lookback for active prospects.'],
     ['QUOTA_SAFETY_MARGIN', '5', 'Reserve subtracted from MailApp.getRemainingDailyQuota().'],
-    ['LOG_MAX_ROWS', '5000', 'Log sheet row cap enforced nightly.']
+    ['LOG_MAX_ROWS', '5000', 'Log sheet row cap enforced nightly.'],
+    ['INVENTORY_REFILL_THRESHOLD', String(DEFAULT_INVENTORY_REFILL_THRESHOLD), 'Low-inventory alert fires once when qualified future inventory falls to this number or fewer.'],
+    ['INVENTORY_CRITICAL_THRESHOLD', String(DEFAULT_INVENTORY_CRITICAL_THRESHOLD), 'Critical-inventory alert fires once at this number or fewer. Must be lower than INVENTORY_REFILL_THRESHOLD or the default is used.'],
+    ['REPLY_ALERT_EMAIL', DEFAULT_REPLY_ALERT_EMAIL, 'Receives a notification when a real prospect replies.']
   ];
 }
 
@@ -48,7 +51,8 @@ var CONFIG_BOOLEAN_KEYS = ['PAUSE_ALL', 'DRY_RUN', 'ONE_ACTIVE_PER_CORPORATE_DOM
 var CONFIG_NUMBER_KEYS = [
   'MAX_PER_DAY', 'MAX_PER_RUN', 'MAX_PREVIEW_PER_RUN', 'SEND_START_HOUR', 'SEND_END_HOUR',
   'MIN_SLEEP_SECONDS', 'MAX_SLEEP_SECONDS', 'MAX_STEPS', 'MAX_ERROR_COUNT', 'CLAIM_STALE_MINUTES',
-  'REPLY_SYNC_START_HOUR', 'REPLY_SYNC_END_HOUR', 'RECON_LOOKBACK_DAYS', 'QUOTA_SAFETY_MARGIN', 'LOG_MAX_ROWS'
+  'REPLY_SYNC_START_HOUR', 'REPLY_SYNC_END_HOUR', 'RECON_LOOKBACK_DAYS', 'QUOTA_SAFETY_MARGIN', 'LOG_MAX_ROWS',
+  'INVENTORY_REFILL_THRESHOLD', 'INVENTORY_CRITICAL_THRESHOLD'
 ];
 var CONFIG_CSV_KEYS = ['SEND_DAYS', 'CADENCE_OFFSETS_BD', 'PUBLIC_EMAIL_DOMAINS', 'HOLIDAYS'];
 

@@ -7633,6 +7633,883 @@ function test_NAcme_unrelatedProspectAndLedgerRowsUntouched_() {
   }
 }
 
+/**
+ * v1.0.2 — operations alerts (low inventory + prospect reply notification).
+ * MailApp and PropertiesService are mocks, so nothing here can reach a real
+ * mailbox; every test restores MailApp._sent/_remainingQuota, and the suite
+ * teardown restores Script Properties (see snapshotSandboxState_).
+ */
+function nOps_withMailCapture_(fn) {
+  var startLen = MailApp._sent.length;
+  var startQuota = MailApp._remainingQuota;
+  var capture = { sent: function () { return MailApp._sent.slice(startLen); } };
+  try { return fn(capture); }
+  finally { MailApp._sent.length = startLen; MailApp._remainingQuota = startQuota; }
+}
+
+function nOps_withConfig_(overrides, fn) {
+  var sheet = getSheet_(SHEET_NAMES.CONFIG);
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  var rowByKey = {};
+  values.forEach(function (row, i) { rowByKey[row[0]] = i + 2; });
+  var originals = {};
+  Object.keys(overrides).forEach(function (key) {
+    if (!rowByKey[key]) throw new Error('nOps_withConfig_: no Config row for ' + key);
+    originals[key] = sheet.getRange(rowByKey[key], 2).getValue();
+    sheet.getRange(rowByKey[key], 2).setValue(overrides[key]);
+  });
+  resetConfigCache_();
+  try { return fn(); }
+  finally {
+    Object.keys(originals).forEach(function (key) { sheet.getRange(rowByKey[key], 2).setValue(originals[key]); });
+    resetConfigCache_();
+  }
+}
+
+function nOps_withMailFailure_(fn) {
+  var original = MailApp.sendEmail;
+  MailApp.sendEmail = function () { throw new Error('simulated MailApp outage'); };
+  try { return fn(); } finally { MailApp.sendEmail = original; }
+}
+
+// ------------------------- inventory: state machine -------------------------
+
+var NOPS_ALERT_CONFIG_ = { ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: 10 };
+function nOps_inv_(total) { return { total: total, ready: total, inSequence: 0 }; }
+function nOps_alertCount_(capture) {
+  return capture.sent().filter(function (m) { return m.subject === 'Klinner Outreach — Low Inventory Alert'; }).length;
+}
+function nOps_criticalCount_(capture) {
+  return capture.sent().filter(function (m) { return m.subject === 'Klinner Outreach — CRITICAL Inventory Alert'; }).length;
+}
+
+function test_NOps_inventoryAboveThresholdSendsNoAlert_() {
+  nOps_withMailCapture_(function (capture) {
+    var r = runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(29));
+    assertEquals_(false, r.alerted);
+    assertEquals_('ABOVE_THRESHOLD', r.reason);
+    assertEquals_(0, capture.sent().length);
+  });
+}
+
+function test_NOps_transitionToThresholdSendsExactlyOneAlertThenNoDuplicates_() {
+  nOps_withMailCapture_(function (capture) {
+    [29, 24, 21].forEach(function (n) {
+      assertEquals_(false, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(n)).alerted, n + ' is above the threshold.');
+    });
+    assertEquals_(0, nOps_alertCount_(capture));
+    assertEquals_(true, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20)).alerted, '20 (== threshold) must alert.');
+    assertEquals_(1, nOps_alertCount_(capture));
+    [20, 19, 18].forEach(function (n) {
+      var r = runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(n));
+      assertEquals_(false, r.alerted);
+      assertEquals_('ALREADY_ALERTED', r.reason);
+    });
+    assertEquals_(1, nOps_alertCount_(capture), 'No further alert while inventory stays low.');
+  });
+}
+
+function test_NOps_refillRearmsAndLaterDropAlertsAgain_() {
+  nOps_withMailCapture_(function (capture) {
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20));
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(18));
+    assertEquals_(1, nOps_alertCount_(capture));
+    assertEquals_(false, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(35)).alerted);
+    assertEquals_('OK', PropertiesService.getScriptProperties().getProperty(INVENTORY_ALERT_STATE_PROPERTY),
+      'A refill above the threshold must re-arm the alert.');
+    assertEquals_(true, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20)).alerted, 'Falling to the threshold again must alert again.');
+    assertEquals_(2, nOps_alertCount_(capture));
+  });
+}
+
+function test_NOps_inventoryAlertEmailContent_() {
+  nOps_withMailCapture_(function (capture) {
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, { total: 19, ready: 11, inSequence: 8 });
+    var mail = capture.sent()[0];
+    assertEquals_('ops-admin@example.com', mail.to);
+    assertEquals_('Klinner Outreach — Low Inventory Alert', mail.subject);
+    ['Qualified future inventory: 19', 'READY: 11', 'IN_SEQUENCE with future steps remaining: 8',
+      'Refill threshold (low): 20', 'Critical threshold: 10', 'Date/time: ', 'add new qualified prospects'].forEach(function (needle) {
+      assert_(mail.body.indexOf(needle) !== -1, 'Alert body must contain "' + needle + '".');
+    });
+  });
+}
+
+function test_NOps_inventoryAlertSendFailureIsRetriedNotLost_() {
+  nOps_withMailCapture_(function (capture) {
+    var r = nOps_withMailFailure_(function () { return runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(15)); });
+    assertEquals_('SEND_FAILED', r.reason);
+    assertEquals_(0, capture.sent().length);
+    assert_(PropertiesService.getScriptProperties().getProperty(INVENTORY_ALERT_STATE_PROPERTY) !== 'LOW',
+      'A failed send must not leave the alert marked as sent.');
+    flushLog_();
+    assert_(!!findLogEventInSheet_(LOG_EVENT.INVENTORY_ALERT_FAILED), 'The failure must be logged.');
+    assertEquals_(true, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(15)).alerted, 'The next run must retry and succeed.');
+    assertEquals_(1, nOps_alertCount_(capture));
+  });
+}
+
+function test_NOps_thresholdFallsBackTo20WhenMissingOrInvalid_() {
+  assertEquals_(20, getInventoryRefillThreshold_({}));
+  assertEquals_(20, getInventoryRefillThreshold_({ INVENTORY_REFILL_THRESHOLD: 0 }));
+  assertEquals_(20, getInventoryRefillThreshold_({ INVENTORY_REFILL_THRESHOLD: NaN }));
+  assertEquals_(35, getInventoryRefillThreshold_({ INVENTORY_REFILL_THRESHOLD: 35 }));
+  nOps_withMailCapture_(function (capture) {
+    var cfg = { ADMIN_EMAIL: 'ops-admin@example.com' }; // pre-existing production Config: no threshold row at all.
+    assertEquals_(false, runInventoryAlert_(cfg, nOps_inv_(21)).alerted);
+    assertEquals_(true, runInventoryAlert_(cfg, nOps_inv_(20)).alerted);
+  });
+}
+
+// ---------------------- inventory: qualified definition ---------------------
+
+function nOps_addInventoryRow_(tag, overrides) {
+  var email = testUniqueEmail_(tag);
+  var en = normalizeEmail_(email);
+  var base = {
+    Prospect_ID: Utilities.getUuid(), Email: email, Email_Normalized: en, Domain: extractDomain_(en),
+    Domain_Type: DOMAIN_TYPE.CORPORATE, Problem_Found: 'x', Status: STATUS.READY, Sequence_Step: 0
+  };
+  return getTestProspectByRow_(addTestProspectRow_(Object.assign(base, overrides || {})));
+}
+function nOps_invTotal_() { return computeQualifiedFutureInventory_(getConfig()); }
+function nOps_futureDate_() { var d = new Date(); d.setDate(d.getDate() + 10); return d; }
+
+function nOps_assertDelta_(expectedDelta, label, overrides, afterAdd) {
+  var before = nOps_invTotal_();
+  var p = nOps_addInventoryRow_('nops', overrides);
+  if (afterAdd) afterAdd(p);
+  var after = nOps_invTotal_();
+  assertEquals_(before.total + expectedDelta, after.total, label);
+  return { before: before, after: after };
+}
+
+function test_NOps_readyCountsAsFutureInventory_() {
+  var r = nOps_assertDelta_(1, 'A READY prospect is future inventory.', { Status: STATUS.READY });
+  assertEquals_(r.before.ready + 1, r.after.ready);
+}
+
+function test_NOps_inSequenceWithFutureStepsCounts_() {
+  var r = nOps_assertDelta_(1, 'IN_SEQUENCE with steps left (not yet due) counts.',
+    { Status: STATUS.IN_SEQUENCE, Sequence_Step: 1, Step1_Sent_At: new Date(), Next_Action_Date: nOps_futureDate_() });
+  assertEquals_(r.before.inSequence + 1, r.after.inSequence);
+  nOps_assertDelta_(1, 'IN_SEQUENCE that is already due also counts (future inventory != sendable-now).',
+    { Status: STATUS.IN_SEQUENCE, Sequence_Step: 2, Step1_Sent_At: new Date(), Next_Action_Date: new Date(Date.now() - 86400000) });
+}
+
+function test_NOps_exhaustedSequenceDoesNotCount_() {
+  nOps_assertDelta_(0, 'An IN_SEQUENCE prospect on the last step has no future step.',
+    { Status: STATUS.IN_SEQUENCE, Sequence_Step: getConfig().MAX_STEPS, Step1_Sent_At: new Date(), Next_Action_Date: nOps_futureDate_() });
+  nOps_assertDelta_(0, 'SEQUENCE_DONE does not count.', { Status: STATUS.SEQUENCE_DONE, Sequence_Step: 4 });
+}
+
+function test_NOps_stoppedDoesNotCount_() {
+  nOps_assertDelta_(0, 'STOPPED does not count.', { Status: STATUS.STOPPED, Stop_Contact: true, Do_Not_Contact_Reason: DNC_REASON.MANUAL });
+}
+function test_NOps_repliedDoesNotCount_() {
+  nOps_assertDelta_(0, 'REPLIED does not count.', { Status: STATUS.REPLIED, Replied: true });
+}
+function test_NOps_suppressedDoesNotCount_() {
+  nOps_assertDelta_(0, 'A suppressed READY prospect does not count.', { Status: STATUS.READY }, function (p) {
+    addSuppression_(p.Email_Normalized, SUPPRESSION_SCOPE.EMAIL, DNC_REASON.MANUAL, 'test');
+    _testCreatedSuppressionValues.push(p.Email_Normalized);
+  });
+}
+function test_NOps_bouncedDoesNotCount_() {
+  nOps_assertDelta_(0, 'BOUNCED does not count.', { Status: STATUS.BOUNCED, Do_Not_Contact_Reason: DNC_REASON.BOUNCE });
+}
+function test_NOps_invalidEmailDoesNotCount_() {
+  nOps_assertDelta_(0, 'INVALID_EMAIL does not count.', { Status: STATUS.INVALID_EMAIL });
+}
+function test_NOps_duplicateDoesNotCount_() {
+  nOps_assertDelta_(0, 'DUPLICATE does not count.', { Status: STATUS.DUPLICATE, Do_Not_Contact_Reason: DNC_REASON.DUPLICATE });
+}
+function test_NOps_needsReviewAndBlankDateDoNotCount_() {
+  nOps_assertDelta_(0, 'NEEDS_REVIEW is not usable inventory.', { Status: STATUS.NEEDS_REVIEW, Sequence_Step: 1, Step1_Sent_At: new Date() });
+  nOps_assertDelta_(0, 'IN_SEQUENCE with a blank Next_Action_Date is ignored forever (I6).',
+    { Status: STATUS.IN_SEQUENCE, Sequence_Step: 1, Step1_Sent_At: new Date(), Next_Action_Date: '' });
+}
+function test_NOps_controlledFixtureDoesNotCount_() {
+  var fixtureId = null;
+  try {
+    nOps_assertDelta_(0, 'A controlled fixture is not real inventory.', { Status: STATUS.READY, Source: CONTROLLED_FIXTURE_SOURCES[0] },
+      function (p) { fixtureId = p.Prospect_ID; });
+  } finally { if (fixtureId) n8_deleteFixtureRow_(fixtureId); } // fixture Sources are not swept by cleanupTestRows_.
+}
+function test_NOps_sharedCorporateDomainDoesNotRemoveInventory_() {
+  var before = nOps_invTotal_().total;
+  var a = nOps_addInventoryRow_('nopsdom', { Status: STATUS.READY });
+  nOps_addInventoryRow_('nopsdom2', { Status: STATUS.READY, Domain: a.Domain });
+  nOps_addInventoryRow_('nopsdom3', { Status: STATUS.IN_SEQUENCE, Domain: a.Domain, Sequence_Step: 1, Step1_Sent_At: new Date(), Next_Action_Date: nOps_futureDate_() });
+  assertEquals_(before + 3, nOps_invTotal_().total,
+    'ONE_ACTIVE_PER_CORPORATE_DOMAIN must not remove valid future inventory.');
+}
+
+// --------------------- digest integration (no new trigger) -------------------
+
+function test_NOps_dailyDigestKeepsReadyLineAddsInventoryAndAlertsOnce_() {
+  nOps_withMailCapture_(function (capture) {
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: '100000' }, function () {
+      nOps_addInventoryRow_('nopsdigest', { Status: STATUS.READY });
+      var first = dailyDigest();
+      assertEquals_(true, first.sent);
+      assert_(first.digest.indexOf('READY restantes: ') !== -1, 'READY restantes must be preserved.');
+      assert_(first.digest.indexOf('Qualified future inventory: ') !== -1, 'The new inventory line must be present.');
+      assertEquals_('Klinner Outreach — Daily Digest', capture.sent()[0].subject, 'The digest subject is unchanged.');
+      assertEquals_(true, first.inventoryAlert.alerted);
+      assertEquals_(2, capture.sent().length, 'Digest + ONE inventory alert.');
+
+      var second = dailyDigest();
+      assertEquals_(false, second.inventoryAlert.alerted);
+      assertEquals_(3, capture.sent().length, 'Second run: the digest only, no repeated inventory alert.');
+    });
+  });
+}
+
+function test_NOps_dailyDigestRearmsAfterRefillViaDigest_() {
+  nOps_withMailCapture_(function (capture) {
+    // >= 3 real rows so the digest inventory sits between critical (2) and low (100000).
+    nOps_addInventoryRow_('nopsrefill1', {}); nOps_addInventoryRow_('nopsrefill2', {}); nOps_addInventoryRow_('nopsrefill3', {});
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: '100000', INVENTORY_CRITICAL_THRESHOLD: '2' }, function () {
+      dailyDigest();
+      assertEquals_(1, nOps_alertCount_(capture));
+    });
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: '1' }, function () {
+      var r = dailyDigest();
+      assertEquals_('ABOVE_THRESHOLD', r.inventoryAlert.reason);
+    });
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: '100000', INVENTORY_CRITICAL_THRESHOLD: '2' }, function () {
+      dailyDigest();
+      assertEquals_(2, nOps_alertCount_(capture), 'After re-arming, dropping to the threshold alerts again.');
+    });
+  });
+}
+
+function test_NOps_dailyDigestWithAdminEmailPendingSendsNothingAndKeepsState_() {
+  nOps_withMailCapture_(function (capture) {
+    var before = PropertiesService._snapshot();
+    var r = dailyDigest();
+    assertEquals_(false, r.sent);
+    assertEquals_(0, capture.sent().length);
+    assertEquals_(before, PropertiesService._snapshot(), 'No inventory state change while ADMIN_EMAIL is PENDING_F0.');
+  });
+}
+
+function test_NOps_inventoryAlertFailureNeverBreaksDigest_() {
+  nOps_withMailCapture_(function (capture) {
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: '100000' }, function () {
+      var originalGetScriptProperties = PropertiesService.getScriptProperties;
+      PropertiesService.getScriptProperties = function () { throw new Error('simulated Properties outage'); };
+      try {
+        var r = dailyDigest();
+        assertEquals_(true, r.sent, 'The digest itself must still be sent.');
+        assertEquals_('ERROR', r.inventoryAlert.reason);
+      } finally { PropertiesService.getScriptProperties = originalGetScriptProperties; }
+      assertEquals_('Klinner Outreach — Daily Digest', capture.sent()[0].subject);
+      assertEquals_(1, capture.sent().length);
+    });
+  });
+}
+
+function test_NOps_noNewTriggersAndFourManagedHandlersUnchanged_() {
+  assertEquals_('sendBatch,syncReplies,nightlyRecon,dailyDigest', MANAGED_TRIGGER_HANDLERS.join(','));
+}
+
+
+// ------------- Item 1: unsubscribe AFTER the prospect already replied -------------
+
+function nOps_suppressionRowCount_(email) {
+  return readAllSuppression_().filter(function (r) { return r.Value === email && r.Scope === SUPPRESSION_SCOPE.EMAIL; }).length;
+}
+
+function test_NOps_repliedProspectLaterUnsubscribeIsSuppressedCanonically_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopspostunsub');
+      _testCreatedSuppressionValues.push(setup.emailNormalized);
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Interested, please send pricing.', Date.now() - 120000);
+      syncReplies();
+      var replied = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.REPLIED, replied.Status);
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Please unsubscribe me.', Date.now());
+      syncReplies();
+
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.STOPPED, after.Status, 'Canonical unsubscribe: STOPPED, never back into a sequence.');
+      assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+      assertEquals_(true, after.Stop_Contact);
+      assertEquals_('', String(after.Next_Action_Date || ''));
+      assertEquals_(true, after.Replied, 'Historical Replied flag is preserved.');
+      assertEquals_(new Date(replied.Replied_At).getTime(), new Date(after.Replied_At).getTime(), 'Historical Replied_At is preserved.');
+      assertEquals_(true, isSuppressed_(setup.emailNormalized, ''));
+      assertEquals_(1, nOps_suppressionRowCount_(setup.emailNormalized));
+      assertEquals_(false, canSend_(after, 2, getConfig()), 'The prospect can never be sent again.');
+      assertEquals_(1, nOps_replyAlerts_(capture).length, 'The unsubscribe must NOT produce a normal reply alert.');
+    });
+  });
+}
+
+function test_NOps_postRepliedUnsubscribeIsIdempotent_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsidem');
+      _testCreatedSuppressionValues.push(setup.emailNormalized);
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Maybe later.', Date.now() - 120000);
+      syncReplies();
+      var staleRepliedProspect = findRowById_(setup.p.Prospect_ID).values; // still REPLIED here
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'unsubscribe', Date.now());
+      syncReplies(); syncReplies(); syncReplies();
+      // A concurrent/stale re-processing of the SAME message against the old REPLIED snapshot.
+      processThreadForReplies_(setup.thread, staleRepliedProspect, getConfig());
+      processThreadForReplies_(setup.thread, staleRepliedProspect, getConfig());
+
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.STOPPED, after.Status);
+      assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+      assertEquals_(1, nOps_suppressionRowCount_(setup.emailNormalized), 'No duplicate suppression rows.');
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+    });
+  });
+}
+
+function test_NOps_laterNormalReplyAlertsOncePerMessageThenUnsubscribeStopsCleanly_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsmixed');
+      _testCreatedSuppressionValues.push(setup.emailNormalized);
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'First: what is the price?', Date.now() - 180000);
+      syncReplies();
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Second: also can you do Saturdays?', Date.now() - 120000);
+      syncReplies(); syncReplies();
+      assertEquals_(2, nOps_replyAlerts_(capture).length, 'Exactly one alert per new Message_ID.');
+      assertEquals_(STATUS.REPLIED, findRowById_(setup.p.Prospect_ID).values.Status);
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'stop', Date.now());
+      syncReplies();
+      assertEquals_(STATUS.STOPPED, findRowById_(setup.p.Prospect_ID).values.Status);
+      assertEquals_(2, nOps_replyAlerts_(capture).length, 'No alert for the unsubscribe.');
+    });
+  });
+}
+
+function test_NOps_quotedFooterInLaterReplyIsNotAnUnsubscribe_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsquote');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Interested.', Date.now() - 120000);
+      syncReplies();
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', n13_quotedOutboundBody_('Thanks, sounds good, call me tomorrow.'), Date.now());
+      syncReplies();
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.REPLIED, after.Status, 'The quoted outbound footer must never self-trigger an unsubscribe.');
+      assertEquals_(2, nOps_replyAlerts_(capture).length);
+    });
+  });
+}
+
+function test_NOps_postRepliedUnsubscribeFailureIsIsolatedAndRetried_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsunsubfail');
+      _testCreatedSuppressionValues.push(setup.emailNormalized);
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Interested.', Date.now() - 120000);
+      syncReplies();
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'unsubscribe', Date.now());
+      var original = applyUnsubscribeEffects_;
+      applyUnsubscribeEffects_ = function () { throw new Error('simulated unsubscribe write failure'); };
+      try { syncReplies(); } finally { applyUnsubscribeEffects_ = original; } // must not throw out of the sweep
+      assert_(!isSuppressed_(setup.emailNormalized, ''), 'Nothing is falsely reported as suppressed.');
+      flushLog_();
+      assert_(!!findLogEventInSheet_(LOG_EVENT.ERROR), 'The failure is logged.');
+      syncReplies(); // retry
+      assertEquals_(STATUS.STOPPED, findRowById_(setup.p.Prospect_ID).values.Status);
+      assertEquals_(true, isSuppressed_(setup.emailNormalized, ''));
+      assertEquals_(1, nOps_suppressionRowCount_(setup.emailNormalized));
+    });
+  });
+}
+
+function test_NOps_firstResponseUnsubscribeBehaviorUnchangedByHardening_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsfirstunsub');
+      _testCreatedSuppressionValues.push(setup.emailNormalized);
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'unsubscribe', Date.now());
+      syncReplies(); syncReplies();
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.STOPPED, after.Status);
+      assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+      assertEquals_(false, after.Replied === true, 'A first-response unsubscribe is never recorded as a reply.');
+      assertEquals_(1, nOps_suppressionRowCount_(setup.emailNormalized));
+      assertEquals_(0, nOps_replyAlerts_(capture).length);
+    });
+  });
+}
+
+// ------------------- Item 2: two-level inventory alert -------------------
+
+function test_NOps_criticalAlertAtThresholdOnceLowAtTwentyOnce_() {
+  nOps_withMailCapture_(function (capture) {
+    [29, 24, 21].forEach(function (n) { assertEquals_(false, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(n)).alerted); });
+    assertEquals_(0, capture.sent().length);
+    var low = runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20));
+    assertEquals_('LOW', low.level);
+    assertEquals_(1, nOps_alertCount_(capture));
+    [19, 15].forEach(function (n) { assertEquals_('ALREADY_ALERTED', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(n)).reason); });
+    assertEquals_(1, capture.sent().length, 'No repeated LOW alert.');
+    var crit = runInventoryAlert_(NOPS_ALERT_CONFIG_, { total: 10, ready: 6, inSequence: 4 });
+    assertEquals_('CRITICAL', crit.level);
+    assertEquals_(1, nOps_criticalCount_(capture));
+    [9, 8].forEach(function (n) { assertEquals_(false, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(n)).alerted); });
+    assertEquals_(2, capture.sent().length, 'No repeated CRITICAL alert.');
+
+    var mail = capture.sent()[1];
+    assertEquals_('ops-admin@example.com', mail.to);
+    assertEquals_('Klinner Outreach — CRITICAL Inventory Alert', mail.subject);
+    ['Qualified future inventory: 10', 'READY: 6', 'IN_SEQUENCE with future steps remaining: 4', 'Refill threshold (low): 20',
+      'Critical threshold: 10', 'Date/time: ', 'replenished NOW'].forEach(function (needle) {
+      assert_(mail.body.indexOf(needle) !== -1, 'Critical body must contain "' + needle + '".');
+    });
+  });
+}
+
+function test_NOps_refillRearmsBothLevels_() {
+  nOps_withMailCapture_(function (capture) {
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20));
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(10));
+    assertEquals_(1, nOps_alertCount_(capture)); assertEquals_(1, nOps_criticalCount_(capture));
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(8));
+    assertEquals_(2, capture.sent().length);
+
+    assertEquals_(false, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(35)).alerted);
+    assertEquals_('OK', PropertiesService.getScriptProperties().getProperty(INVENTORY_ALERT_STATE_PROPERTY));
+
+    assertEquals_('LOW', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20)).level, 'LOW alerts again after the refill.');
+    assertEquals_('CRITICAL', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(10)).level, 'CRITICAL alerts again after the refill.');
+    assertEquals_(2, nOps_alertCount_(capture)); assertEquals_(2, nOps_criticalCount_(capture));
+  });
+}
+
+function test_NOps_directJumpAboveLowToCriticalSendsOnlyCriticalOnce_() {
+  nOps_withMailCapture_(function (capture) {
+    var r = runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(8));
+    assertEquals_('CRITICAL', r.level);
+    assertEquals_(1, capture.sent().length, 'One email for the whole digest execution.');
+    assertEquals_(1, nOps_criticalCount_(capture));
+    assertEquals_(0, nOps_alertCount_(capture), 'The weaker LOW alert is NOT also sent.');
+    // Partial recovery inside the low zone neither re-arms nor sends LOW after the critical alert.
+    assertEquals_('ALREADY_ALERTED', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(15)).reason);
+    assertEquals_('ALREADY_ALERTED', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20)).reason);
+    assertEquals_('ALREADY_ALERTED', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(9)).reason);
+    assertEquals_(1, capture.sent().length);
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(35));
+    assertEquals_('LOW', runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20)).level, 'Re-armed by the refill.');
+  });
+}
+
+function test_NOps_criticalAlertGoesToAdminNotReplyAlertAddress_() {
+  nOps_withMailCapture_(function (capture) {
+    var cfg = Object.assign({}, NOPS_ALERT_CONFIG_, { REPLY_ALERT_EMAIL: 'jhessybezerra@gmail.com' });
+    runInventoryAlert_(cfg, nOps_inv_(5));
+    assertEquals_('ops-admin@example.com', capture.sent()[0].to);
+  });
+}
+
+function test_NOps_criticalSendFailureRestoresPriorStateAndRetries_() {
+  nOps_withMailCapture_(function (capture) {
+    runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(20)); // LOW sent
+    var failed = nOps_withMailFailure_(function () { return runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(9)); });
+    assertEquals_('SEND_FAILED', failed.reason);
+    assertEquals_('LOW', PropertiesService.getScriptProperties().getProperty(INVENTORY_ALERT_STATE_PROPERTY),
+      'A failed CRITICAL send restores the previous state, so it is retried.');
+    assertEquals_(true, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(9)).alerted);
+    assertEquals_(1, nOps_criticalCount_(capture));
+    assertEquals_(false, runInventoryAlert_(NOPS_ALERT_CONFIG_, nOps_inv_(9)).alerted);
+  });
+}
+
+function test_NOps_invalidCriticalAndLowConfigFallBackSafely_() {
+  function crit(cfg) { return getInventoryCriticalThreshold_(cfg); }
+  assertEquals_(10, crit({}));
+  assertEquals_(15, crit({ INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: 15 }));
+  assertEquals_(10, crit({ INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: 20 }), 'Equal to low is invalid.');
+  assertEquals_(10, crit({ INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: 25 }), 'Higher than low is invalid.');
+  assertEquals_(10, crit({ INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: 0 }));
+  assertEquals_(10, crit({ INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: NaN }));
+  assertEquals_(10, crit({ INVENTORY_REFILL_THRESHOLD: 20, INVENTORY_CRITICAL_THRESHOLD: -3 }));
+  assertEquals_(20, getInventoryRefillThreshold_({ INVENTORY_REFILL_THRESHOLD: 'abc' }));
+  assertEquals_(10, crit({ INVENTORY_REFILL_THRESHOLD: 'abc', INVENTORY_CRITICAL_THRESHOLD: 'zzz' }));
+  assertEquals_(4, crit({ INVENTORY_REFILL_THRESHOLD: 8 }), 'A small low threshold still yields critical < low.');
+  assertEquals_(6, crit({ INVENTORY_REFILL_THRESHOLD: 8, INVENTORY_CRITICAL_THRESHOLD: 6 }));
+  nOps_withMailCapture_(function (capture) {
+    var bad = { ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: 'abc', INVENTORY_CRITICAL_THRESHOLD: 99 };
+    var r = runInventoryAlert_(bad, nOps_inv_(15));
+    assertEquals_('LOW', r.level, 'Safe defaults (20/10) apply; nothing throws.');
+  });
+}
+
+function test_NOps_dailyDigestCriticalAlertAndAlertFailureNeverBreaksDigest_() {
+  nOps_withMailCapture_(function (capture) {
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com', INVENTORY_REFILL_THRESHOLD: '100000', INVENTORY_CRITICAL_THRESHOLD: '99999' }, function () {
+      // Only the inventory alert email fails; the digest email itself succeeds.
+      var original = MailApp.sendEmail;
+      MailApp.sendEmail = function (opts) {
+        if (String(opts.subject).indexOf('Inventory Alert') !== -1) throw new Error('simulated alert outage');
+        return original.call(MailApp, opts);
+      };
+      try {
+        var r = dailyDigest();
+        assertEquals_(true, r.sent, 'The digest is still sent.');
+        assertEquals_('SEND_FAILED', r.inventoryAlert.reason);
+      } finally { MailApp.sendEmail = original; }
+      assertEquals_(1, capture.sent().length);
+      var retry = dailyDigest();
+      assertEquals_('CRITICAL', retry.inventoryAlert.level);
+      assertEquals_(1, nOps_criticalCount_(capture), 'The failed alert was retried at the next digest.');
+      var again = dailyDigest();
+      assertEquals_(false, again.inventoryAlert.alerted);
+      assertEquals_(1, nOps_criticalCount_(capture));
+    });
+  });
+}
+
+
+// ---- v1.0.2 surgical hardening: "stop" as an opt-out vs. a commercial verb ----
+
+function test_NOps_stopOptOutLanguageStillDetected_() {
+  [
+    'stop', 'STOP', 'Stop.', 'Stop!', 'please stop', 'Please stop.', 'stop emailing me', 'please stop emailing me',
+    'please stop contacting me', 'Stop contacting us', 'stop sending me emails', 'stop all emails',
+    'unsubscribe', 'remove me', 'do not contact me', "don't email me again", 'take me off your list', 'no more emails',
+    'Not interested. Stop.', 'STOP\n\nSent from my iPhone', 'Stop, thanks'
+  ].forEach(function (text) {
+    assert_(detectUnsubscribeIntent_(text), 'Must be treated as an unsubscribe: "' + text + '"');
+  });
+}
+
+function test_NOps_stopAsMovementVerbIsNotAnUnsubscribe_() {
+  [
+    'Can you stop by tomorrow?', 'Could you stop by the property?', 'Please stop by around 3pm.',
+    'Please stop by the property around 3.', 'We can stop by the office next week.', 'Could someone stop by the property?',
+    'Can your team stop in tomorrow?', 'Can your cleaner stop in tomorrow?', "Let's stop there first.",
+    "Don't stop the service.", 'Thanks for reaching out. Can you stop by tomorrow at 3? Please confirm.',
+    'I stopped by your shop.', 'We run a nonstop operation.'
+  ].forEach(function (text) {
+    assert_(!detectUnsubscribeIntent_(text), 'Must NOT be treated as an unsubscribe: "' + text + '"');
+  });
+}
+
+function test_NOps_singleCanonicalDetectorUsedByBothReplyPaths_() {
+  var src = String(processThreadForReplies_) + String(unsubscribeRepliedProspectIfRequested_);
+  assert_(src.split('detectUnsubscribeIntent_').length - 1 === 2, 'Both reply paths must call the one canonical detector.');
+  assert_(src.indexOf('new RegExp') === -1 && src.indexOf("'stop'") === -1 && src.indexOf('"stop"') === -1 && src.indexOf('/stop') === -1,
+    'No second, inline detector may exist in the reply paths.');
+}
+
+function test_NOps_firstReplyStopByIsNormalReplyAndBareStopStillSuppresses_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var commercial = nOps_replySetup_('nopsstopby1');
+      commercial.thread._appendMessageForTest(commercial.email, 'Re: hi', 'Yes! Can you stop by tomorrow to give an estimate?', Date.now());
+      var optOut = nOps_replySetup_('nopsstopbare');
+      _testCreatedSuppressionValues.push(optOut.emailNormalized);
+      optOut.thread._appendMessageForTest(optOut.email, 'Re: hi', 'STOP', Date.now());
+      syncReplies(); syncReplies();
+
+      var a = findRowById_(commercial.p.Prospect_ID).values;
+      assertEquals_(STATUS.REPLIED, a.Status, '"stop by" is an ordinary reply.');
+      assertEquals_('', String(a.Do_Not_Contact_Reason || ''));
+      assertEquals_(false, isSuppressed_(commercial.emailNormalized, ''));
+      var b = findRowById_(optOut.p.Prospect_ID).values;
+      assertEquals_(STATUS.STOPPED, b.Status);
+      assertEquals_(DNC_REASON.UNSUBSCRIBE, b.Do_Not_Contact_Reason);
+      assertEquals_(1, nOps_suppressionRowCount_(optOut.emailNormalized));
+      assertEquals_(1, nOps_replyAlerts_(capture).length, 'Only the commercial reply is announced to Jessica.');
+    });
+  });
+}
+
+function test_NOps_repliedProspectStopByStaysReplyNotSuppressedAlertsOnceIdempotent_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsstopby2');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Interested, tell me more.', Date.now() - 120000);
+      syncReplies();
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Can you stop by tomorrow?', Date.now());
+      syncReplies(); syncReplies(); syncReplies();
+
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.REPLIED, after.Status, 'Remains a normal REPLIED prospect.');
+      assertEquals_('', String(after.Do_Not_Contact_Reason || ''));
+      assertEquals_(false, after.Stop_Contact === true);
+      assertEquals_(false, isSuppressed_(setup.emailNormalized, ''), 'Not suppressed.');
+      var alerts = nOps_replyAlerts_(capture);
+      assertEquals_(2, alerts.length, 'The new genuine reply is announced exactly once, however often it is reprocessed.');
+      assert_(alerts[1].body.indexOf('Can you stop by tomorrow?') !== -1);
+    });
+  });
+}
+
+function test_NOps_repliedProspectTrueStopVariantsSuppressCanonicallyAndIdempotently_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      ['STOP', 'Please stop emailing me.'].forEach(function (text, i) {
+        var setup = nOps_replySetup_('nopsstoptrue' + i);
+        _testCreatedSuppressionValues.push(setup.emailNormalized);
+        setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Maybe, send details.', Date.now() - 120000);
+        syncReplies();
+        setup.thread._appendMessageForTest(setup.email, 'Re: hi', text, Date.now());
+        syncReplies(); syncReplies();
+        var after = findRowById_(setup.p.Prospect_ID).values;
+        assertEquals_(STATUS.STOPPED, after.Status, '"' + text + '" must suppress an already-REPLIED prospect.');
+        assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+        assertEquals_(1, nOps_suppressionRowCount_(setup.emailNormalized));
+      });
+      assertEquals_(2, nOps_replyAlerts_(capture).length, 'Only the two initial replies were announced; the opt-outs were not.');
+    });
+  });
+}
+
+// ------------------------------ reply alerts -------------------------------
+
+function nOps_replyAlerts_(capture) {
+  return capture.sent().filter(function (m) { return m.subject.indexOf('Klinner Outreach — Prospect Replied:') === 0; });
+}
+
+function nOps_replySetup_(tag, overrides) {
+  return n14_setupLabeledOldThreadProspect_(tag, getConfig(),
+    Object.assign({ Business_Name: 'Acme Test Co' }, overrides || {}));
+}
+
+function test_NOps_genuineReplyNotifiesJessicaOnceWithCanonicalStateUnchanged_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsreply1');
+      setup.thread._appendMessageForTest(setup.email, 'Re: A quick note', 'Yes, please send me a price for a monthly office clean.', Date.now());
+
+      syncReplies();
+
+      var alerts = nOps_replyAlerts_(capture);
+      assertEquals_(1, alerts.length);
+      assertEquals_('jhessybezerra@gmail.com', alerts[0].to);
+      assertEquals_('Klinner Outreach — Prospect Replied: Acme Test Co', alerts[0].subject);
+      ['Acme Test Co', setup.emailNormalized, 'Prospect_ID: ' + setup.p.Prospect_ID, 'Current status: REPLIED',
+        'send me a price for a monthly office clean', 'reply received after Step 1', 'Human follow-up may be required'].forEach(function (needle) {
+        assert_(alerts[0].body.indexOf(needle) !== -1, 'Alert body must contain "' + needle + '".');
+      });
+
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.REPLIED, after.Status);
+      assertEquals_(true, after.Replied);
+      assert_(!!after.Replied_At);
+      assertEquals_('', String(after.Next_Action_Date || ''));
+      assertEquals_('', String(after.Do_Not_Contact_Reason || ''));
+      assertEquals_(false, isSuppressed_(setup.emailNormalized, ''), 'An ordinary reply must not create a suppression.');
+    });
+  });
+}
+
+function test_NOps_sameInboundMessageProcessedAgainDoesNotNotifyTwice_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsreply2');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Interested, call me.', Date.now());
+      syncReplies(); syncReplies(); syncReplies();
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+    });
+  });
+}
+
+function test_NOps_secondNewInboundReplyInSameThreadNotifiesAgain_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsreply3');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'First reply: what do you charge?', Date.now() - 60000);
+      syncReplies();
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Second reply: my number is 555-0100.', Date.now());
+      syncReplies();
+      var alerts = nOps_replyAlerts_(capture);
+      assertEquals_(2, alerts.length, 'A genuinely new message must notify again.');
+      assert_(alerts[1].body.indexOf('my number is 555-0100') !== -1);
+      assert_(alerts[1].body.indexOf('what do you charge') === -1, 'The first message must not be re-sent.');
+      syncReplies();
+      assertEquals_(2, nOps_replyAlerts_(capture).length, 'Still exactly one alert per message.');
+      assertEquals_(STATUS.REPLIED, findRowById_(setup.p.Prospect_ID).values.Status);
+    });
+  });
+}
+
+function test_NOps_bounceDoesNotNotify_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsbounce');
+      setup.thread._appendMessageForTest('Mail Delivery Subsystem <mailer-daemon@googlemail.com>', 'Delivery Status Notification (Failure)',
+        'Address not found', Date.now());
+      _testCreatedSuppressionValues.push(setup.emailNormalized); // canonical bounce handling adds a suppression row.
+      syncReplies();
+      assertEquals_(0, nOps_replyAlerts_(capture).length);
+      assertEquals_(STATUS.BOUNCED, findRowById_(setup.p.Prospect_ID).values.Status, 'Bounce handling is unchanged.');
+    });
+  });
+}
+
+function test_NOps_mailerDaemonAndPostmasterNeverNotify_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var a = nOps_replySetup_('nopsmd');
+      a.thread._appendMessageForTest('mailer-daemon@example-mail.test', 'Undeliverable', 'x', Date.now());
+      var b = nOps_replySetup_('nopspm');
+      b.thread._appendMessageForTest('postmaster@example-mail.test', 'Returned mail', 'x', Date.now());
+      _testCreatedSuppressionValues.push(a.emailNormalized, b.emailNormalized);
+      syncReplies();
+      assertEquals_(0, nOps_replyAlerts_(capture).length);
+    });
+  });
+}
+
+function test_NOps_autoReplyDoesNotNotify_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsauto');
+      setup.thread._appendMessageForTest(setup.email, 'Automatic reply: Out of office', 'I am away until Monday.', Date.now());
+      syncReplies();
+      assertEquals_(0, nOps_replyAlerts_(capture).length);
+      assertEquals_(STATUS.IN_SEQUENCE, findRowById_(setup.p.Prospect_ID).values.Status, 'Autoreply handling is unchanged.');
+    });
+  });
+}
+
+function test_NOps_unrelatedThreadNeverNotifies_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var config = getConfig();
+      var thread = GmailApp._seedLiveThread('someone-else@example.com', config.SENDER_EMAIL || 'outreach-test@example.com',
+        { internalDate: Date.now() - 5 * 86400000 });
+      _testCreatedThreadIds_.push(thread.getId());
+      var label = GmailApp.getUserLabelByName(config.GMAIL_LABEL || DEFAULT_GMAIL_LABEL) || GmailApp.createLabel(config.GMAIL_LABEL || DEFAULT_GMAIL_LABEL);
+      thread.addLabel(label);
+      thread._appendMessageForTest('someone-else@example.com', 'Re: unrelated', 'Hello there', Date.now());
+      syncReplies();
+      assertEquals_(0, nOps_replyAlerts_(capture).length, 'A Gmail thread not mapped to a prospect is never touched or announced.');
+    });
+  });
+}
+
+function test_NOps_internalAdminAndAlertAddressMessagesNeverNotify_() {
+  nOps_withMailCapture_(function (capture) {
+    nOps_withConfig_({ ADMIN_EMAIL: 'ops-admin@example.com' }, function () {
+      n14_withReplySyncWindowForced_(function () {
+        var a = nOps_replySetup_('nopsint1');
+        a.thread._appendMessageForTest('Ops Admin <ops-admin@example.com>', 'Re: fwd', 'FYI internal note', Date.now());
+        var b = nOps_replySetup_('nopsint2');
+        b.thread._appendMessageForTest('jhessybezerra@gmail.com', 'Re: fwd', 'Jessica note in the thread', Date.now());
+        syncReplies();
+        assertEquals_(0, nOps_replyAlerts_(capture).length);
+      });
+    });
+  });
+}
+
+function test_NOps_controlledFixtureReplyNeverNotifies_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsfix', { Source: CONTROLLED_FIXTURE_SOURCES[0] });
+      setup.thread._appendMessageForTest(setup.email, 'Re: test', 'fixture reply', Date.now());
+      try {
+        syncReplies();
+        assertEquals_(0, nOps_replyAlerts_(capture).length);
+        assertEquals_(STATUS.REPLIED, findRowById_(setup.p.Prospect_ID).values.Status, 'Canonical processing still applies.');
+      } finally { n8_deleteFixtureRow_(setup.p.Prospect_ID); }
+    });
+  });
+}
+
+function test_NOps_unsubscribeStaysCanonicalAndIsNotAnnouncedAsReply_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsunsub');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'unsubscribe', Date.now());
+      _testCreatedSuppressionValues.push(setup.emailNormalized);
+      syncReplies();
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.STOPPED, after.Status);
+      assertEquals_(DNC_REASON.UNSUBSCRIBE, after.Do_Not_Contact_Reason);
+      assertEquals_(true, isSuppressed_(setup.emailNormalized, ''));
+      assertEquals_(0, nOps_replyAlerts_(capture).length, 'Unsubscribe keeps its own handling; no reply alert.');
+    });
+  });
+}
+
+function test_NOps_notificationSendFailureKeepsReplyProcessedLogsAndRetriesOnce_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsfail');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Please call me about pricing.', Date.now());
+
+      nOps_withMailFailure_(function () { syncReplies(); }); // must not throw
+
+      var after = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.REPLIED, after.Status, 'The canonical reply must be recorded despite the alert failure.');
+      assertEquals_(true, after.Replied);
+      assertEquals_(0, nOps_replyAlerts_(capture).length);
+      assert_(!!findLogEventInSheet_(LOG_EVENT.REPLY_ALERT_FAILED), 'The alert failure must be logged.');
+      assertEquals_(0, readAlertedReplyIds_(setup.p.Prospect_ID).length, 'A failed alert must not remain recorded as delivered.');
+
+      syncReplies(); // retry
+      assertEquals_(1, nOps_replyAlerts_(capture).length, 'The failed alert is retried exactly once.');
+      syncReplies();
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+    });
+  });
+}
+
+function test_NOps_alertStateStoreFailureFailsClosedWithoutBreakingReply_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsprops');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Tell me more.', Date.now());
+      var original = PropertiesService.getScriptProperties;
+      PropertiesService.getScriptProperties = function () { throw new Error('simulated Properties outage'); };
+      try { syncReplies(); } finally { PropertiesService.getScriptProperties = original; }
+      assertEquals_(0, nOps_replyAlerts_(capture).length, 'No claim record => no email (never risk a duplicate).');
+      assertEquals_(STATUS.REPLIED, findRowById_(setup.p.Prospect_ID).values.Status);
+    });
+  });
+}
+
+function test_NOps_replyAlertEmailIsConfigurableWithSafeFallback_() {
+  nOps_withMailCapture_(function (capture) {
+    nOps_withConfig_({ REPLY_ALERT_EMAIL: 'other-owner@example.com' }, function () {
+      assertEquals_('other-owner@example.com', getReplyAlertEmail_(getConfig()));
+    });
+    nOps_withConfig_({ REPLY_ALERT_EMAIL: '' }, function () {
+      assertEquals_('jhessybezerra@gmail.com', getReplyAlertEmail_(getConfig()), 'A blank value falls back to the default.');
+    });
+    assertEquals_('jhessybezerra@gmail.com', getReplyAlertEmail_({}), 'A Config sheet without the row falls back too.');
+  });
+}
+
+function test_NOps_alreadyRepliedProspectLaterBounceOrAutoreplyNeverNotifies_() {
+  nOps_withMailCapture_(function (capture) {
+    n14_withReplySyncWindowForced_(function () {
+      var setup = nOps_replySetup_('nopsafter');
+      setup.thread._appendMessageForTest(setup.email, 'Re: hi', 'Sounds interesting.', Date.now() - 120000);
+      syncReplies();
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+      setup.thread._appendMessageForTest(setup.email, 'Automatic reply: Out of office', 'Away.', Date.now() - 60000);
+      setup.thread._appendMessageForTest('mailer-daemon@example-mail.test', 'Undeliverable', 'x', Date.now());
+      syncReplies();
+      assertEquals_(1, nOps_replyAlerts_(capture).length);
+      assertEquals_(STATUS.REPLIED, findRowById_(setup.p.Prospect_ID).values.Status, 'The notification pass changes no prospect state.');
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -7874,7 +8751,63 @@ var F1_TEST_FUNCTIONS = [
   ['NAcme_duplicateMatchingLedgerRowsRejected', test_NAcme_duplicateMatchingLedgerRowsRejected_],
   ['NAcme_isLiveKeyBlockedBeforeAndAfter', test_NAcme_isLiveKeyBlockedTrueBeforeFalseAfterReconciliation_],
   ['NAcme_dailyCountAndDigestNeverCredit', test_NAcme_dailyCountAndDigestNeverCreditMisdirectedAsSent_],
-  ['NAcme_unrelatedRowsUntouched', test_NAcme_unrelatedProspectAndLedgerRowsUntouched_]
+  ['NAcme_unrelatedRowsUntouched', test_NAcme_unrelatedProspectAndLedgerRowsUntouched_],
+  ['NOps_inventoryAboveThresholdSendsNoAlert', test_NOps_inventoryAboveThresholdSendsNoAlert_],
+  ['NOps_transitionToThresholdSendsExactlyOneAlertThenNoDuplicates', test_NOps_transitionToThresholdSendsExactlyOneAlertThenNoDuplicates_],
+  ['NOps_refillRearmsAndLaterDropAlertsAgain', test_NOps_refillRearmsAndLaterDropAlertsAgain_],
+  ['NOps_inventoryAlertEmailContent', test_NOps_inventoryAlertEmailContent_],
+  ['NOps_inventoryAlertSendFailureIsRetriedNotLost', test_NOps_inventoryAlertSendFailureIsRetriedNotLost_],
+  ['NOps_thresholdFallsBackTo20WhenMissingOrInvalid', test_NOps_thresholdFallsBackTo20WhenMissingOrInvalid_],
+  ['NOps_readyCountsAsFutureInventory', test_NOps_readyCountsAsFutureInventory_],
+  ['NOps_inSequenceWithFutureStepsCounts', test_NOps_inSequenceWithFutureStepsCounts_],
+  ['NOps_exhaustedSequenceDoesNotCount', test_NOps_exhaustedSequenceDoesNotCount_],
+  ['NOps_stoppedDoesNotCount', test_NOps_stoppedDoesNotCount_],
+  ['NOps_repliedDoesNotCount', test_NOps_repliedDoesNotCount_],
+  ['NOps_suppressedDoesNotCount', test_NOps_suppressedDoesNotCount_],
+  ['NOps_bouncedDoesNotCount', test_NOps_bouncedDoesNotCount_],
+  ['NOps_invalidEmailDoesNotCount', test_NOps_invalidEmailDoesNotCount_],
+  ['NOps_duplicateDoesNotCount', test_NOps_duplicateDoesNotCount_],
+  ['NOps_needsReviewAndBlankDateDoNotCount', test_NOps_needsReviewAndBlankDateDoNotCount_],
+  ['NOps_controlledFixtureDoesNotCount', test_NOps_controlledFixtureDoesNotCount_],
+  ['NOps_sharedCorporateDomainDoesNotRemoveInventory', test_NOps_sharedCorporateDomainDoesNotRemoveInventory_],
+  ['NOps_dailyDigestKeepsReadyLineAddsInventoryAndAlertsOnce', test_NOps_dailyDigestKeepsReadyLineAddsInventoryAndAlertsOnce_],
+  ['NOps_dailyDigestRearmsAfterRefillViaDigest', test_NOps_dailyDigestRearmsAfterRefillViaDigest_],
+  ['NOps_dailyDigestWithAdminEmailPendingSendsNothingAndKeepsState', test_NOps_dailyDigestWithAdminEmailPendingSendsNothingAndKeepsState_],
+  ['NOps_inventoryAlertFailureNeverBreaksDigest', test_NOps_inventoryAlertFailureNeverBreaksDigest_],
+  ['NOps_noNewTriggersAndFourManagedHandlersUnchanged', test_NOps_noNewTriggersAndFourManagedHandlersUnchanged_],
+  ['NOps_genuineReplyNotifiesJessicaOnceWithCanonicalStateUnchanged', test_NOps_genuineReplyNotifiesJessicaOnceWithCanonicalStateUnchanged_],
+  ['NOps_sameInboundMessageProcessedAgainDoesNotNotifyTwice', test_NOps_sameInboundMessageProcessedAgainDoesNotNotifyTwice_],
+  ['NOps_secondNewInboundReplyInSameThreadNotifiesAgain', test_NOps_secondNewInboundReplyInSameThreadNotifiesAgain_],
+  ['NOps_bounceDoesNotNotify', test_NOps_bounceDoesNotNotify_],
+  ['NOps_mailerDaemonAndPostmasterNeverNotify', test_NOps_mailerDaemonAndPostmasterNeverNotify_],
+  ['NOps_autoReplyDoesNotNotify', test_NOps_autoReplyDoesNotNotify_],
+  ['NOps_unrelatedThreadNeverNotifies', test_NOps_unrelatedThreadNeverNotifies_],
+  ['NOps_internalAdminAndAlertAddressMessagesNeverNotify', test_NOps_internalAdminAndAlertAddressMessagesNeverNotify_],
+  ['NOps_controlledFixtureReplyNeverNotifies', test_NOps_controlledFixtureReplyNeverNotifies_],
+  ['NOps_unsubscribeStaysCanonicalAndIsNotAnnouncedAsReply', test_NOps_unsubscribeStaysCanonicalAndIsNotAnnouncedAsReply_],
+  ['NOps_notificationSendFailureKeepsReplyProcessedLogsAndRetriesOnce', test_NOps_notificationSendFailureKeepsReplyProcessedLogsAndRetriesOnce_],
+  ['NOps_alertStateStoreFailureFailsClosedWithoutBreakingReply', test_NOps_alertStateStoreFailureFailsClosedWithoutBreakingReply_],
+  ['NOps_replyAlertEmailIsConfigurableWithSafeFallback', test_NOps_replyAlertEmailIsConfigurableWithSafeFallback_],
+  ['NOps_alreadyRepliedProspectLaterBounceOrAutoreplyNeverNotifies', test_NOps_alreadyRepliedProspectLaterBounceOrAutoreplyNeverNotifies_],
+  ['NOps_repliedProspectLaterUnsubscribeIsSuppressedCanonically', test_NOps_repliedProspectLaterUnsubscribeIsSuppressedCanonically_],
+  ['NOps_postRepliedUnsubscribeIsIdempotent', test_NOps_postRepliedUnsubscribeIsIdempotent_],
+  ['NOps_laterNormalReplyAlertsOncePerMessageThenUnsubscribeStopsCleanly', test_NOps_laterNormalReplyAlertsOncePerMessageThenUnsubscribeStopsCleanly_],
+  ['NOps_quotedFooterInLaterReplyIsNotAnUnsubscribe', test_NOps_quotedFooterInLaterReplyIsNotAnUnsubscribe_],
+  ['NOps_postRepliedUnsubscribeFailureIsIsolatedAndRetried', test_NOps_postRepliedUnsubscribeFailureIsIsolatedAndRetried_],
+  ['NOps_firstResponseUnsubscribeBehaviorUnchangedByHardening', test_NOps_firstResponseUnsubscribeBehaviorUnchangedByHardening_],
+  ['NOps_criticalAlertAtThresholdOnceLowAtTwentyOnce', test_NOps_criticalAlertAtThresholdOnceLowAtTwentyOnce_],
+  ['NOps_refillRearmsBothLevels', test_NOps_refillRearmsBothLevels_],
+  ['NOps_directJumpAboveLowToCriticalSendsOnlyCriticalOnce', test_NOps_directJumpAboveLowToCriticalSendsOnlyCriticalOnce_],
+  ['NOps_criticalAlertGoesToAdminNotReplyAlertAddress', test_NOps_criticalAlertGoesToAdminNotReplyAlertAddress_],
+  ['NOps_criticalSendFailureRestoresPriorStateAndRetries', test_NOps_criticalSendFailureRestoresPriorStateAndRetries_],
+  ['NOps_invalidCriticalAndLowConfigFallBackSafely', test_NOps_invalidCriticalAndLowConfigFallBackSafely_],
+  ['NOps_dailyDigestCriticalAlertAndAlertFailureNeverBreaksDigest', test_NOps_dailyDigestCriticalAlertAndAlertFailureNeverBreaksDigest_],
+  ['NOps_stopOptOutLanguageStillDetected', test_NOps_stopOptOutLanguageStillDetected_],
+  ['NOps_stopAsMovementVerbIsNotAnUnsubscribe', test_NOps_stopAsMovementVerbIsNotAnUnsubscribe_],
+  ['NOps_singleCanonicalDetectorUsedByBothReplyPaths', test_NOps_singleCanonicalDetectorUsedByBothReplyPaths_],
+  ['NOps_firstReplyStopByIsNormalReplyAndBareStopStillSuppresses', test_NOps_firstReplyStopByIsNormalReplyAndBareStopStillSuppresses_],
+  ['NOps_repliedProspectStopByStaysReplyNotSuppressedAlertsOnceIdempotent', test_NOps_repliedProspectStopByStaysReplyNotSuppressedAlertsOnceIdempotent_],
+  ['NOps_repliedProspectTrueStopVariantsSuppressCanonicallyAndIdempotently', test_NOps_repliedProspectTrueStopVariantsSuppressCanonicallyAndIdempotently_]
 ];
 
 /** Run manually once a real Gmail thread has been set up per its docstring — not part of the automated suite. */
@@ -8005,6 +8938,12 @@ function cleanupTestArtifacts_(testRunId, sandboxBefore) {
   if (sandboxBefore) {
     if (sandboxBefore.callCounts && typeof GmailApp._setCallCounts === 'function') {
       try { GmailApp._setCallCounts(sandboxBefore.callCounts); } catch (e) { /* best effort */ }
+    }
+    if (sandboxBefore.mailOutbox && MailApp._sent) {
+      try { MailApp._sent.length = sandboxBefore.mailOutbox.sent; MailApp._remainingQuota = sandboxBefore.mailOutbox.quota; } catch (e) { /* best effort */ }
+    }
+    if (sandboxBefore.properties && typeof PropertiesService._restore === 'function') {
+      try { PropertiesService._restore(sandboxBefore.properties); } catch (e) { /* best effort */ }
     }
     if (sandboxBefore.labelNames && typeof GmailApp._removeLabelForTest === 'function') {
       try {
@@ -8217,10 +9156,23 @@ function snapshotSandboxState_() {
     Suppression: sheetContentSignature_(SHEET_NAMES.SUPPRESSION)
   };
 
+  // v1.0.2: Script Properties (alert state) are shared mock state too.
+  var properties = null;
+  try {
+    if (typeof PropertiesService._snapshot === 'function') properties = PropertiesService._snapshot();
+  } catch (e) { properties = 'PROPERTIES_SNAPSHOT_FAILED'; }
+
+  // v1.0.2: the mock mail outbox — pre-existing full-pipeline reply tests
+  // now trigger the reply alert, so a leaked outbox must be detectable.
+  var mailOutbox = null;
+  try {
+    if (MailApp._sent) mailOutbox = { sent: MailApp._sent.length, quota: MailApp._remainingQuota };
+  } catch (e) { mailOutbox = { sent: -1, quota: -1 }; }
+
   return {
     draftIds: draftIds, threadIds: threadIds, patchables: patchables,
     gmailState: gmailState, callCounts: callCounts, labelNames: labelNames, sheets: sheets,
-    configCache: configCache
+    configCache: configCache, properties: properties, mailOutbox: mailOutbox
   };
 }
 
@@ -8282,6 +9234,15 @@ function verifyCleanTestState_(testRunId, sandboxBefore) {
             '" after="' + after.gmailState[field] + '")');
         }
       });
+    }
+
+    if (sandboxBefore.mailOutbox && (after.mailOutbox.sent !== sandboxBefore.mailOutbox.sent ||
+        after.mailOutbox.quota !== sandboxBefore.mailOutbox.quota)) {
+      problems.push('Mock mail outbox not restored (before=' + sandboxBefore.mailOutbox.sent + ' after=' + after.mailOutbox.sent + ')');
+    }
+    if (sandboxBefore.properties && after.properties !== sandboxBefore.properties) {
+      problems.push('Script Properties not restored (before=' + sandboxBefore.properties.slice(0, 120) +
+        ' after=' + String(after.properties).slice(0, 120) + ')');
     }
 
     // P1: the shared in-memory Config cache. Two independent checks,

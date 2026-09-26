@@ -109,6 +109,8 @@ function inspect() {
     labels: G._labelNames().sort(),
     sentIndex: G._sentIndex.map(function (e) { return e.recipientEmail + '>' + e.thread.getId(); }).sort(),
     callCounts: JSON.stringify(G._callCounts),
+    scriptProperties: ctx.PropertiesService._snapshot(),
+    mailOutbox: String(ctx.MailApp._sent.length) + '/' + String(ctx.MailApp._remainingQuota),
     configCache: configCacheView(),
     sheets: sheetsOut,
     lockHeld: lockHeld,
@@ -167,6 +169,8 @@ compareValue('Gmail messages (total across threads)', before.messageCount, after
 compareList('Gmail labels', before.labels, after.labels);
 compareList('Gmail sent index', before.sentIndex, after.sentIndex);
 compareValue('Gmail call counters', before.callCounts, after.callCounts);
+compareValue('Script Properties (v1.0.2 alert state)', before.scriptProperties, after.scriptProperties);
+compareValue('MailApp outbox (sent count/remaining quota)', before.mailOutbox, after.mailOutbox);
 compareValue('_configCache', before.configCache, after.configCache);
 SHEETS.forEach(function (n) { compareValue(n + ' sheet content', before.sheets[n], after.sheets[n]); });
 

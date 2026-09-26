@@ -852,6 +852,7 @@ function buildSandbox() {
     getScriptTimeZone: function () { return 'America/Chicago'; },
     getEffectiveUser: function () { return { getEmail: function () { return 'test-resolved-sender_email@example.com'; } }; }
   };
+  sandbox.PropertiesService = createMockPropertiesService();
   sandbox.MailApp = {
     _sent: [],
     _remainingQuota: 1500,
@@ -862,6 +863,31 @@ function buildSandbox() {
     getRemainingDailyQuota: function () { return sandbox.MailApp._remainingQuota; }
   };
   return sandbox;
+}
+
+/**
+ * Script Properties mock (v1.0.2 alert state). _snapshot/_restore exist so
+ * the suite's isolation check can prove a test left no property behind.
+ */
+function createMockPropertiesService() {
+  var store = {};
+  var scriptProps = {
+    getProperty: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setProperty: function (k, v) { store[k] = String(v); return scriptProps; },
+    deleteProperty: function (k) { delete store[k]; return scriptProps; },
+    getKeys: function () { return Object.keys(store); },
+    getProperties: function () { return Object.assign({}, store); }
+  };
+  return {
+    getScriptProperties: function () { return scriptProps; },
+    _snapshot: function () {
+      return JSON.stringify(Object.keys(store).sort().map(function (k) { return [k, store[k]]; }));
+    },
+    _restore: function (snapshot) {
+      Object.keys(store).forEach(function (k) { delete store[k]; });
+      JSON.parse(snapshot).forEach(function (kv) { store[kv[0]] = kv[1]; });
+    }
+  };
 }
 
 module.exports = { buildSandbox: buildSandbox, createInMemorySheet: createInMemorySheet };
