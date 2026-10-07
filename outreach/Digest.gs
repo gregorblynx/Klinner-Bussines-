@@ -38,7 +38,7 @@ function computeDigest_() {
   var ready = rows.filter(function (r) { return r.values.Status === STATUS.READY; }).length;
   var errors = rows.filter(function (r) { return Number(r.values.Error_Count) > 0; }).length;
 
-  var sentToday = getDailyLiveSentCount_();
+  var sentToday = getDailyLiveQuotaUsedCount_();
   var cap = config.MAX_PER_DAY || 5; // Always reads live from Config; this fallback only covers a missing key.
 
   var inventory = computeQualifiedFutureInventory_(config);

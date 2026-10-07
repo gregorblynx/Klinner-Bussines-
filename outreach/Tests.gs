@@ -4870,6 +4870,172 @@ function test_N11_suppressionAndEveryLiveHistoryBlockRecovery_() {
 // N12 — Google-real post-send decode incident and exact, read-only-Gmail
 // reconciliation of the one immutable controlled Step-2 AMBIGUOUS row.
 
+function test_v103_unicodeMimeSubjectsRoundTrip_() {
+  var subjects = [
+    'A quick note about Barclé Group',
+    'A quick note about José Property Management',
+    'A quick note about Peña Rentals',
+    'A quick note about São Paulo Homes',
+    'A quick note about Plain ASCII Group'
+  ];
+  withLiveModeEnabledForTest_(function () {
+    subjects.forEach(function (subject, index) {
+      var setup = n10_setupDueControlledStep2Fixture_('v103mime' + index);
+      var prior = setup.thread.getMessages()[0];
+      prior._headers.Subject = subject;
+      var originalSend = Gmail.Users.Messages.send;
+      var rawMime = '';
+      Gmail.Users.Messages.send = function (resource, userId) {
+        rawMime = Utilities.newBlob(Utilities.base64DecodeWebSafe(resource.raw)).getDataAsString('UTF-8');
+        return originalSend(resource, userId);
+      };
+      try {
+        var result = sendControlledFixtureStep2Live(setup.p.Prospect_ID);
+        assertEquals_('SENT', result.status, subject + ' must pass exact Gmail returned-message verification.');
+        var subjectLine = /(?:^|\r\n)Subject: ([^\r\n]+)/.exec(rawMime);
+        assert_(!!subjectLine, 'Raw MIME must contain a Subject header.');
+        if (/[^\x20-\x7E]/.test(subject)) {
+          assert_(subjectLine[1].indexOf('=?UTF-8?B?') === 0, 'Unicode Subject must use RFC 2047 encoded-word.');
+          assert_(!/[^\x00-\x7F]/.test(subjectLine[1]), 'Raw Subject header must contain ASCII only.');
+        } else {
+          assertEquals_(subject, subjectLine[1], 'ASCII Subject must remain unchanged.');
+        }
+      } finally {
+        Gmail.Users.Messages.send = originalSend;
+        n8_deleteFixtureRow_(setup.p.Prospect_ID);
+      }
+    });
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '10' });
+}
+
+function test_v103_possibleSendsReserveDailyQuota_() {
+  var baseline = getDailyLiveQuotaUsedCount_();
+  var now = new Date();
+  var states = [LEDGER_STATE.SENT, LEDGER_STATE.CLAIMED, LEDGER_STATE.AMBIGUOUS,
+    LEDGER_STATE.FAILED, LEDGER_STATE.MISDIRECTED];
+  var rows = [];
+  states.forEach(function (state, index) {
+    rows.push(appendLedgerRow_({
+      Run_ID: getRunId_(), Claimed_At: now, Prospect_ID: 'v103-quota-' + index,
+      Email_Normalized: 'quota' + index + '@example.com', Step: 2,
+      Idempotency_Key: 'v103-quota-' + index + ':2', Mode: LEDGER_MODE.LIVE,
+      State: state, Thread_ID: 'v103-thread', Message_ID: '', Draft_ID: '',
+      Confirmed_At: state === LEDGER_STATE.SENT ? now : '', Error: ''
+    }));
+  });
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: now, Prospect_ID: 'v103-preview',
+    Email_Normalized: 'preview@example.com', Step: 2, Idempotency_Key: 'v103-preview:2',
+    Mode: LEDGER_MODE.DRY_RUN, State: LEDGER_STATE.AMBIGUOUS, Thread_ID: '',
+    Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: ''
+  });
+  assertEquals_(baseline + 3, getDailyLiveQuotaUsedCount_(),
+    'SENT, CLAIMED and AMBIGUOUS each consume one slot; FAILED, MISDIRECTED and DRY_RUN do not.');
+  assertEquals_(0, computeLiveSendBudget_({ MAX_PER_DAY: baseline + 3, QUOTA_SAFETY_MARGIN: 0 }),
+    'At the daily cap, an unresolved possible send must leave no LIVE send budget.');
+  updateLedgerRow_(rows[2], { State: LEDGER_STATE.SENT, Confirmed_At: now });
+  assertEquals_(baseline + 3, getDailyLiveQuotaUsedCount_(),
+    'Reconciling AMBIGUOUS to SENT must never count the same attempt twice.');
+}
+
+function v103_setupRealAmbiguousFollowUp_(tag) {
+  var config = getConfig();
+  var setup = n10_setupDueControlledStep2Fixture_(tag, {
+    Source: 'https://barclegroup.com/', Business_Name: 'Barclé Group', Status: STATUS.NEEDS_REVIEW
+  });
+  var p = setup.p;
+  var prior = setup.thread.getMessages()[0];
+  prior._internalDate = new Date(p.Step1_Sent_At).getTime();
+  prior._headers.Subject = 'A quick note about Barclé Group';
+  var priorRfc = prior._headers['Message-ID'];
+  var rendered = renderTemplateForStep_(2, p, config);
+  var hash = computeDraftFingerprint_(p.Email_Normalized, prior._headers.Subject, rendered.body);
+  var claim = new Date(Date.now() - 2000);
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: p.Step1_Sent_At, Prospect_ID: p.Prospect_ID,
+    Email_Normalized: p.Email_Normalized, Step: 1, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 1),
+    Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.SENT, Thread_ID: p.Thread_ID,
+    Message_ID: p.Last_Message_ID, Draft_ID: '', Confirmed_At: p.Step1_Sent_At, Error: ''
+  });
+  appendLedgerRow_({
+    Run_ID: getRunId_(), Claimed_At: claim, Prospect_ID: p.Prospect_ID,
+    Email_Normalized: p.Email_Normalized, Step: 2, Idempotency_Key: getIdempotencyKey_(p.Prospect_ID, 2),
+    Mode: LEDGER_MODE.LIVE, State: LEDGER_STATE.AMBIGUOUS, Thread_ID: p.Thread_ID,
+    Message_ID: '', Draft_ID: '', Confirmed_At: '', Error: 'Legacy Unicode MIME verification mismatch'
+  });
+  var fields = {
+    From: config.SENDER_NAME + ' <' + config.SENDER_EMAIL + '>', To: p.Email_Normalized,
+    Subject: 'A quick note about BarclÃ© Group', 'In-Reply-To': priorRfc,
+    References: priorRfc, 'X-Klinner-Body-SHA256': hash, body: rendered.body
+  };
+  var message = GmailApp._makeApiSentMessage(fields, p.Thread_ID, { internalDate: Date.now() });
+  return { p: p, fields: fields, message: message, thread: setup.thread };
+}
+
+function test_v103_genericLiveAmbiguousReconcilesWithoutSend_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = v103_setupRealAmbiguousFollowUp_('v103reconcile');
+    try {
+      GmailApp._resetCallCounts();
+      var outcome = reconcileLiveAmbiguousSent(setup.p.Prospect_ID, setup.message.getId());
+      assertEquals_('RECONCILED_SENT', outcome.status);
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Reconciliation must never send Gmail mail.');
+      assertEquals_(0, GmailApp._callCounts.send, 'Reconciliation must never send a Gmail draft.');
+      var ledger = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID && Number(r.values.Step) === 2;
+      });
+      assertEquals_(1, ledger.length);
+      assertEquals_(LEDGER_STATE.SENT, ledger[0].values.State);
+      assertEquals_(setup.message.getId(), ledger[0].values.Message_ID);
+      assert_(String(ledger[0].values.Error).indexOf('Legacy Unicode MIME verification mismatch') !== -1,
+        'The original AMBIGUOUS reason must remain in the ledger.');
+      var p = findRowById_(setup.p.Prospect_ID).values;
+      assertEquals_(STATUS.IN_SEQUENCE, p.Status);
+      assertEquals_(2, Number(p.Sequence_Step));
+      assertEquals_(setup.message.getId(), p.Last_Message_ID);
+      assert_(!!p.Step2_Sent_At && !!p.Next_Action_Date);
+      assertEquals_('ALREADY_RECONCILED', reconcileLiveAmbiguousSent(setup.p.Prospect_ID, setup.message.getId()).status);
+      assertEquals_(0, GmailApp._callCounts.apiSend, 'Idempotent replay must never send.');
+    } finally { n8_deleteFixtureRow_(setup.p.Prospect_ID); }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '10' });
+}
+
+function test_v103_genericReconciliationRejectsDuplicateAndMismatch_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = v103_setupRealAmbiguousFollowUp_('v103duplicate');
+    try {
+      GmailApp._makeApiSentMessage(setup.fields, setup.p.Thread_ID, { internalDate: Date.now() });
+      GmailApp._resetCallCounts();
+      assertEquals_('REJECTED_DUPLICATE_OR_LATER_THREAD_ACTIVITY',
+        reconcileLiveAmbiguousSent(setup.p.Prospect_ID, setup.message.getId()).status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+      var ledger = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID && Number(r.values.Step) === 2;
+      })[0];
+      assertEquals_(LEDGER_STATE.AMBIGUOUS, ledger.values.State, 'Rejected duplicate must leave ledger blocked.');
+      assertEquals_(STATUS.NEEDS_REVIEW, findRowById_(setup.p.Prospect_ID).values.Status);
+    } finally { n8_deleteFixtureRow_(setup.p.Prospect_ID); }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '10' });
+}
+
+function test_v103_genericReconciliationRejectsContentMismatch_() {
+  withLiveModeEnabledForTest_(function () {
+    var setup = v103_setupRealAmbiguousFollowUp_('v103badcontent');
+    try {
+      setup.message._headers['X-Klinner-Body-SHA256'] = 'tampered';
+      GmailApp._resetCallCounts();
+      assertEquals_('REJECTED_GMAIL_CONTENT_EVIDENCE',
+        reconcileLiveAmbiguousSent(setup.p.Prospect_ID, setup.message.getId()).status);
+      assertEquals_(0, GmailApp._callCounts.apiSend);
+      var ledger = readAllLedgerRows_().filter(function (r) {
+        return r.values.Prospect_ID === setup.p.Prospect_ID && Number(r.values.Step) === 2;
+      })[0];
+      assertEquals_(LEDGER_STATE.AMBIGUOUS, ledger.values.State);
+      assertEquals_(STATUS.NEEDS_REVIEW, findRowById_(setup.p.Prospect_ID).values.Status);
+    } finally { n8_deleteFixtureRow_(setup.p.Prospect_ID); }
+  }, { MAX_PER_RUN: '1', MAX_PER_DAY: '10' });
+}
+
 function n12_expectThrow_(fn, expectedText) {
   var threw = false;
   try { fn(); } catch (e) {
@@ -8673,6 +8839,11 @@ var F1_TEST_FUNCTIONS = [
   ['N11_realAndWrongSourceRejected', test_N11_realProspectAndWrongSourceRejected_],
   ['N11_invalidFixtureStateRejected', test_N11_recoveryRejectsInvalidFixtureState_],
   ['N11_suppressionAndLiveHistoryRejected', test_N11_suppressionAndEveryLiveHistoryBlockRecovery_],
+  ['v103_unicodeMimeSubjectsRoundTrip', test_v103_unicodeMimeSubjectsRoundTrip_],
+  ['v103_possibleSendsReserveDailyQuota', test_v103_possibleSendsReserveDailyQuota_],
+  ['v103_genericLiveAmbiguousReconcilesWithoutSend', test_v103_genericLiveAmbiguousReconcilesWithoutSend_],
+  ['v103_genericReconciliationRejectsDuplicate', test_v103_genericReconciliationRejectsDuplicateAndMismatch_],
+  ['v103_genericReconciliationRejectsContentMismatch', test_v103_genericReconciliationRejectsContentMismatch_],
   ['N12_realAppsScriptGmailByteArray', test_N12_realAppsScriptGmailByteArrayBody_],
   ['N12_gmailBase64UrlRealShapes', test_N12_gmailBase64UrlDecoderHandlesRealPayloadShapes_],
   ['N12_gmailBase64UrlMalformedFailsClosed', test_N12_gmailBase64UrlDecoderRejectsMalformedOrAmbiguousPayloads_],

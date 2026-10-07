@@ -24,6 +24,7 @@ function onOpen() {
     .addItem('Send selected CONTROLLED fixture Step 2 (LIVE)', 'menu_sendControlledFixtureStep2Live_')
     .addItem('Recover selected CONTROLLED Step 2 pre-send failure', 'menu_recoverControlledFixtureStep2PreSendFailure_')
     .addItem('Reconcile selected CONTROLLED Step 2 AMBIGUOUS', 'menu_reconcileControlledFixtureStep2Ambiguous_')
+    .addItem('Reconcile selected LIVE AMBIGUOUS sent message', 'menu_reconcileLiveAmbiguousSent_')
     .addItem('Sync replies now', 'menu_syncRepliesNow_')
     .addSeparator()
     .addItem('Stop prospect (selected row)', 'menu_stopProspect_')
@@ -247,6 +248,25 @@ function menu_reconcileControlledFixtureStep2Ambiguous_() {
     if (response !== ui.Button.YES) return;
     var result = reconcileControlledFixtureStep2Ambiguous(prospectId);
     ui.alert('Reconcile selected CONTROLLED Step 2 AMBIGUOUS', 'Result: ' + result.status, ui.ButtonSet.OK);
+  });
+}
+
+/** Reconciles one existing Gmail SENT message after exact evidence checks. */
+function menu_reconcileLiveAmbiguousSent_() {
+  guardedMenuAction_(function (ui) {
+    var prospectId = getSelectedProspectId_(ui);
+    var response = ui.prompt('Reconcile selected LIVE AMBIGUOUS',
+      'Enter the Gmail internal Message_ID for the already-sent message. This action never sends email. Prospect_ID: ' +
+      prospectId, ui.ButtonSet.OK_CANCEL);
+    if (response.getSelectedButton() !== ui.Button.OK) return;
+    var messageId = response.getResponseText().trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(messageId)) throw new Error('Invalid Gmail internal Message_ID.');
+    var confirm = ui.alert('Reconcile selected LIVE AMBIGUOUS',
+      'Verify the existing Gmail SENT message and reconcile this one prospect only?\nProspect_ID: ' + prospectId +
+      '\nMessage_ID: ' + messageId + '\nNo email will be sent.', ui.ButtonSet.YES_NO);
+    if (confirm !== ui.Button.YES) return;
+    var result = reconcileLiveAmbiguousSent(prospectId, messageId);
+    ui.alert('Reconcile selected LIVE AMBIGUOUS', 'Result: ' + result.status, ui.ButtonSet.OK);
   });
 }
 

@@ -86,16 +86,39 @@ function isLiveKeyBlocked_(prospectId, step) {
   return false;
 }
 
-/** I10: LIVE sends already counted TODAY (script timezone), for the daily quota. */
+/** I10: confirmed LIVE sends today, for reporting (not the safety budget). */
 function getDailyLiveSentCount_() {
+  var today = formatDateYmd_(new Date());
+  return readAllLedgerRows_().filter(function (row) {
+    var v = row.values;
+    return v.Mode === LEDGER_MODE.LIVE && v.State === LEDGER_STATE.SENT && v.Confirmed_At &&
+      formatDateYmd_(new Date(v.Confirmed_At)) === today;
+  }).length;
+}
+
+/**
+ * LIVE daily quota counts confirmed sends and unresolved possible sends.
+ * CLAIMED is a reservation: execution can die after Gmail accepts the send
+ * but before the ledger advances. AMBIGUOUS has the same possible-send risk.
+ * FAILED is excluded only because its callers prove Gmail was not invoked.
+ * Each ledger row counts at most once, including after reconciliation.
+ */
+function getDailyLiveQuotaUsedCount_() {
   var today = formatDateYmd_(new Date());
   var rows = readAllLedgerRows_();
   var count = 0;
   for (var i = 0; i < rows.length; i++) {
     var v = rows[i].values;
-    if (v.Mode === LEDGER_MODE.LIVE && v.State === LEDGER_STATE.SENT && v.Confirmed_At) {
-      if (formatDateYmd_(new Date(v.Confirmed_At)) === today) count++;
+    if (v.Mode !== LEDGER_MODE.LIVE) continue;
+    var state = v.State;
+    if (state !== LEDGER_STATE.SENT && state !== LEDGER_STATE.CLAIMED &&
+        state !== LEDGER_STATE.AMBIGUOUS) continue;
+    var stamp = state === LEDGER_STATE.SENT ? v.Confirmed_At : v.Claimed_At;
+    if (!stamp || isNaN(new Date(stamp).getTime())) {
+      throw new Error('LIVE daily quota blocked: ' + state + ' ledger row ' + rows[i].rowIndex +
+        ' lacks a valid quota timestamp.');
     }
+    if (formatDateYmd_(new Date(stamp)) === today) count++;
   }
   return count;
 }

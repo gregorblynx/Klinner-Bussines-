@@ -338,6 +338,9 @@ function createMockUtilities() {
     base64EncodeWebSafe: function (value) {
       return Buffer.from(String(value), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
     },
+    base64Encode: function (value) {
+      return Buffer.from(String(value), 'utf8').toString('base64');
+    },
     base64DecodeWebSafe: function (value) {
       var standard = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
       return Array.prototype.slice.call(Buffer.from(standard, 'base64'));
@@ -721,10 +724,18 @@ function createMockGmailAdvancedService(gmailApp) {
     var split = source.split(/\r?\n\r?\n/);
     var headerLines = split.shift().split(/\r?\n/);
     var headers = {};
-    headerLines.forEach(function (line) {
+    // Gmail unfolds and RFC 2047-decodes Subject before exposing the
+    // logical header through messages.get(format=full).
+    headerLines.join('\n').replace(/\n[ \t]+/g, ' ').split('\n').forEach(function (line) {
       var colon = line.indexOf(':');
       if (colon > 0) headers[line.slice(0, colon)] = line.slice(colon + 1).trim();
     });
+    if (headers.Subject) {
+      headers.Subject = headers.Subject.replace(/(=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=)\s+(?==\?UTF-8\?B\?)/gi, '$1');
+      headers.Subject = headers.Subject.replace(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/gi, function (_, encoded) {
+        return Buffer.from(encoded, 'base64').toString('utf8');
+      });
+    }
     headers.body = split.join('\n\n');
     return headers;
   }
@@ -737,6 +748,7 @@ function createMockGmailAdvancedService(gmailApp) {
       id: message._id,
       threadId: message._threadId,
       internalDate: String(message._internalDate),
+      labelIds: ['SENT'],
       payload: {
         mimeType: 'text/plain',
         body: {
