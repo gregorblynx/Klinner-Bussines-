@@ -1,0 +1,29 @@
+# Internal files that must never be served from klinnercleaning.com.
+# Vercel publishes the repo root, so anything not listed here is public.
+
+# Reports and documentation
+auditoria-*.html
+*.md
+docs/
+
+# Source data and blog sources (the site serves the prebuilt HTML)
+data/
+content/
+
+# Tooling: only the analytics injector is needed at build time
+scripts/*
+!scripts/inject-analytics.js
+build-blog.js
+tests/
+
+# Repo and editor configuration
+.github/
+.claude/
+
+# Unpublished originals
+PHOTOS WORK*/
+Blog Photos/
+prospeccion/
+outreach/
+*.HEIC
+*.zip
