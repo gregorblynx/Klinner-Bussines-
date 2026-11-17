@@ -4,6 +4,8 @@
   "outputDirectory": ".",
   "redirects": [
     { "source": "/recurring-cleaning.html", "destination": "/", "permanent": true },
-    { "source": "/recurring-cleaning", "destination": "/", "permanent": true }
+    { "source": "/recurring-cleaning", "destination": "/", "permanent": true },
+    { "source": "/our-work", "destination": "/our-work.html", "permanent": true },
+    { "source": "/our-work/", "destination": "/our-work.html", "permanent": true }
   ]
 }
