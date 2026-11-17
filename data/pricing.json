@@ -1,0 +1,79 @@
+{
+  "_readme": [
+    "SINGLE SOURCE OF TRUTH for every price on /our-work.html.",
+    "Edit prices ONLY here, then run:  node scripts/build-our-work.js",
+    "That script validates the data, then rewrites the price blocks and the JSON-LD offers inside our-work.html.",
+    "To check without rebuilding:  node scripts/validate-pricing.js",
+    "Row shape: { bedrooms, bathrooms, price }.  bedrooms/bathrooms = null means 'not size-specific'.",
+    "price = null means TODO: the owner has not set this price yet. Null rows are NEVER shown on the site.",
+    "Rule enforced by the validator: a larger home can never cost less than (or the same as) a smaller one.",
+    "  - same bedrooms, more bathrooms  => higher price   (3 bed / 3 bath must cost more than 3 bed / 2 bath)",
+    "  - same bathrooms, more bedrooms  => higher price",
+    "The public 'Starting at' price of each service is the LOWEST price filled in below."
+  ],
+  "currency": "USD",
+  "services": {
+    "airbnb-cleaning": {
+      "name": "Airbnb Cleaning",
+      "pagePath": "airbnb-cleaning.html",
+      "prices": [
+        { "bedrooms": null, "bathrooms": null, "price": 85 },
+        { "bedrooms": 1, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 3, "price": null, "todo": "TODO owner: set price" }
+      ]
+    },
+    "deep-cleaning": {
+      "name": "Deep Cleaning",
+      "pagePath": "deep-cleaning.html",
+      "sizeNote": "Price increases with more bedrooms and bathrooms.",
+      "prices": [
+        { "bedrooms": 1, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 2, "price": 249 },
+        { "bedrooms": 3, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 3, "price": null, "todo": "TODO owner: set price (must be higher than 3 bed / 2 bath)" },
+        { "bedrooms": 4, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 4, "bathrooms": 3, "price": null, "todo": "TODO owner: set price" }
+      ]
+    },
+    "move-in-cleaning": {
+      "name": "Move-In Cleaning",
+      "pagePath": "move-in-cleaning.html",
+      "prices": [
+        { "bedrooms": null, "bathrooms": null, "price": 149 },
+        { "bedrooms": 1, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 3, "price": null, "todo": "TODO owner: set price" }
+      ]
+    },
+    "move-out-cleaning": {
+      "name": "Move-Out Cleaning",
+      "pagePath": "move-out-cleaning.html",
+      "prices": [
+        { "bedrooms": null, "bathrooms": null, "price": 149 },
+        { "bedrooms": 1, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 1, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 2, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 2, "price": null, "todo": "TODO owner: set price" },
+        { "bedrooms": 3, "bathrooms": 3, "price": null, "todo": "TODO owner: set price" }
+      ]
+    },
+    "handyman-services": {
+      "name": "Basic Handyman",
+      "pagePath": "handyman-services.html",
+      "details": [
+        "Includes the first hour.",
+        "$75 per additional hour.",
+        "Materials billed separately."
+      ],
+      "prices": [
+        { "bedrooms": null, "bathrooms": null, "price": 125 }
+      ]
+    }
+  }
+}

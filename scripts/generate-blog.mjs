@@ -20,7 +20,6 @@ const OFFICIAL_FILES = [
   'deep-cleaning.html',
   'move-in-cleaning.html',
   'move-out-cleaning.html',
-  'recurring-cleaning.html',
   'handyman-services.html'
 ];
 
@@ -29,7 +28,6 @@ const REAL_SERVICES = [
   'Deep Cleaning',
   'Move-In Cleaning',
   'Move-Out Cleaning',
-  'Recurring Cleaning',
   'Basic Handyman'
 ];
 

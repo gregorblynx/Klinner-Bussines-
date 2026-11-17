@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="google-site-verification" content="LNGcATtK0ks47JyDxgGTv0sealLAEy-oJYMKUWl-znw" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out and recurring services. Request a free quote today.">
+  <meta name="description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out and handyman services. Request a free quote today.">
   <title>House Cleaning Services in Nashville, TN | Klinner Cleaning</title>
   <link rel="icon" type="image/png" href="favicon Klinner.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -21,7 +21,7 @@
   <meta property="og:type"        content="website">
   <meta property="og:site_name"   content="Klinner Cleaning &amp; Maintenance">
   <meta property="og:title"       content="House Cleaning Services in Nashville, TN | Klinner Cleaning">
-  <meta property="og:description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out and recurring services. Request a free quote today.">
+  <meta property="og:description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out and handyman services. Request a free quote today.">
   <meta property="og:url"         content="https://klinnercleaning.com/">
   <meta property="og:image"       content="https://klinnercleaning.com/og-image.jpg">
   <meta property="og:image:width"  content="1200">
@@ -31,7 +31,7 @@
   <!-- Twitter Card -->
   <meta name="twitter:card"        content="summary_large_image">
   <meta name="twitter:title"       content="House Cleaning Services in Nashville, TN | Klinner Cleaning">
-  <meta name="twitter:description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out &amp; recurring services.">
+  <meta name="twitter:description" content="Professional house cleaning in Nashville, TN. Airbnb cleaning, deep cleaning, move-in/out &amp; handyman services.">
   <meta name="twitter:image"       content="https://klinnercleaning.com/og-image.jpg">
   <meta name="twitter:image:alt"   content="Klinner Cleaning &amp; Maintenance — Nashville, TN">
 
@@ -251,6 +251,7 @@
     }
     .nav-links a {
       font-size: .9rem;
+      white-space: nowrap;
       font-weight: 500;
       padding: 8px 16px;
       border-radius: 100px;
@@ -1393,6 +1394,12 @@
       .hero-stat { min-width: 50%; }
     }
 
+    /* "Our Work & Pricing" is longer than the old "Gallery" label: tighten the bar on mid-width screens. */
+    @media (min-width: 769px) and (max-width: 1100px) {
+      .nav-links a { padding: 8px 9px; font-size: .84rem; }
+      .nav-phone { display: none; }
+    }
+
     @media (max-width: 768px) {
       .nav-links, .nav-cta { display: none; }
       .hamburger { display: flex; }
@@ -1477,7 +1484,6 @@
         { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Deep Cleaning" } },
         { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Move-In Cleaning" } },
         { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Move-Out Cleaning" } },
-        { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Recurring Cleaning" } },
         { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Basic Handyman" } }
       ]
     },
@@ -1514,7 +1520,7 @@
         <ul class="nav-links">
           <li><a href="#services">Services</a></li>
           <li><a href="#features">About</a></li>
-          <li><a href="#gallery">Gallery</a></li>
+          <li><a href="/our-work.html">Our Work &amp; Pricing</a></li>
           <li><a href="/blog/">Blog</a></li>
           <li><a href="#quote">Quote</a></li>
           <li><a href="#contact-section" id="contactNavLink">Contact</a></li>
@@ -1538,7 +1544,7 @@
     <div class="mobile-menu" id="mobileMenu">
       <a href="#services" class="mobile-link">Services</a>
       <a href="#features" class="mobile-link">About Us</a>
-      <a href="#gallery" class="mobile-link">Gallery</a>
+      <a href="/our-work.html" class="mobile-link">Our Work &amp; Pricing</a>
       <a href="#testimonials" class="mobile-link">Reviews</a>
       <a href="/blog/" class="mobile-link">Blog</a>
       <a href="#quote" class="mobile-link">Get a Quote</a>
@@ -1688,20 +1694,6 @@
           </div>
           <h3 class="service-name">Deep Cleaning</h3>
           <p class="service-desc">Our most thorough service — inside appliances, baseboards, grout, window tracks, and every hard-to-reach area.</p>
-          <span class="service-link">
-            View Service Page
-            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-          </span>
-        </a>
-
-        <!-- 5 -->
-        <a href="recurring-cleaning.html" class="service-card reveal delay-2" aria-label="View Recurring Cleaning service page">
-          <div class="service-card-bg" style="background-image:url('servicios/recurring-cleaning-gallery/recurring-02.webp?v=20260630j')"></div>
-          <div class="service-icon-wrap">
-            <svg width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17 2H7a2 2 0 00-2 2v16a2 2 0 002 2h10a2 2 0 002-2V4a2 2 0 00-2-2z"/><path d="M9 6h6M9 10h6M9 14h4"/></svg>
-          </div>
-          <h3 class="service-name">Recurring Cleaning</h3>
-          <p class="service-desc">Weekly, bi-weekly, or monthly visits to keep your home consistently clean. Set it once and forget it — we handle the rest.</p>
           <span class="service-link">
             View Service Page
             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
@@ -1888,6 +1880,9 @@
           <div class="gallery-overlay"><span class="gallery-label">Living Room Cleaning</span></div>
         </div>
       </div>
+      <div class="reveal" style="text-align:center;margin-top:40px;">
+        <a href="/our-work.html" class="btn btn-primary">See all our work and prices</a>
+      </div>
     </div>
   </section>
 
@@ -2017,7 +2012,6 @@
                       <option value="movein">Move-In Cleaning</option>
                       <option value="moveout">Move-Out Cleaning</option>
                       <option value="deep">Deep Cleaning</option>
-                      <option value="recurring">Recurring Cleaning</option>
                       <option value="handyman">Basic Handyman</option>
                       <option value="other">Other / Not Sure</option>
                     </select>
@@ -2281,7 +2275,7 @@
           <ul class="footer-links">
             <li><a href="#services">Services</a></li>
             <li><a href="#features">About Us</a></li>
-            <li><a href="#gallery">Gallery</a></li>
+            <li><a href="/our-work.html">Our Work &amp; Pricing</a></li>
             <li><a href="#testimonials">Reviews</a></li>
             <li><a href="#quote">Get a Quote</a></li>
           </ul>
@@ -2295,7 +2289,6 @@
             <li><a href="move-in-cleaning.html">Move-In Cleaning</a></li>
             <li><a href="move-out-cleaning.html">Move-Out Cleaning</a></li>
             <li><a href="deep-cleaning.html">Deep Cleaning</a></li>
-            <li><a href="recurring-cleaning.html">Recurring Cleaning</a></li>
             <li><a href="handyman-services.html">Basic Handyman</a></li>
           </ul>
         </div>

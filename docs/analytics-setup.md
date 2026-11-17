@@ -222,7 +222,7 @@ All events fire to **both** GA4 and Clarity (Clarity receives them as custom eve
 | `email_click` | Any `mailto:` link is clicked (14 across the site) | `link_url`, `method` |
 | `quote_click` | Any "Request a Quote" CTA — any link to `#quote` (50 across the site), or any element with `data-analytics="quote"` | `link_url`, `link_text` |
 | `generate_lead` | The contact/quote form is **successfully** submitted | `form_id`, `source` |
-| `service_page_view` | A service page is opened (Airbnb, deep, move-in, move-out, recurring, handyman) | `page_path`, `service` |
+| `service_page_view` | A service page is opened (Airbnb, deep, move-in, move-out, handyman) | `page_path`, `service` |
 | `outbound_click` | Any link to an external domain — covers booking/external contact links | `link_url`, `link_domain`, `link_text` |
 
 Notes:

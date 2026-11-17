@@ -11,7 +11,7 @@ Every week, generate **two new blog topics**:
    - Focus on answering common questions and building trust.
 
 2. **Local/Commercial Article**
-   - Focus on one of Klinner's real services (Airbnb Cleaning, Deep Cleaning, Move-In Cleaning, Move-Out Cleaning, Recurring Cleaning, or Basic Handyman).
+   - Focus on one of Klinner's real services (Airbnb Cleaning, Deep Cleaning, Move-In Cleaning, Move-Out Cleaning, or Basic Handyman).
    - Target homeowners, Airbnb hosts, landlords, renters, or property managers in the Nashville metro area.
 
 Before suggesting any topic:

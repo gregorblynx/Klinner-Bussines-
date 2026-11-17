@@ -132,7 +132,7 @@
   // --- Conversion event: service page visits -------------------------
   var SERVICE_PAGES = [
     'airbnb-cleaning', 'deep-cleaning', 'handyman-services',
-    'move-in-cleaning', 'move-out-cleaning', 'recurring-cleaning'
+    'move-in-cleaning', 'move-out-cleaning'
   ];
   function trackServicePage() {
     var path = (location.pathname || '').toLowerCase();
