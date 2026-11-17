@@ -9,21 +9,21 @@ import {
   verifySourceClaims
 } from '../scripts/generate-blog.mjs';
 
-const recurringSource = fs.readFileSync(new URL('../recurring-cleaning.html', import.meta.url), 'utf8');
+const serviceSource = fs.readFileSync(new URL('../deep-cleaning.html', import.meta.url), 'utf8');
 
 test('source verification accepts an exact confirmed quote', () => {
-  const quote = 'Weekly, Bi-Weekly or Monthly';
-  assert.equal(sourceQuoteSupported(recurringSource, quote), true);
+  const quote = 'Deep Cleaning in Nashville, TN';
+  assert.equal(sourceQuoteSupported(serviceSource, quote), true);
 });
 
 test('source verification accepts confirmed text kept in order across page markup', () => {
-  const quote = 'Weekly, Bi-Weekly or Monthly Recurring House Cleaning in Nashville, TN Keep your home consistently clean with a dependable schedule that fits your household.';
-  assert.equal(sourceQuoteSupported(recurringSource, quote), true);
+  const quote = 'Deep Cleaning in Nashville, TN A more detailed clean for buildup, busy seasons, special occasions and homes that need extra attention.';
+  assert.equal(sourceQuoteSupported(serviceSource, quote), true);
 });
 
 test('source verification rejects fabricated text', () => {
   assert.equal(
-    sourceQuoteSupported(recurringSource, 'Klinner guarantees a free same-day cleaning in every Tennessee city'),
+    sourceQuoteSupported(serviceSource, 'Klinner guarantees a free same-day cleaning in every Tennessee city'),
     false
   );
 });
@@ -33,10 +33,10 @@ test('company claims must be meaningfully related to their source quote', () => 
     () => verifySourceClaims([
       {
         claim: 'Klinner guarantees same-day service everywhere.',
-        sourcePath: 'recurring-cleaning.html',
-        sourceQuote: 'Weekly, Bi-Weekly or Monthly Recurring House Cleaning in Nashville, TN'
+        sourcePath: 'deep-cleaning.html',
+        sourceQuote: 'Deep Cleaning in Nashville, TN'
       }
-    ], [{ path: 'recurring-cleaning.html', text: recurringSource }]),
+    ], [{ path: 'deep-cleaning.html', text: serviceSource }]),
     /not sufficiently supported/
   );
 });

@@ -1,5 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "node scripts/inject-analytics.js",
-  "outputDirectory": "."
+  "outputDirectory": ".",
+  "redirects": [
+    { "source": "/recurring-cleaning.html", "destination": "/", "permanent": true },
+    { "source": "/recurring-cleaning", "destination": "/", "permanent": true }
+  ]
 }

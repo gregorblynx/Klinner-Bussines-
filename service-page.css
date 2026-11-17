@@ -139,3 +139,17 @@ section { padding: 88px 0; }
   .footer-bottom { display: block; }
   .footer-legal { margin-top: 14px; }
 }
+
+/* Contextual link to /our-work.html inside the closing CTA band */
+.cta-link { margin-top: 18px; font-size: .95rem; }
+.cta-link a { color: var(--white); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.cta-link a:hover { color: #bff7f7; }
+
+/* "Our Work & Pricing" is longer than the old "Gallery" label: keep nav items on one line
+   and tighten the bar between the desktop-nav breakpoint (980px) and wide screens. */
+.nav-links a { white-space: nowrap; }
+@media (min-width: 981px) and (max-width: 1180px) {
+  .nav-links { gap: 16px; font-size: .86rem; }
+  .nav-inner { gap: 16px; }
+  .nav-phone { display: none; }
+}
